@@ -1,5 +1,5 @@
 
-# Random Utilities
+# Random Utilities EN
 
 This repository contains several Python scripts for different purposes:
 
@@ -24,7 +24,7 @@ cd random
 
 -----------------------=============================================================-----------------------
 
-# Random Utilities
+# Random Utilities PL
 
 Repozytorium zawiera kilka skryptów w Pythonie do różnych zastosowań:
 
