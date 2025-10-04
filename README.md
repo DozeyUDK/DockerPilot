@@ -84,6 +84,82 @@ Select from available commands:
 - `deploy-init` - Create deployment config
 - And many more...
 
+
+### CLI Mode with Alias
+
+To avoid typing the full path to `dockerpilotv3.py` every time, you can set up an alias or add the script to your system path.
+
+#### Linux / macOS (Bash/Zsh)
+
+1. Open your shell configuration file (`~/.bashrc` or `~/.zshrc`):
+```bash
+nano ~/.bashrc
+
+
+### CLI Mode with Alias
+
+To avoid typing the full path to `dockerpilotv3.py` every time, you can set up an alias or add the script to your system path.
+
+#### Linux / macOS (Bash/Zsh)
+
+1. Open your shell configuration file (`~/.bashrc` or `~/.zshrc`):
+```bash
+nano ~/.bashrc
+```
+
+2. Add an alias pointing to your DockerPilot script:
+```bash
+alias dockerpilot='python3 /full/path/to/DockerPilot/dockerpilotv3.py'
+```
+> Replace `/full/path/to/DockerPilot/` with the actual path to your DockerPilot repository.
+
+3. Apply the changes:
+```bash
+source ~/.bashrc
+```
+
+4. Now you can run DockerPilot from any directory:
+```bash
+dockerpilot list --all
+dockerpilot monitor myapp --duration 300
+```
+
+---
+
+#### Windows (PowerShell)
+
+1. Open PowerShell and check your profile:
+```powershell
+echo $PROFILE
+```
+
+2. If the file does not exist, create it:
+```powershell
+New-Item -Type File -Path $PROFILE -Force
+```
+
+3. Edit your profile:
+```powershell
+notepad $PROFILE
+```
+
+4. Add a function to create a local alias:
+```powershell
+function dockerpilot { python "C:\Users\YourUsername\DockerPilot\dockerpilotv3.py" @args }
+```
+> Replace `C:\Users\YourUsername\DockerPilot\` with your actual path.
+
+5. Save and close Notepad, then reload your profile:
+```powershell
+. $PROFILE
+```
+
+6. You can now run DockerPilot from any location in PowerShell:
+```powershell
+dockerpilot list --all
+dockerpilot monitor myapp --duration 300
+```
+
 ### CLI Mode
 
 Use specific commands directly:
