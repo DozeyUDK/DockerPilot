@@ -1,5 +1,5 @@
 
-# Random Utilities EN
+# DockerPilot EN
 
 This repository contains several Python scripts for different purposes:
 
@@ -24,7 +24,7 @@ cd random
 
 -----------------------=============================================================-----------------------
 
-# Random Utilities PL
+# DockerPilot PL
 
 Repozytorium zawiera kilka skryptów w Pythonie do różnych zastosowań:
 
