@@ -1,6 +1,6 @@
 # Docker Pilot Enhanced - User Guide
 
-A professional Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.
+Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.
 
 ## Table of Contents
 
