@@ -22,8 +22,6 @@ git clone https://github.com/DozeyUDK/random.git
 cd random
 
 
------------------------=============================================================-----------------------
-
 # DockerPilot PL
 
 Repozytorium zawiera kilka skryptów w Pythonie do różnych zastosowań:
