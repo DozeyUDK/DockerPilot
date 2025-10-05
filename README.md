@@ -1,6 +1,32 @@
-# Docker Pilot Enhanced - User Guide
+# Docker Pilot - User Guide
 
 Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.
+
+## Versions
+
+This project includes two versions:
+
+### Docker Pilot (Full Version) - `dockerpilot.py`
+The complete feature-rich version with:
+- Advanced deployment strategies (Rolling, Blue-Green, Canary)
+- CI/CD pipeline generation
+- Environment promotion
+- Integration testing framework
+- Monitoring and alerting
+- Backup and restore functionality
+
+**Recommended for:** Production environments, DevOps workflows, teams needing advanced deployment features
+
+### Docker Pilot Lite - `dockerpilot-lite.py`
+A lightweight version focusing on core container management:
+- Basic container operations (start, stop, restart, remove)
+- Image management
+- Container monitoring
+- Simpler interface with fewer dependencies
+
+**Recommended for:** Development environments, quick container management, learning Docker basics, systems with limited resources
+
+---
 
 ## Table of Contents
 
@@ -18,19 +44,19 @@ Docker container management tool with advanced deployment capabilities, real-tim
 
 ## Features
 
-### Core Capabilities
+### Core Capabilities (Both Versions)
 - **Container Operations**: Start, stop, restart, remove, pause, unpause containers
 - **Image Management**: List, build, and remove Docker images
 - **Real-time Monitoring**: CPU, memory, network I/O, and process tracking
 - **Health Checks**: Automated container health validation
 - **Interactive Dashboard**: Live metrics with trend indicators
 
-### Advanced Deployment
+### Advanced Deployment (Full Version Only)
 - **Rolling Deployment**: Zero-downtime updates with automatic rollback
 - **Blue-Green Deployment**: Parallel environment switching for maximum safety
 - **Canary Deployment**: Gradual traffic shifting with performance monitoring
 
-### DevOps Integration
+### DevOps Integration (Full Version Only)
 - GitHub Actions, GitLab CI, and Jenkins pipeline generation
 - Environment promotion (dev → staging → prod)
 - Integration testing framework
@@ -46,14 +72,20 @@ Docker container management tool with advanced deployment capabilities, real-tim
 
 ### Install Dependencies
 
+**For Docker Pilot (Full Version):**
 ```bash
 pip install docker pyyaml requests rich
+```
+
+**For Docker Pilot Lite:**
+```bash
+pip install docker rich
 ```
 
 ### Optional Dependencies
 
 ```bash
-# For Git integration
+# For Git integration (Full version)
 pip install GitPython
 
 # For testing
@@ -63,7 +95,7 @@ pip install pytest pytest-cov
 ### Verify Installation
 
 ```bash
-python dockerpilotv3.py validate
+python dockerpilot.py validate
 ```
 
 ## Quick Start
@@ -73,7 +105,13 @@ python dockerpilotv3.py validate
 Run without arguments to enter interactive mode:
 
 ```bash
-python dockerpilotv3.py
+python dockerpilot.py
+```
+
+Or for the lite version:
+
+```bash
+python dockerpilot-lite.py
 ```
 
 Select from available commands:
@@ -81,24 +119,12 @@ Select from available commands:
 - `start` - Start a container
 - `stop` - Stop a container
 - `monitor` - Real-time monitoring
-- `deploy-init` - Create deployment config
+- `deploy-init` - Create deployment config (Full version only)
 - And many more...
 
-
 ### CLI Mode with Alias
 
-To avoid typing the full path to `dockerpilotv3.py` every time, you can set up an alias or add the script to your system path.
-
-#### Linux / macOS (Bash/Zsh)
-
-1. Open your shell configuration file (`~/.bashrc` or `~/.zshrc`):
-```bash
-nano ~/.bashrc
-
-
-### CLI Mode with Alias
-
-To avoid typing the full path to `dockerpilotv3.py` every time, you can set up an alias or add the script to your system path.
+To avoid typing the full path every time, you can set up an alias or add the script to your system path.
 
 #### Linux / macOS (Bash/Zsh)
 
@@ -107,18 +133,22 @@ To avoid typing the full path to `dockerpilotv3.py` every time, you can set up a
 nano ~/.bashrc
 ```
 
-2. Add an alias pointing to your DockerPilot script:
+2. Add an alias pointing to your Docker Pilot script:
 ```bash
-alias dockerpilot='python3 /full/path/to/DockerPilot/dockerpilotv3.py'
+# Full version
+alias dockerpilot='python3 /full/path/to/dockerpilot.py'
+
+# Lite version
+alias dockerpilot-lite='python3 /full/path/to/dockerpilot-lite.py'
 ```
-> Replace `/full/path/to/DockerPilot/` with the actual path to your DockerPilot repository.
+> Replace `/full/path/to/` with the actual path to your Docker Pilot directory.
 
 3. Apply the changes:
 ```bash
 source ~/.bashrc
 ```
 
-4. Now you can run DockerPilot from any directory:
+4. Now you can run Docker Pilot from any directory:
 ```bash
 dockerpilot list --all
 dockerpilot monitor myapp --duration 300
@@ -145,7 +175,11 @@ notepad $PROFILE
 
 4. Add a function to create a local alias:
 ```powershell
-function dockerpilot { python "C:\Users\YourUsername\DockerPilot\dockerpilotv3.py" @args }
+# Full version
+function dockerpilot { python "C:\Users\YourUsername\DockerPilot\dockerpilot.py" @args }
+
+# Lite version
+function dockerpilot-lite { python "C:\Users\YourUsername\DockerPilot\dockerpilot-lite.py" @args }
 ```
 > Replace `C:\Users\YourUsername\DockerPilot\` with your actual path.
 
@@ -154,7 +188,7 @@ function dockerpilot { python "C:\Users\YourUsername\DockerPilot\dockerpilotv3.p
 . $PROFILE
 ```
 
-6. You can now run DockerPilot from any location in PowerShell:
+6. You can now run Docker Pilot from any location in PowerShell:
 ```powershell
 dockerpilot list --all
 dockerpilot monitor myapp --duration 300
@@ -166,13 +200,13 @@ Use specific commands directly:
 
 ```bash
 # List all containers
-python dockerpilotv3.py container list --all
+python dockerpilot.py container list --all
 
 # Monitor containers
-python dockerpilotv3.py monitor myapp --duration 300
+python dockerpilot.py monitor myapp --duration 300
 
-# Deploy application
-python dockerpilotv3.py deploy config deployment.yml --type rolling
+# Deploy application (Full version only)
+python dockerpilot.py deploy config deployment.yml --type rolling
 ```
 
 ## Container Management
@@ -181,37 +215,37 @@ python dockerpilotv3.py deploy config deployment.yml --type rolling
 
 ```bash
 # Table format (default)
-python dockerpilotv3.py container list --all
+python dockerpilot.py container list --all
 
 # JSON format
-python dockerpilotv3.py container list --format json
+python dockerpilot.py container list --format json
 ```
 
 ### Container Operations
 
 ```bash
 # Start container
-python dockerpilotv3.py container start myapp
+python dockerpilot.py container start myapp
 
 # Stop container (with timeout)
-python dockerpilotv3.py container stop myapp --timeout 30
+python dockerpilot.py container stop myapp --timeout 30
 
 # Restart container
-python dockerpilotv3.py container restart myapp
+python dockerpilot.py container restart myapp
 
 # Remove container
-python dockerpilotv3.py container remove myapp --force
+python dockerpilot.py container remove myapp --force
 
 # Pause/Unpause
-python dockerpilotv3.py container pause myapp
-python dockerpilotv3.py container unpause myapp
+python dockerpilot.py container pause myapp
+python dockerpilot.py container unpause myapp
 ```
 
 ### View Container Logs
 
 Interactive mode:
 ```bash
-python dockerpilotv3.py
+python dockerpilot.py
 # Choose: logs
 ```
 
@@ -219,7 +253,7 @@ python dockerpilotv3.py
 
 Interactive mode:
 ```bash
-python dockerpilotv3.py
+python dockerpilot.py
 # Choose: json
 # Enter container name
 ```
@@ -230,21 +264,21 @@ python dockerpilotv3.py
 
 ```bash
 # Table format
-python dockerpilotv3.py container list-images --all
+python dockerpilot.py container list-images --all
 
 # JSON format
-python dockerpilotv3.py container list-images --format json
+python dockerpilot.py container list-images --format json
 ```
 
 ### Build Images
 
 ```bash
-python dockerpilotv3.py build /path/to/dockerfile myapp:latest --no-cache
+python dockerpilot.py build /path/to/dockerfile myapp:latest --no-cache
 ```
 
 Interactive mode:
 ```bash
-python dockerpilotv3.py
+python dockerpilot.py
 # Choose: build
 # Follow prompts
 ```
@@ -252,7 +286,7 @@ python dockerpilotv3.py
 ### Remove Images
 
 ```bash
-python dockerpilotv3.py container remove-image myapp:latest --force
+python dockerpilot.py container remove-image myapp:latest --force
 ```
 
 ## Monitoring
@@ -261,12 +295,12 @@ python dockerpilotv3.py container remove-image myapp:latest --force
 
 Monitor all running containers:
 ```bash
-python dockerpilotv3.py monitor --duration 300
+python dockerpilot.py monitor --duration 300
 ```
 
 Monitor specific containers:
 ```bash
-python dockerpilotv3.py monitor webapp database cache --duration 600
+python dockerpilot.py monitor webapp database cache --duration 600
 ```
 
 The dashboard displays:
@@ -281,10 +315,12 @@ Metrics are automatically saved to `docker_metrics.json`.
 
 ## Deployment Strategies
 
+> **Note:** Advanced deployment strategies are only available in the full version (`dockerpilot.py`)
+
 ### 1. Create Deployment Configuration
 
 ```bash
-python dockerpilotv3.py deploy init --output deployment.yml
+python dockerpilot.py deploy init --output deployment.yml
 ```
 
 Edit `deployment.yml`:
@@ -317,7 +353,7 @@ build:
 ### 2. Rolling Deployment (Zero-Downtime)
 
 ```bash
-python dockerpilotv3.py deploy config deployment.yml --type rolling
+python dockerpilot.py deploy config deployment.yml --type rolling
 ```
 
 **Process:**
@@ -330,7 +366,7 @@ python dockerpilotv3.py deploy config deployment.yml --type rolling
 ### 3. Blue-Green Deployment (Safest)
 
 ```bash
-python dockerpilotv3.py deploy config deployment.yml --type blue-green
+python dockerpilot.py deploy config deployment.yml --type blue-green
 ```
 
 **Process:**
@@ -344,7 +380,7 @@ python dockerpilotv3.py deploy config deployment.yml --type blue-green
 ### 4. Canary Deployment (Gradual Rollout)
 
 ```bash
-python dockerpilotv3.py deploy config deployment.yml --type canary
+python dockerpilot.py deploy config deployment.yml --type canary
 ```
 
 **Process:**
@@ -357,38 +393,40 @@ python dockerpilotv3.py deploy config deployment.yml --type canary
 ### View Deployment History
 
 ```bash
-python dockerpilotv3.py deploy history --limit 20
+python dockerpilot.py deploy history --limit 20
 ```
 
 ## CI/CD Integration
+
+> **Note:** CI/CD features are only available in the full version (`dockerpilot.py`)
 
 ### Generate Pipeline Configurations
 
 **GitHub Actions:**
 ```bash
-python dockerpilotv3.py pipeline create --type github --output .github/workflows
+python dockerpilot.py pipeline create --type github --output .github/workflows
 ```
 
 **GitLab CI:**
 ```bash
-python dockerpilotv3.py pipeline create --type gitlab
+python dockerpilot.py pipeline create --type gitlab
 ```
 
 **Jenkins:**
 ```bash
-python dockerpilotv3.py pipeline create --type jenkins
+python dockerpilot.py pipeline create --type jenkins
 ```
 
 ### Environment Promotion
 
 Promote from dev to staging:
 ```bash
-python dockerpilotv3.py promote dev staging --config deployment.yml
+python dockerpilot.py promote dev staging --config deployment.yml
 ```
 
 Promote to production:
 ```bash
-python dockerpilotv3.py promote staging prod --config deployment.yml
+python dockerpilot.py promote staging prod --config deployment.yml
 ```
 
 **Features:**
@@ -402,7 +440,7 @@ python dockerpilotv3.py promote staging prod --config deployment.yml
 ### Logging Levels
 
 ```bash
-python dockerpilotv3.py --log-level DEBUG container list
+python dockerpilot.py --log-level DEBUG container list
 ```
 
 Available levels: DEBUG, INFO, WARNING, ERROR
@@ -411,26 +449,26 @@ Available levels: DEBUG, INFO, WARNING, ERROR
 
 The tool uses several configuration files:
 
-- `deployment.yml` - Deployment configuration
-- `alerts.yml` - Monitoring alerts
-- `integration-tests.yml` - Test definitions
+- `deployment.yml` - Deployment configuration (Full version)
+- `alerts.yml` - Monitoring alerts (Full version)
+- `integration-tests.yml` - Test definitions (Full version)
 - `docker_pilot.log` - Application logs
 - `docker_metrics.json` - Performance metrics
-- `deployment_history.json` - Deployment records
+- `deployment_history.json` - Deployment records (Full version)
 
 ### Export/Import Configuration
 
-Export all configs:
 ```bash
-python dockerpilotv3.py config export --output backup.tar.gz
-```
+# Export all configs (Full version)
+python dockerpilot.py config export --output backup.tar.gz
 
-Import configs:
-```bash
-python dockerpilotv3.py config import backup.tar.gz
+# Import configs (Full version)
+python dockerpilot.py config import backup.tar.gz
 ```
 
 ## Advanced Features
+
+> **Note:** Advanced features are only available in the full version (`dockerpilot.py`)
 
 ### Integration Testing
 
@@ -453,14 +491,14 @@ tests:
 
 Run tests:
 ```bash
-python dockerpilotv3.py test --config integration-tests.yml
+python dockerpilot.py test --config integration-tests.yml
 ```
 
 ### Monitoring Alerts
 
 Setup alerts:
 ```bash
-python dockerpilotv3.py alerts --config alerts.yml
+python dockerpilot.py alerts --config alerts.yml
 ```
 
 Configure alert rules in `alerts.yml`:
@@ -483,12 +521,12 @@ notification_channels:
 
 Create backup:
 ```bash
-python dockerpilotv3.py backup create --path ./backup_20240104
+python dockerpilot.py backup create --path ./backup_20240104
 ```
 
 Restore from backup:
 ```bash
-python dockerpilotv3.py backup restore ./backup_20240104
+python dockerpilot.py backup restore ./backup_20240104
 ```
 
 Backups include:
@@ -501,14 +539,14 @@ Backups include:
 
 Generate deployment checklist:
 ```bash
-python dockerpilotv3.py checklist --output production-checklist.md
+python dockerpilot.py checklist --output production-checklist.md
 ```
 
 ### Documentation Generation
 
 Generate complete documentation:
 ```bash
-python dockerpilotv3.py docs --output ./docs
+python dockerpilot.py docs --output ./docs
 ```
 
 ## Troubleshooting
@@ -550,7 +588,7 @@ netstat -tulpn | grep :8080
 
 Enable detailed logging:
 ```bash
-python dockerpilotv3.py --log-level DEBUG <command>
+python dockerpilot.py --log-level DEBUG <command>
 ```
 
 ### Log Files
@@ -558,15 +596,15 @@ python dockerpilotv3.py --log-level DEBUG <command>
 Check logs for detailed information:
 - `docker_pilot.log` - Main application log
 - `docker_metrics.json` - Performance data
-- `deployment_history.json` - Deployment records
-- `integration-test-report.json` - Test results
+- `deployment_history.json` - Deployment records (Full version)
+- `integration-test-report.json` - Test results (Full version)
 
 ## System Validation
 
 Verify all requirements are met:
 
 ```bash
-python dockerpilotv3.py validate
+python dockerpilot.py validate
 ```
 
 Checks:
@@ -575,6 +613,25 @@ Checks:
 - Required Python modules
 - Disk space
 - Docker daemon permissions
+
+## Choosing Between Full and Lite Version
+
+### Use Docker Pilot (Full Version) when you need:
+- Production-grade deployments with zero downtime
+- Advanced deployment strategies (Rolling, Blue-Green, Canary)
+- CI/CD pipeline integration
+- Environment promotion workflows
+- Integration testing
+- Monitoring alerts
+- Backup and restore capabilities
+
+### Use Docker Pilot Lite when you need:
+- Quick container management during development
+- Simple deployment scenarios
+- Lower resource footprint
+- Faster startup time
+- Learning Docker basics
+- Minimal dependencies
 
 ## Support
 
@@ -587,11 +644,12 @@ Checks:
 1. **Always test deployments** in non-production environments first
 2. **Use health checks** to ensure application readiness
 3. **Set resource limits** to prevent resource exhaustion
-4. **Enable monitoring alerts** for production deployments
-5. **Create backups** before major changes
-6. **Review deployment history** to track changes
-7. **Use blue-green deployments** for critical production updates
+4. **Enable monitoring alerts** for production deployments (Full version)
+5. **Create backups** before major changes (Full version)
+6. **Review deployment history** to track changes (Full version)
+7. **Use blue-green deployments** for critical production updates (Full version)
 8. **Test rollback procedures** regularly
+9. **Start with Lite version** for learning, upgrade to Full version for production
 
 ## License
 
@@ -601,4 +659,5 @@ This tool is provided as-is for container management and deployment automation.
 
 **Version**: Enhanced v3  
 **Python**: 3.8+  
-**Docker**: 20.10+
+**Docker**: 20.10+  
+**Available in**: Full (`dockerpilot.py`) and Lite (`dockerpilot-lite.py`) versions
