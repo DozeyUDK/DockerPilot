@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dockerpilot"
+version = "0.1.0"
+description = "DockerPilot"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name="dozey", email="dozeynwct@hotmail.com" }
+]
+dependencies = [
+    "docker>=6.0.0",
+]
+
+dynamic = ["requires-python"]  # <-- dodajemy tutaj
+
+[project.scripts]
+dockerpilot = "dockerpilot.main:main"
+
+
+[tool.setuptools]
+packages = ["dockerpilot"]

@@ -1,0 +1,12 @@
+2025-10-05 21:02:23,357 - WARNING - _init_docker_client:153 - Docker connection attempt 1 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:02:25,357 - WARNING - _init_docker_client:153 - Docker connection attempt 2 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:02:27,359 - WARNING - _init_docker_client:153 - Docker connection attempt 3 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:02:27,359 - ERROR - _init_docker_client:155 - Failed to connect to Docker daemon
+2025-10-05 21:10:26,846 - WARNING - _init_docker_client:153 - Docker connection attempt 1 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:10:28,853 - WARNING - _init_docker_client:153 - Docker connection attempt 2 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:10:30,855 - WARNING - _init_docker_client:153 - Docker connection attempt 3 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-05 21:10:30,855 - ERROR - _init_docker_client:155 - Failed to connect to Docker daemon
+2025-10-06 18:39:33,217 - WARNING - _init_docker_client:156 - Docker connection attempt 1 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-06 18:39:35,219 - WARNING - _init_docker_client:156 - Docker connection attempt 2 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-06 18:39:37,220 - WARNING - _init_docker_client:156 - Docker connection attempt 3 failed: Error while fetching server API version: (2, 'CreateFile', 'Nie mo¿na odnaleŸæ okreœlonego pliku.')
+2025-10-06 18:39:37,220 - ERROR - _init_docker_client:158 - Failed to connect to Docker daemon
