@@ -1,5 +1,5 @@
 # dockerpilot/__main__.py
-from .main import main  # importuje funkcję main z dockerpilot/main.py
+from .main import main 
 
 if __name__ == "__main__":
-    main()  # uruchamia main przy wywołaniu python -m dockerpilot
+    main() 
