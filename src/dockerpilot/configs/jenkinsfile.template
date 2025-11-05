@@ -1,0 +1,82 @@
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_REGISTRY = 'your-registry.com'
+        IMAGE_NAME = 'your-app'
+        KUBECONFIG = credentials('kubeconfig')
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/your-org/your-repo.git'
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh '''
+                    python -m venv venv
+                    source venv/bin/activate
+                    pip install -r requirements.txt
+                    pip install pytest pytest-cov
+                    pytest tests/ --cov=. --cov-report=xml
+                '''
+            }
+            post {
+                always {
+                    publishCoverage adapters: [coberturaAdapter('coverage.xml')]
+                }
+            }
+        }
+        
+        stage('Build') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    def image = docker.build("${DOCKER_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}")
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-registry-credentials') {
+                        image.push()
+                        image.push('latest')
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    source venv/bin/activate
+                    dockerpilot deploy config deployment.yml --type blue-green
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            slackSend(
+                channel: '#deployments',
+                color: 'good',
+                message: "Deployment successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+            )
+        }
+        failure {
+            slackSend(
+                channel: '#deployments',
+                color: 'danger',
+                message: "Deployment failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+            )
+        }
+    }
+}
+

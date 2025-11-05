@@ -23,51 +23,15 @@ from rich.live import Live
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Any
-from enum import Enum
 
-def start_app():
-    print("DockerPilot full version running...")
-
-# ==================== CONFIGURATION & CONSTANTS ====================
-
-class LogLevel(Enum):
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
-
-@dataclass
-class DeploymentConfig:
-    """Deplyment config"""
-    image_tag: str
-    container_name: str
-    port_mapping: Dict[str, str]
-    environment: Dict[str, str]
-    volumes: Dict[str, str]
-    restart_policy: str = "unless-stopped"
-    health_check_endpoint: str = "/health"
-    health_check_timeout: int = 30
-    health_check_retries: int = 10
-    build_args: Dict[str, str] = None
-    network: str = "bridge"
-    cpu_limit: str = None
-    memory_limit: str = None
-
-@dataclass
-class ContainerStats:
-    """Container stats"""
-    cpu_percent: float
-    memory_usage_mb: float
-    memory_limit_mb: float
-    memory_percent: float
-    network_rx_mb: float
-    network_tx_mb: float
-    pids: int
-    timestamp: datetime
+# Import modules
+from .models import LogLevel, DeploymentConfig, ContainerStats
+from .container_manager import ContainerManager
+from .image_manager import ImageManager
+from .monitoring import MonitoringManager
 
 class DockerPilotEnhanced:
-
+    """Enhanced Docker container management tool with advanced deployment capabilities."""
     
     def __init__(self, config_file: str = None, log_level: LogLevel = LogLevel.INFO):
         self.console = Console()
@@ -88,6 +52,17 @@ class DockerPilotEnhanced:
         # Initialize Docker client with retry logic
         self._init_docker_client()
         
+        # Initialize managers
+        self.container_manager = ContainerManager(
+            self.client, self.console, self.logger, self._error_handler
+        )
+        self.image_manager = ImageManager(
+            self.client, self.console, self.logger, self._error_handler
+        )
+        self.monitoring_manager = MonitoringManager(
+            self.client, self.console, self.logger, self.metrics_file
+        )
+        
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -95,7 +70,7 @@ class DockerPilotEnhanced:
         self.logger.info("Docker Pilot Enhanced initialized successfully")
     
     def _show_banner(self):
-        """gimme ASCII"""
+        """Display ASCII banner with application information"""
         banner = """
   _____             _             _____ _ _       _   
  |  __ \           | |           |  __ (_) |     | |  
@@ -104,7 +79,7 @@ class DockerPilotEnhanced:
  | |__| | (_) | (__|   <  __/ |  | |   | | | (_) | |_ 
  |_____/ \___/ \___|_|\_\___|_|  |_|   |_|_|\___/ \__|
                                                       
-                                                      
+         by Dozey                                             
     """
         
 
@@ -191,695 +166,96 @@ class DockerPilotEnhanced:
     # ==================== CONTAINER MANAGEMENT ====================
 
     def list_containers(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
-        """Enhanced container listing with multiple output formats"""
-        with self._error_handler("list containers"):
-            containers = self.client.containers.list(all=show_all)
-            
-            if format_output == "json":
-                container_data = []
-                for c in containers:
-                    container_data.append({
-                        'id': c.short_id,
-                        'name': c.name,
-                        'status': c.status,
-                        'image': c.image.tags[0] if c.image.tags else "none",
-                        'ports': c.ports,
-                        'created': c.attrs['Created'],
-                        'size': self._get_container_size(c)
-                    })
-                self.console.print_json(data=container_data)
-                return containers
-            
-            # Enhanced table view
-            table = Table(title="🐳 Docker Containers", show_header=True, header_style="bold blue")
-            table.add_column("Nr", style="bold blue", width=4)
-            table.add_column("ID", style="cyan", width=12)
-            table.add_column("Name", style="green", width=20)
-            table.add_column("Status", style="magenta", width=12)
-            table.add_column("Image", style="yellow", width=25)
-            table.add_column("Ports", style="bright_blue", width=20)
-            table.add_column("Size", style="white", width=10)
-            table.add_column("Uptime", style="bright_green", width=15)
-
-            for idx, c in enumerate(containers, start=1):
-                # Status formatting
-                status_color = "green" if c.status == "running" else "red" if c.status == "exited" else "yellow"
-                status = f"[{status_color}]{c.status}[/{status_color}]"
-                
-                # Ports formatting
-                ports = self._format_ports(c.ports)
-                
-                # Size calculation
-                size = self._get_container_size(c)
-                
-                # Uptime calculation
-                uptime = self._calculate_uptime(c)
-                
-                table.add_row(
-                    str(idx),
-                    c.short_id,
-                    c.name,
-                    status,
-                    c.image.tags[0] if c.image.tags else "❌ none",
-                    ports,
-                    size,
-                    uptime
-                )
-            
-            self.console.print(table)
-            
-            # Summary statistics
-            running = len([c for c in containers if c.status == "running"])
-            stopped = len([c for c in containers if c.status == "exited"])
-            total = len(containers)
-            
-            summary = f"📊 Summary: {total} total, {running} running, {stopped} stopped"
-            self.console.print(Panel(summary, style="bright_blue"))
-            
-            return containers
+        """Enhanced container listing with multiple output formats."""
+        return self.container_manager.list_containers(show_all, format_output)
 
     def list_images(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
-        """Enhanced image listing with multiple output formats"""
-        with self._error_handler("list images"):
-            images = self.client.images.list(all=show_all)
-            
-            if format_output == "json":
-                image_data = []
-                for img in images:
-                    image_data.append({
-                        'id': img.id.split(":")[1][:12],
-                        'tags': img.tags,
-                        'created': img.attrs.get('Created'),
-                        'size': self._format_image_size(img.attrs.get('Size', 0)),
-                        'architecture': img.attrs.get('Architecture'),
-                        'os': img.attrs.get('Os')
-                    })
-                self.console.print_json(data=image_data)
-                return images
-            
-            # Enhanced table view
-            table = Table(title="📦 Docker Images", show_header=True, header_style="bold blue")
-            table.add_column("Nr", style="bold blue", width=4)
-            table.add_column("ID", style="cyan", width=12)
-            table.add_column("Repository", style="green", width=25)
-            table.add_column("Tag", style="yellow", width=15)
-            table.add_column("Size", style="magenta", width=12)
-            table.add_column("Created", style="bright_blue", width=20)
-            table.add_column("Used By", style="white", width=8)
-
-            for idx, img in enumerate(images, start=1):
-                # Parse repository and tag
-                if img.tags:
-                    repo_tag = img.tags[0]
-                    if ':' in repo_tag:
-                        repository, tag = repo_tag.rsplit(':', 1)
-                    else:
-                        repository, tag = repo_tag, "latest"
-                else:
-                    repository = "<none>"
-                    tag = "<none>"
-                
-                # Format size
-                size = self._format_image_size(img.attrs.get('Size', 0))
-                
-                # Format creation date
-                created = self._format_creation_date(img.attrs.get('Created'))
-                
-                # Check if image is used by containers
-                used_by = self._count_containers_using_image(img.id)
-                
-                table.add_row(
-                    str(idx),
-                    img.id.split(":")[1][:12],  # zamiast img.short_id,
-                    repository,
-                    tag,
-                    size,
-                    created,
-                    str(used_by)
-                )
-            
-            self.console.print(table)
-            
-            # Summary statistics
-            total_size = sum(img.attrs.get('Size', 0) for img in images)
-            total_size_formatted = self._format_image_size(total_size)
-            
-            summary = f"📊 Summary: {len(images)} images, {total_size_formatted} total size"
-            self.console.print(Panel(summary, style="bright_blue"))
-            
-            return images
-        
+        """Enhanced image listing with multiple output formats."""
+        return self.image_manager.list_images(show_all, format_output)
+    
     def remove_image(self, image_name: str, force: bool = False) -> bool:
-        """Remove Docker image"""
-        with self._error_handler("remove image", image_name):
-            try:
-                self.client.images.remove(image=image_name, force=force, noprune=False)
-                self.console.print(f"[green]✅ Image {image_name} removed successfully[/green]")
-                self.logger.info(f"Image {image_name} removed successfully")
-                return True
-            except docker.errors.ImageNotFound:
-                self.console.print(f"[bold red]Image not found: {image_name}[/bold red]")
-                return False
-            except docker.errors.APIError as e:
-                self.console.print(f"[bold red]Docker API error during image removal:[/bold red] {e}")
-                return False
-
-            
-####################################################
-    def _format_image_size(self, size_bytes: int) -> str:
-        """Format image size for display"""
-        if size_bytes == 0:
-            return "0 B"
-        
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.1f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.1f} TB"
-
-    def _format_creation_date(self, created_str: str) -> str:
-        """Format creation date for display"""
-        try:
-            if created_str:
-                created = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-                now = datetime.now(created.tzinfo)
-                diff = now - created
-                
-                if diff.days > 7:
-                    return created.strftime('%Y-%m-%d')
-                elif diff.days > 0:
-                    return f"{diff.days} days ago"
-                elif diff.seconds > 3600:
-                    hours = diff.seconds // 3600
-                    return f"{hours} hours ago"
-                else:
-                    minutes = diff.seconds // 60
-                    return f"{minutes} min ago"
-        except:
-            pass
-        return "unknown"
-
-    def _count_containers_using_image(self, image_id: str) -> int:
-        """Count containers using specific image"""
-        try:
-            containers = self.client.containers.list(all=True)
-            count = 0
-            for container in containers:
-                if container.image.id == image_id:
-                    count += 1
-            return count
-        except:
-            return 0
-####################################################
-    def _format_ports(self, ports: dict) -> str:
-        """Format container ports for display"""
-        if not ports:
-            return "none"
-        
-        port_list = []
-        for container_port, host_bindings in ports.items():
-            if host_bindings:
-                for binding in host_bindings:
-                    host_port = binding['HostPort']
-                    port_list.append(f"{host_port}→{container_port}")
-            else:
-                port_list.append(container_port)
-        
-        return ", ".join(port_list) if port_list else "none"
-
-    def _get_container_size(self, container) -> str:
-        """Get container size"""
-        try:
-            # This is approximate - Docker doesn't provide easy size calculation
-            return "N/A"  # Could be enhanced with df commands
-        except:
-            return "N/A"
-
-    def _calculate_uptime(self, container) -> str:
-        """Calculate container uptime"""
-        try:
-            if container.status != "running":
-                return "N/A"
-            
-            created = datetime.fromisoformat(container.attrs['Created'].replace('Z', '+00:00'))
-            uptime = datetime.now(created.tzinfo) - created
-            
-            days = uptime.days
-            hours, remainder = divmod(uptime.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            
-            if days > 0:
-                return f"{days}d {hours}h"
-            elif hours > 0:
-                return f"{hours}h {minutes}m"
-            else:
-                return f"{minutes}m"
-        except:
-            return "N/A"
+        """Remove Docker image."""
+        return self.image_manager.remove_image(image_name, force)
 
     def container_operation(self, operation: str, container_name: str, **kwargs) -> bool:
-        """Unified container operation handler with progress tracking"""
-        operations = {
-            'start': self._start_container,
-            'stop': self._stop_container,
-            'restart': self._restart_container,
-            'remove': self._remove_container,
-            'pause': self._pause_container,
-            'unpause': self._unpause_container,
-            'update_restart_policy': self.update_restart_policy,
-            'run_image': self.run_new_container
-        }
-        
-        if operation not in operations:
-            self.console.print(f"[bold red]❌ Unknown operation: {operation}[/bold red]")
-            return False
-        
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=self.console
-        ) as progress:
-            task = progress.add_task(f"{operation.title()}ing container {container_name}...", total=None)
-            
-            try:
-                result = operations[operation](container_name, **kwargs)
-                progress.update(task, description=f"✅ Container {container_name} {operation}ed successfully")
-                return result
-            except Exception as e:
-                progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
-                self.logger.error(f"Container {operation} failed: {e}")
-                return False
-
-    ### Old functions from dockerpilotv2
+        """Unified container operation handler with progress tracking."""
+        if operation == 'update_restart_policy':
+            return self.update_restart_policy(container_name, kwargs.get('policy', 'unless-stopped'))
+        elif operation == 'run_image':
+            return self.run_new_container(
+                kwargs.get('image_name'),
+                kwargs.get('name', container_name),
+                kwargs.get('ports'),
+                kwargs.get('command')
+            )
+        else:
+            return self.container_manager.container_operation(operation, container_name, **kwargs)
+    
     def update_restart_policy(self, container_name: str, policy: str = 'unless-stopped') -> bool:
-        """Set restart policy on container (no, always, on-failure, unless-stopped)"""
-        try:
-            container = self.client.containers.get(container_name)
-            self.console.print(f"[cyan]Updating restart policy for container {container.name} to '{policy}'...[/cyan]")
-            container.update(restart_policy={"Name": policy})
-            self.console.print(f"[green]Restart policy set to '{policy}'[/green]")
-            return True
-        except docker.errors.NotFound:
-            self.console.print(f"[bold red]Container not found: {container_name}[/bold red]")
-            return False
-        except docker.errors.APIError as e:
-            self.console.print(f"[bold red]Docker API error during update:[/bold red] {e}")
-            return False
-
-
-    def run_new_container(self, container_name: str, **kwargs) -> bool:
-        image_name = kwargs.get('image_name')
-        name = kwargs.get('name', container_name)
-        ports = kwargs.get('ports')
-        command = kwargs.get('command')
-        try:
-            self.console.print(f"[cyan]Uruchamianie nowego kontenera {name} z obrazu {image_name}...[/cyan]")
-            self.client.containers.run(image_name, name=name, detach=True, ports=ports, command=command)
-            self.console.print(f"[green]Kontener {name} uruchomiony[/green]")
-            return True
-        except docker.errors.ImageNotFound:
-            self.console.print(f"[bold red]Nie znaleziono obrazu: {image_name}[/bold red]")
-            return False
-        except docker.errors.APIError as e:
-            self.console.print(f"[bold red]Błąd API Dockera:[/bold red] {e}")
-            return False
-
-
-    def _start_container(self, container_name: str, **kwargs) -> bool:
-        """Start container with enhanced validation"""
-        with self._error_handler("start container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status == "running":
-                self.console.print(f"[yellow]⚠️ Container {container_name} is already running[/yellow]")
-                return True
-            
-            container.start()
-            
-            # Wait for container to be fully started
-            self._wait_for_container_status(container_name, "running", timeout=30)
-            
-            self.logger.info(f"Container {container_name} started successfully")
-            return True
-
-    def _stop_container(self, container_name: str, timeout: int = 10, **kwargs) -> bool:
-        """Stop container with graceful shutdown"""
-        with self._error_handler("stop container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status == "exited":
-                self.console.print(f"[yellow]⚠️ Container {container_name} is already stopped[/yellow]")
-                return True
-            
-            # Graceful stop
-            container.stop(timeout=timeout)
-            
-            self.logger.info(f"Container {container_name} stopped successfully")
-            return True
-
-    def _restart_container(self, container_name: str, timeout: int = 10, **kwargs) -> bool:
-        """Restart container with health check"""
-        with self._error_handler("restart container", container_name):
-            container = self.client.containers.get(container_name)
-            container.restart(timeout=timeout)
-            
-            # Wait for container to be fully restarted
-            self._wait_for_container_status(container_name, "running", timeout=30)
-            
-            self.logger.info(f"Container {container_name} restarted successfully")
-            return True
-
-    def _remove_container(self, container_name: str, force: bool = False, **kwargs) -> bool:
-        """Remove container with safety checks"""
-        with self._error_handler("remove container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            # Safety check for running containers
-            if container.status == "running" and not force:
-                if not Confirm.ask(f"Container {container_name} is running. Force removal?"):
-                    self.console.print("[yellow]❌ Removal cancelled[/yellow]")
-                    return False
-            
-            container.remove(force=force)
-            
-            self.logger.info(f"Container {container_name} removed successfully")
-            return True
-
-    def _pause_container(self, container_name: str, **kwargs) -> bool:
-        """Pause container"""
-        with self._error_handler("pause container", container_name):
-            container = self.client.containers.get(container_name)
-            container.pause()
-            self.logger.info(f"Container {container_name} paused successfully")
-            return True
-
-    def _unpause_container(self, container_name: str, **kwargs) -> bool:
-        """Unpause container"""
-        with self._error_handler("unpause container", container_name):
-            container = self.client.containers.get(container_name)
-            container.unpause()
-            self.logger.info(f"Container {container_name} unpaused successfully")
-            return True
-
-    def _wait_for_container_status(self, container_name: str, expected_status: str, timeout: int = 30) -> bool:
-        """Wait for container to reach expected status"""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                container = self.client.containers.get(container_name)
-                if container.status == expected_status:
-                    return True
-                time.sleep(1)
-            except:
-                time.sleep(1)
-        
-        self.logger.warning(f"Container {container_name} did not reach status {expected_status} within {timeout}s")
-        return False
+        """Set restart policy on container."""
+        return self.container_manager.update_restart_policy(container_name, policy)
+    
+    def run_new_container(self, image_name: str, name: str, ports: dict = None, command: str = None) -> bool:
+        """Run a new container."""
+        return self.container_manager.run_new_container(image_name, name, ports, command)
 
     # ==================== MONITORING & METRICS ====================
 
     def get_container_stats(self, container_name: str) -> Optional[ContainerStats]:
-        """Get comprehensive container statistics"""
-        try:
-            container = self.client.containers.get(container_name)
-            
-            # Get two measurements for accurate CPU calculation
-            stats1 = container.stats(stream=False)
-            time.sleep(1)
-            stats2 = container.stats(stream=False)
-            
-            # Calculate CPU percentage
-            cpu_percent = self._calculate_cpu_percent(stats1, stats2)
-            
-            # Memory statistics
-            memory_stats = stats2.get('memory_stats', {})
-            memory_usage = memory_stats.get('usage', 0) / (1024 * 1024)  # MB
-            memory_limit = memory_stats.get('limit', 1) / (1024 * 1024)  # MB
-            memory_percent = (memory_usage / memory_limit) * 100.0 if memory_limit > 0 else 0
-            
-            # Network statistics
-            networks = stats2.get('networks', {})
-            rx_bytes = sum(net.get('rx_bytes', 0) for net in networks.values()) / (1024 * 1024)  # MB
-            tx_bytes = sum(net.get('tx_bytes', 0) for net in networks.values()) / (1024 * 1024)  # MB
-            
-            # Process count
-            pids = stats2.get('pids_stats', {}).get('current', 0)
-            
-            return ContainerStats(
-                cpu_percent=cpu_percent,
-                memory_usage_mb=memory_usage,
-                memory_limit_mb=memory_limit,
-                memory_percent=memory_percent,
-                network_rx_mb=rx_bytes,
-                network_tx_mb=tx_bytes,
-                pids=pids,
-                timestamp=datetime.now()
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get stats for {container_name}: {e}")
-            return None
-
-    def _calculate_cpu_percent(self, stats1: dict, stats2: dict) -> float:
-        """Calculate CPU percentage from two stat measurements"""
-        try:
-            cpu1_total = stats1['cpu_stats']['cpu_usage']['total_usage']
-            cpu1_system = stats1['cpu_stats'].get('system_cpu_usage', 0)
-            
-            cpu2_total = stats2['cpu_stats']['cpu_usage']['total_usage']
-            cpu2_system = stats2['cpu_stats'].get('system_cpu_usage', 0)
-            
-            cpu_delta = cpu2_total - cpu1_total
-            system_delta = cpu2_system - cpu1_system
-            
-            online_cpus = len(stats2['cpu_stats']['cpu_usage'].get('percpu_usage', [1]))
-            
-            if system_delta > 0 and cpu_delta >= 0:
-                return (cpu_delta / system_delta) * online_cpus * 100.0
-            
-            return 0.0
-        except (KeyError, ZeroDivisionError):
-            return 0.0
-
+        """Get comprehensive container statistics."""
+        return self.monitoring_manager.get_container_stats(container_name)
+    
     def monitor_containers_dashboard(self, containers: List[str] = None, duration: int = 300):
-        """Real-time monitoring dashboard for multiple containers"""
-        if containers is None:
-            # Monitor all running containers
-            running_containers = [c.name for c in self.client.containers.list() if c.status == "running"]
-            if not running_containers:
-                self.console.print("[yellow]⚠️ No running containers found[/yellow]")
-                return
-            containers = running_containers
-        
-        self.console.print(f"[cyan]🔍 Starting monitoring dashboard for {len(containers)} containers[/cyan]")
-        self.console.print(f"[yellow]Duration: {duration}s | Press Ctrl+C to stop[/yellow]\n")
-        
-        start_time = time.time()
-        metrics_history = {name: [] for name in containers}
-        
-        try:
-            with Live(console=self.console, refresh_per_second=1) as live:
-                while time.time() - start_time < duration:
-                    # Create dynamic table
-                    table = Table(title="📊 Container Monitoring Dashboard", show_header=True)
-                    table.add_column("Container", style="bold green", width=15)
-                    table.add_column("Status", style="bright_blue", width=10)
-                    table.add_column("CPU %", style="red", width=8)
-                    table.add_column("Memory", style="blue", width=15)
-                    table.add_column("Network I/O", style="magenta", width=15)
-                    table.add_column("PIDs", style="yellow", width=6)
-                    table.add_column("Uptime", style="bright_green", width=10)
-                    
-                    for container_name in containers:
-                        try:
-                            container = self.client.containers.get(container_name)
-                            stats = self.get_container_stats(container_name)
-                            
-                            if stats:
-                                # Store metrics for trending
-                                metrics_history[container_name].append(stats)
-                                if len(metrics_history[container_name]) > 60:  # Keep last 60 measurements
-                                    metrics_history[container_name].pop(0)
-                                
-                                # Status with color
-                                status_color = "green" if container.status == "running" else "red"
-                                status = f"[{status_color}]{container.status}[/{status_color}]"
-                                
-                                # CPU with trending indicator
-                                cpu_trend = self._get_trend_indicator(
-                                    [s.cpu_percent for s in metrics_history[container_name][-5:]]
-                                )
-                                cpu_display = f"{stats.cpu_percent:.1f}% {cpu_trend}"
-                                
-                                # Memory display
-                                memory_display = f"{stats.memory_usage_mb:.0f}MB ({stats.memory_percent:.1f}%)"
-                                
-                                # Network I/O
-                                network_display = f"↓{stats.network_rx_mb:.1f} ↑{stats.network_tx_mb:.1f}"
-                                
-                                # Uptime
-                                uptime = self._calculate_uptime(container)
-                                
-                                table.add_row(
-                                    container_name,
-                                    status,
-                                    cpu_display,
-                                    memory_display,
-                                    network_display,
-                                    str(stats.pids),
-                                    uptime
-                                )
-                            else:
-                                table.add_row(
-                                    container_name,
-                                    "[red]error[/red]",
-                                    "N/A",
-                                    "N/A",
-                                    "N/A",
-                                    "N/A",
-                                    "N/A"
-                                )
-                        except docker.errors.NotFound:
-                            table.add_row(
-                                container_name,
-                                "[red]not found[/red]",
-                                "N/A",
-                                "N/A", 
-                                "N/A",
-                                "N/A",
-                                "N/A"
-                            )
-                    
-                    # Add timestamp and remaining time
-                    elapsed = int(time.time() - start_time)
-                    remaining = duration - elapsed
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    
-                    footer = f"🕐 {timestamp} | ⏱️ Remaining: {remaining}s | 📈 Collecting metrics..."
-                    table.caption = footer
-                    
-                    live.update(table)
-                    time.sleep(1)
-                    
-        except KeyboardInterrupt:
-            self.console.print("\n[yellow]⚠️ Monitoring stopped by user[/yellow]")
-        
-        # Save metrics to file
-        self._save_metrics_history(metrics_history)
-        
-        # Show summary statistics
-        self._show_monitoring_summary(metrics_history)
-
-    def _get_trend_indicator(self, values: List[float]) -> str:
-        """Get trend indicator for metrics"""
-        if len(values) < 2:
-            return "→"
-        
-        recent_avg = sum(values[-2:]) / 2
-        older_avg = sum(values[:-2]) / len(values[:-2]) if len(values) > 2 else values[0]
-        
-        diff = recent_avg - older_avg
-        if diff > 5:
-            return "↗️"
-        elif diff < -5:
-            return "↘️"
-        else:
-            return "→"
-
-    def _save_metrics_history(self, metrics_history: Dict):
-        """Save metrics history to file"""
-        try:
-            # Convert to serializable format
-            serializable_data = {}
-            for container, stats_list in metrics_history.items():
-                serializable_data[container] = [asdict(stats) for stats in stats_list]
-                # Convert datetime to string
-                for stats in serializable_data[container]:
-                    stats['timestamp'] = stats['timestamp'].isoformat()
-            
-            with open(self.metrics_file, 'w') as f:
-                json.dump(serializable_data, f, indent=2)
-            
-            self.logger.info(f"Metrics history saved to {self.metrics_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to save metrics: {e}")
-
-    def _show_monitoring_summary(self, metrics_history: Dict):
-        """Show monitoring summary statistics"""
-        self.console.print("\n[bold cyan]📈 Monitoring Summary[/bold cyan]")
-        
-        summary_table = Table(show_header=True, header_style="bold blue")
-        summary_table.add_column("Container", style="green")
-        summary_table.add_column("Avg CPU %", style="red")
-        summary_table.add_column("Max CPU %", style="red")
-        summary_table.add_column("Avg Memory MB", style="blue")
-        summary_table.add_column("Max Memory MB", style="blue")
-        summary_table.add_column("Data Points", style="yellow")
-        
-        for container, stats_list in metrics_history.items():
-            if stats_list:
-                avg_cpu = sum(s.cpu_percent for s in stats_list) / len(stats_list)
-                max_cpu = max(s.cpu_percent for s in stats_list)
-                avg_memory = sum(s.memory_usage_mb for s in stats_list) / len(stats_list)
-                max_memory = max(s.memory_usage_mb for s in stats_list)
-                
-                summary_table.add_row(
-                    container,
-                    f"{avg_cpu:.1f}",
-                    f"{max_cpu:.1f}",
-                    f"{avg_memory:.0f}",
-                    f"{max_memory:.0f}",
-                    str(len(stats_list))
-                )
-        
-        self.console.print(summary_table)
+        """Real-time monitoring dashboard for multiple containers."""
+        return self.monitoring_manager.monitor_containers_dashboard(containers, duration)
 
     # ==================== ADVANCED DEPLOYMENT ====================
 
     def create_deployment_config(self, config_path: str = "deployment.yml") -> bool:
         """Create deployment configuration template"""
-        template = {
-            'deployment': {
-                'image_tag': 'myapp:latest',
-                'container_name': 'myapp',
-                'port_mapping': {
-                    '8080': '8080'
-                },
-                'environment': {
-                    'ENV': 'production',
-                    'DEBUG': 'false'
-                },
-                'volumes': {
-                    './data': '/app/data'
-                },
-                'restart_policy': 'unless-stopped',
-                'health_check_endpoint': '/health',
-                'health_check_timeout': 30,
-                'health_check_retries': 10,
-                'build_args': {
-                    'BUILD_ENV': 'production'
-                },
-                'network': 'bridge',
-                'cpu_limit': '1.0',
-                'memory_limit': '1g'
-            },
-            'build': {
-                'dockerfile_path': '.',
-                'context': '.',
-                'no_cache': False,
-                'pull': True
-            },
-            'monitoring': {
-                'enabled': True,
-                'metrics_retention_days': 7,
-                'alert_cpu_threshold': 80.0,
-                'alert_memory_threshold': 80.0
-            }
-        }
-        
         try:
-            with open(config_path, 'w') as f:
-                yaml.dump(template, f, default_flow_style=False, indent=2)
+            # Load template from configs directory
+            template_path = Path(__file__).parent / "configs" / "deployment.yml.template"
+            
+            if template_path.exists():
+                with open(template_path, 'r') as f:
+                    template_content = f.read()
+                
+                with open(config_path, 'w') as f:
+                    f.write(template_content)
+            else:
+                # Fallback to default template if file doesn't exist
+                template = {
+                    'deployment': {
+                        'image_tag': 'myapp:latest',
+                        'container_name': 'myapp',
+                        'port_mapping': {'8080': '8080'},
+                        'environment': {'ENV': 'production', 'DEBUG': 'false'},
+                        'volumes': {'./data': '/app/data'},
+                        'restart_policy': 'unless-stopped',
+                        'health_check_endpoint': '/health',
+                        'health_check_timeout': 30,
+                        'health_check_retries': 10,
+                        'build_args': {'BUILD_ENV': 'production'},
+                        'network': 'bridge',
+                        'cpu_limit': '1.0',
+                        'memory_limit': '1g'
+                    },
+                    'build': {
+                        'dockerfile_path': '.',
+                        'context': '.',
+                        'no_cache': False,
+                        'pull': True
+                    },
+                    'monitoring': {
+                        'enabled': True,
+                        'metrics_retention_days': 7,
+                        'alert_cpu_threshold': 80.0,
+                        'alert_memory_threshold': 80.0
+                    }
+                }
+                with open(config_path, 'w') as f:
+                    yaml.dump(template, f, default_flow_style=False, indent=2)
             
             self.console.print(f"[green]✅ Deployment configuration template created: {config_path}[/green]")
             return True
@@ -1041,49 +417,13 @@ class DockerPilotEnhanced:
 
         return True
 
-    def view_container_logs(self):
-        containers = self.client.containers.list(all=True)
-        if not containers:
-            self.console.print("[red]No containers found[/red]")
-            return
-
-        self.console.print("\nSelect a container to view logs:")
-        for i, c in enumerate(containers, start=1):
-            status = c.status
-            self.console.print(f"{i}. {c.name} ({status})")
-
-        choice = input("Enter number: ")
-        try:
-            idx = int(choice) - 1
-            container = containers[idx]
-        except (ValueError, IndexError):
-            self.console.print("[red]Invalid selection[/red]")
-            return
-
-        tail = input("Number of lines to show (default 50): ")
-        try:
-            tail = int(tail)
-        except ValueError:
-            tail = 50
-
-        self.console.print(f"\n[cyan]Showing last {tail} lines of {container.name} logs:[/cyan]\n")
-        try:
-            logs = container.logs(tail=tail).decode()
-            self.console.print(logs)
-        except Exception as e:
-            self.console.print(f"[red]Failed to fetch logs: {e}[/red]")
-
+    def view_container_logs(self, container_name: str = None, tail: int = 50):
+        """View container logs."""
+        return self.container_manager.view_container_logs(container_name, tail)
+    
     def view_container_json(self, container_name: str):
-        """Wyświetla pełne info o kontenerze w formacie JSON"""
-        try:
-            container = self.client.containers.get(container_name)
-            data = container.attrs  # Pełne dane kontenera
-            json_str = json.dumps(data, indent=4, ensure_ascii=False)
-            self.console.print(Panel(json_str, title=f"Container JSON: {container_name}", expand=True))
-        except docker.errors.NotFound:
-            self.console.print(f"[red]Container '{container_name}' not found[/red]")
-        except Exception as e:
-            self.console.print(f"[red]Error fetching JSON for container '{container_name}': {e}[/red]")
+        """Display container information in JSON format."""
+        return self.container_manager.view_container_json(container_name)
 
 
     def _blue_green_deploy_enhanced(self, config: DeploymentConfig, build_config: dict) -> bool:
@@ -1770,7 +1110,7 @@ class DockerPilotEnhanced:
             self._run_interactive_menu()
             return
         
-        # Execute CLI command   JAZDA Z KURWAMI
+        # Execute CLI command
         try:
             if args.command == 'container':
                 self._handle_container_cli(args)
@@ -1815,7 +1155,7 @@ class DockerPilotEnhanced:
                     sys.exit(1)
             elif args.command == 'build':
                 success = self.build_image_standalone(args.dockerfile_path, args.tag, args.no_cache, args.pull)
-            if not success:
+                if not success:
                     sys.exit(1)
             else:
                 parser.print_help()
@@ -2146,93 +1486,19 @@ class DockerPilotEnhanced:
         
         os.makedirs(output_path, exist_ok=True)
         
-        workflow_content = """name: Docker Pilot CI/CD
-
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov
-    
-    - name: Run tests
-      run: |
-        pytest tests/ --cov=. --cov-report=xml
-    
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-
-  build-and-deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    permissions:
-      contents: read
-      packages: write
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Deploy with Docker Pilot
-      run: |
-        python dockerpilotv3.py deploy config deployment.yml --type rolling
-      env:
-        DOCKER_IMAGE: ${{ steps.meta.outputs.tags }}
-"""
+        # Load template from configs directory
+        template_path = Path(__file__).parent / "configs" / "github-actions.yml.template"
         
-        config_file = Path(output_path) / "docker-pilot.yml"
         try:
+            if not template_path.exists():
+                self.logger.error(f"Template file not found: {template_path}")
+                self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                return False
+            
+            with open(template_path, 'r') as f:
+                workflow_content = f.read()
+        
+            config_file = Path(output_path) / "docker-pilot.yml"
             with open(config_file, 'w') as f:
                 f.write(workflow_content)
             
@@ -2244,63 +1510,19 @@ jobs:
 
     def _create_gitlab_ci_config(self, output_path: str = None) -> bool:
         """Create GitLab CI configuration"""
-        config_content = """stages:
-  - test
-  - build
-  - deploy
-
-variables:
-  DOCKER_DRIVER: overlay2
-  DOCKER_TLS_CERTDIR: "/certs"
-
-services:
-  - docker:24.0.5-dind
-
-before_script:
-  - docker info
-
-test:
-  stage: test
-  image: python:3.11-slim
-  before_script:
-    - pip install -r requirements.txt
-    - pip install pytest pytest-cov
-  script:
-    - pytest tests/ --cov=. --cov-report=xml
-    - coverage report
-  coverage: '/TOTAL.*\s+(\d+%)$/'
-  artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-
-build:
-  stage: build
-  image: docker:24.0.5
-  script:
-    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
-    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
-  only:
-    - main
-    - develop
-
-deploy:
-  stage: deploy
-  image: python:3.11-slim
-  before_script:
-    - pip install docker pyyaml requests rich
-  script:
-    - python dockerpilotv3.py deploy config deployment.yml --type rolling
-  environment:
-    name: production
-    url: http://your-app-url.com
-  only:
-    - main
-"""
+        # Load template from configs directory
+        template_path = Path(__file__).parent / "configs" / "gitlab-ci.yml.template"
         
-        config_file = ".gitlab-ci.yml" if not output_path else Path(output_path) / ".gitlab-ci.yml"
         try:
+            if not template_path.exists():
+                self.logger.error(f"Template file not found: {template_path}")
+                self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                return False
+            
+            with open(template_path, 'r') as f:
+                config_content = f.read()
+            
+            config_file = ".gitlab-ci.yml" if not output_path else Path(output_path) / ".gitlab-ci.yml"
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
@@ -2312,90 +1534,19 @@ deploy:
 
     def _create_jenkins_config(self, output_path: str = None) -> bool:
         """Create Jenkins pipeline configuration"""
-        pipeline_content = """pipeline {
-    agent any
-    
-    environment {
-        DOCKER_REGISTRY = 'your-registry.com'
-        IMAGE_NAME = 'your-app'
-        KUBECONFIG = credentials('kubeconfig')
-    }
-    
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'https://github.com/your-org/your-repo.git'
-            }
-        }
+        # Load template from configs directory
+        template_path = Path(__file__).parent / "configs" / "jenkinsfile.template"
         
-        stage('Test') {
-            steps {
-                sh '''
-                    python -m venv venv
-                    source venv/bin/activate
-                    pip install -r requirements.txt
-                    pip install pytest pytest-cov
-                    pytest tests/ --cov=. --cov-report=xml
-                '''
-            }
-            post {
-                always {
-                    publishCoverage adapters: [coberturaAdapter('coverage.xml')]
-                }
-            }
-        }
-        
-        stage('Build') {
-            when {
-                branch 'main'
-            }
-            steps {
-                script {
-                    def image = docker.build("${DOCKER_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}")
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-registry-credentials') {
-                        image.push()
-                        image.push('latest')
-                    }
-                }
-            }
-        }
-        
-        stage('Deploy') {
-            when {
-                branch 'main'
-            }
-            steps {
-                sh '''
-                    source venv/bin/activate
-                    python dockerpilotv3.py deploy config deployment.yml --type blue-green
-                '''
-            }
-        }
-    }
-    
-    post {
-        always {
-            cleanWs()
-        }
-        success {
-            slackSend(
-                channel: '#deployments',
-                color: 'good',
-                message: "Deployment successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
-            )
-        }
-        failure {
-            slackSend(
-                channel: '#deployments',
-                color: 'danger',
-                message: "Deployment failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
-            )
-        }
-    }
-}"""
-        
-        config_file = "Jenkinsfile" if not output_path else Path(output_path) / "Jenkinsfile"
         try:
+            if not template_path.exists():
+                self.logger.error(f"Template file not found: {template_path}")
+                self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                return False
+            
+            with open(template_path, 'r') as f:
+                pipeline_content = f.read()
+            
+            config_file = "Jenkinsfile" if not output_path else Path(output_path) / "Jenkinsfile"
             with open(config_file, 'w') as f:
                 f.write(pipeline_content)
             
@@ -2414,25 +1565,32 @@ deploy:
                 with open(test_config_path, 'r') as f:
                     test_config = yaml.safe_load(f)
             else:
-                # Default test configuration
-                test_config = {
-                    'tests': [
-                        {
-                            'name': 'Health Check',
-                            'type': 'http',
-                            'url': 'http://localhost:8080/health',
-                            'expected_status': 200,
-                            'timeout': 5
-                        },
-                        {
-                            'name': 'API Endpoint',
-                            'type': 'http',
-                            'url': 'http://localhost:8080/api/status',
-                            'expected_status': 200,
-                            'timeout': 10
-                        }
-                    ]
-                }
+                # Load default test configuration from template
+                template_path = Path(__file__).parent / "configs" / "integration-tests.yml.template"
+                
+                if template_path.exists():
+                    with open(template_path, 'r') as f:
+                        test_config = yaml.safe_load(f)
+                else:
+                    # Fallback to default test configuration
+                    test_config = {
+                        'tests': [
+                            {
+                                'name': 'Health Check',
+                                'type': 'http',
+                                'url': 'http://localhost:8080/health',
+                                'expected_status': 200,
+                                'timeout': 5
+                            },
+                            {
+                                'name': 'API Endpoint',
+                                'type': 'http',
+                                'url': 'http://localhost:8080/api/status',
+                                'expected_status': 200,
+                                'timeout': 10
+                            }
+                        ]
+                    }
             
             test_results = []
             
@@ -2747,50 +1905,60 @@ deploy:
     def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml") -> bool:
         """Setup monitoring and alerting configuration"""
         
-        default_alerts = {
-            'alerts': [
-                {
-                    'name': 'high_cpu_usage',
-                    'condition': 'cpu_percent > 80',
-                    'duration': '5m',
-                    'severity': 'warning',
-                    'message': 'CPU usage is above 80% for 5 minutes'
-                },
-                {
-                    'name': 'high_memory_usage',
-                    'condition': 'memory_percent > 85',
-                    'duration': '3m',
-                    'severity': 'critical',
-                    'message': 'Memory usage is above 85% for 3 minutes'
-                },
-                {
-                    'name': 'container_restart',
-                    'condition': 'container_restarts > 3',
-                    'duration': '10m',
-                    'severity': 'warning',
-                    'message': 'Container has restarted more than 3 times in 10 minutes'
-                }
-            ],
-            'notification_channels': [
-                {
-                    'type': 'slack',
-                    'webhook_url': 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK',
-                    'channel': '#alerts'
-                },
-                {
-                    'type': 'email',
-                    'smtp_server': 'smtp.gmail.com',
-                    'smtp_port': 587,
-                    'username': 'your-email@example.com',
-                    'recipients': ['admin@example.com', 'devops@example.com']
-                }
-            ]
-        }
-        
         try:
             if not Path(alert_config_path).exists():
-                with open(alert_config_path, 'w') as f:
-                    yaml.dump(default_alerts, f, default_flow_style=False, indent=2)
+                # Load template from configs directory
+                template_path = Path(__file__).parent / "configs" / "alerts.yml.template"
+                
+                if template_path.exists():
+                    with open(template_path, 'r') as f:
+                        template_content = f.read()
+                    
+                    with open(alert_config_path, 'w') as f:
+                        f.write(template_content)
+                else:
+                    # Fallback to default alerts
+                    default_alerts = {
+                        'alerts': [
+                            {
+                                'name': 'high_cpu_usage',
+                                'condition': 'cpu_percent > 80',
+                                'duration': '5m',
+                                'severity': 'warning',
+                                'message': 'CPU usage is above 80% for 5 minutes'
+                            },
+                            {
+                                'name': 'high_memory_usage',
+                                'condition': 'memory_percent > 85',
+                                'duration': '3m',
+                                'severity': 'critical',
+                                'message': 'Memory usage is above 85% for 3 minutes'
+                            },
+                            {
+                                'name': 'container_restart',
+                                'condition': 'container_restarts > 3',
+                                'duration': '10m',
+                                'severity': 'warning',
+                                'message': 'Container has restarted more than 3 times in 10 minutes'
+                            }
+                        ],
+                        'notification_channels': [
+                            {
+                                'type': 'slack',
+                                'webhook_url': 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK',
+                                'channel': '#alerts'
+                            },
+                            {
+                                'type': 'email',
+                                'smtp_server': 'smtp.gmail.com',
+                                'smtp_port': 587,
+                                'username': 'your-email@example.com',
+                                'recipients': ['admin@example.com', 'devops@example.com']
+                            }
+                        ]
+                    }
+                    with open(alert_config_path, 'w') as f:
+                        yaml.dump(default_alerts, f, default_flow_style=False, indent=2)
                 
                 self.console.print(f"[green]Alert configuration template created: {alert_config_path}[/green]")
             else:
@@ -2923,16 +2091,16 @@ deploy:
 ## Useful Commands
 ```bash
 # Check deployment status
-python dockerpilotv3.py container list
+dockerpilot container list
 
 # Monitor application
-python dockerpilotv3.py monitor myapp --duration 300
+dockerpilot monitor myapp --duration 300
 
 # View deployment history
-python dockerpilotv3.py deploy history
+dockerpilot deploy history
 
 # Emergency rollback
-python dockerpilotv3.py deploy config rollback-config.yml --type blue-green
+dockerpilot deploy config rollback-config.yml --type blue-green
 ```
 """
         
@@ -2995,28 +2163,28 @@ git clone https://github.com/your-org/docker-pilot-enhanced.git
 cd docker-pilot-enhanced
 
 # Make executable
-chmod +x dockerpilotv3.py
+# Install as package: pip install -e .
 ```
 
 ## Quick Start
 
 ### List Containers
 ```bash
-python dockerpilotv3.py container list --all
+dockerpilot container list --all
 ```
 
 ### Start Monitoring
 ```bash
-python dockerpilotv3.py monitor myapp --duration 300
+dockerpilot monitor myapp --duration 300
 ```
 
 ### Deploy Application
 ```bash
 # Create deployment configuration
-python dockerpilotv3.py deploy init
+dockerpilot deploy init
 
 # Deploy using rolling strategy
-python dockerpilotv3.py deploy config deployment.yml --type rolling
+dockerpilot deploy config deployment.yml --type rolling
 ```
 
 ## Configuration
@@ -3044,17 +2212,17 @@ deployment:
 
 ### Blue-Green Deployment
 ```bash
-python dockerpilotv3.py deploy config deployment.yml --type blue-green
+dockerpilot deploy config deployment.yml --type blue-green
 ```
 
 ### Environment Promotion
 ```bash
-python dockerpilotv3.py promote dev staging
+dockerpilot promote dev staging
 ```
 
 ### Integration Tests
 ```bash
-python dockerpilotv3.py test integration
+dockerpilot test integration
 ```
 
 ## Monitoring
@@ -3124,7 +2292,7 @@ The tool uses comprehensive error handling with:
 
 ### Basic Container Management
 ```python
-from dockerpilotv3 import DockerPilotEnhanced
+from dockerpilot.pilot import DockerPilotEnhanced
 
 pilot = DockerPilotEnhanced()
 pilot.list_containers(show_all=True)
@@ -3185,7 +2353,7 @@ sudo chmod 660 /var/run/docker.sock
 
 Enable debug logging:
 ```bash
-python dockerpilotv3.py --log-level DEBUG container list
+dockerpilot --log-level DEBUG container list
 ```
 
 ## Log Files

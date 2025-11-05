@@ -5,21 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dockerpilot"
 version = "0.1.0"
-description = "DockerPilot"
+description = "Docker container management tool with advanced deployment capabilities"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name="dozey", email="dozeynwct@hotmail.com" }
 ]
+requires-python = ">=3.9"
 dependencies = [
     "docker>=6.0.0",
+    "requests>=2.31.0",
+    "rich>=13.0.0",
+    "PyYAML>=6.0",
 ]
-
-dynamic = ["requires-python"]  # <-- dodajemy tutaj
+optional-dependencies = {
+    git = ["GitPython>=3.1.0"],
+    test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"],
+}
 
 [project.scripts]
 dockerpilot = "dockerpilot.main:main"
 
-
 [tool.setuptools]
-packages = ["dockerpilot"]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

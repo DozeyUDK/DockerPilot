@@ -1,4 +1,4 @@
-docker
-requests
-rich
-PyYAML
+docker>=6.0.0
+requests>=2.31.0
+rich>=13.0.0
+PyYAML>=6.0

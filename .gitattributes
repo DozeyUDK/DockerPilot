@@ -1,0 +1,53 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Force LF line endings for all text files
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.json text eol=lf
+*.toml text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.exe binary
+
+# Scripts
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Documentation
+*.md text
+*.txt text
+LICENSE text
+CHANGELOG.md text
+CONTRIBUTING.md text
+
+# Config files
+*.yml text
+*.yaml text
+*.toml text
+*.ini text
+*.cfg text
+
+# Python
+*.py text
+*.pyi text
+requirements.txt text
+setup.py text
+setup.cfg text
+pyproject.toml text
+

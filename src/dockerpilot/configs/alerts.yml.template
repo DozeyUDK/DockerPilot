@@ -1,0 +1,33 @@
+# Monitoring Alerts Configuration Template
+# Configure alerts for container monitoring
+
+alerts:
+  - name: 'high_cpu_usage'
+    condition: 'cpu_percent > 80'
+    duration: '5m'
+    severity: 'warning'
+    message: 'CPU usage is above 80% for 5 minutes'
+  
+  - name: 'high_memory_usage'
+    condition: 'memory_percent > 85'
+    duration: '3m'
+    severity: 'critical'
+    message: 'Memory usage is above 85% for 3 minutes'
+  
+  - name: 'container_restart'
+    condition: 'container_restarts > 3'
+    duration: '10m'
+    severity: 'warning'
+    message: 'Container has restarted more than 3 times in 10 minutes'
+
+notification_channels:
+  - type: 'slack'
+    webhook_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#alerts'
+  
+  - type: 'email'
+    smtp_server: 'smtp.gmail.com'
+    smtp_port: 587
+    username: 'your-email@example.com'
+    recipients: ['admin@example.com', 'devops@example.com']
+

@@ -1,0 +1,16 @@
+# Integration Tests Configuration Template
+# This template defines integration tests that will be run after deployment
+
+tests:
+  - name: 'Health Check'
+    type: 'http'
+    url: 'http://localhost:8080/health'
+    expected_status: 200
+    timeout: 5
+  
+  - name: 'API Endpoint'
+    type: 'http'
+    url: 'http://localhost:8080/api/status'
+    expected_status: 200
+    timeout: 10
+

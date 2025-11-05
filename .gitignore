@@ -2,22 +2,78 @@
 dist/
 build/
 *.egg-info/
+.eggs/
 
 # Python cache
 __pycache__/
 *.py[cod]
-.eggs/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
 # Logs
 *.log
+docker_pilot.log
+*.log.*
 
 # Virtualenv
 .venv/
 env/
 venv/
 ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Configuration files (user-specific)
+deployment.yml
+alerts.yml
+integration-tests.yml
+*.yml.local
+*.yaml.local
+
+# Metrics and data
+docker_metrics.json
+deployment_history.json
+integration-test-report.json
+*.json.bak
+
+# Backup files
+*.bak
+*.backup
+*.tar.gz
+*.zip
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~

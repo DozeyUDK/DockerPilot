@@ -1,0 +1,35 @@
+# Deployment Configuration Template
+# This template can be used with: dockerpilot deploy config deployment.yml --type rolling
+
+deployment:
+  image_tag: 'myapp:latest'
+  container_name: 'myapp'
+  port_mapping:
+    '8080': '8080'
+  environment:
+    ENV: 'production'
+    DEBUG: 'false'
+  volumes:
+    './data': '/app/data'
+  restart_policy: 'unless-stopped'
+  health_check_endpoint: '/health'
+  health_check_timeout: 30
+  health_check_retries: 10
+  build_args:
+    BUILD_ENV: 'production'
+  network: 'bridge'
+  cpu_limit: '1.0'
+  memory_limit: '1g'
+
+build:
+  dockerfile_path: '.'
+  context: '.'
+  no_cache: false
+  pull: true
+
+monitoring:
+  enabled: true
+  metrics_retention_days: 7
+  alert_cpu_threshold: 80.0
+  alert_memory_threshold: 80.0
+
