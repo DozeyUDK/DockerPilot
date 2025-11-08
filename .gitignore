@@ -44,6 +44,37 @@ integration-tests.yml
 *.yml.local
 *.yaml.local
 
+# Environment and secrets
+.env
+.env.*
+.env.local
+.env.production
+.env.development
+.env.test
+*.secret
+secrets.yml
+secrets.yaml
+.secrets/
+
+# Credentials and keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+credentials.json
+credentials.yml
+credentials.yaml
+.credentials/
+
+# API tokens
+*.token
+.token
+api_keys.json
+api_keys.yml
+
 # Metrics and data
 docker_metrics.json
 deployment_history.json
