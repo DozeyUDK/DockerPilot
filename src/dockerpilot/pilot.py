@@ -86,6 +86,22 @@ class DockerPilotEnhanced:
         self.console.print(Panel(banner, title="[bold blue]Docker Managing Tool[/bold blue]", 
                                 title_align="center", border_style="blue"))
         self.console.print(f"[dim]Author: dozey | Version: Enhanced[/dim]\n")
+    
+    def _parse_multi_target(self, target_string: str) -> List[str]:
+        """Parse comma-separated list of containers/images.
+        
+        Args:
+            target_string: String with comma-separated container/image names or IDs
+            
+        Returns:
+            List of container/image names/IDs
+        """
+        if not target_string:
+            return []
+        
+        # Split by comma and strip whitespace
+        targets = [t.strip() for t in target_string.split(',') if t.strip()]
+        return targets
 
     def _setup_logging(self, level: LogLevel):
         """Setup enhanced logging with rotation"""
@@ -1011,24 +1027,29 @@ class DockerPilotEnhanced:
         images_parser.add_argument('--format', choices=['table', 'json'], default='table')
 
         # Remove image
-        remove_img_parser = container_subparsers.add_parser('remove-image', help='Remove Docker image')
-        remove_img_parser.add_argument('name', help='Image name or ID')
+        remove_img_parser = container_subparsers.add_parser('remove-image', help='Remove Docker image(s)')
+        remove_img_parser.add_argument('name', help='Image name(s) or ID(s), comma-separated (e.g., image1:tag,image2:tag)')
         remove_img_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
 
         
         # Container actions
         for action in ['start', 'stop', 'restart', 'remove', 'pause', 'unpause']:
-            action_parser = container_subparsers.add_parser(action, help=f'{action.title()} container')
-            action_parser.add_argument('name', help='Container name or ID')
+            action_parser = container_subparsers.add_parser(action, help=f'{action.title()} container(s)')
+            action_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated (e.g., app1,app2 or id1,id2)')
             if action in ['stop', 'restart']:
                 action_parser.add_argument('--timeout', '-t', type=int, default=10, help='Timeout seconds')
             if action == 'remove':
                 action_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
         
         # Exec into container
-        exec_parser = container_subparsers.add_parser('exec', help='Execute interactive command in container')
-        exec_parser.add_argument('name', help='Container name or ID')
+        exec_parser = container_subparsers.add_parser('exec', help='Execute interactive command in container(s)')
+        exec_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated (e.g., app1,app2)')
         exec_parser.add_argument('--command', '-c', default='/bin/bash', help='Command to execute (default: /bin/bash)')
+        
+        # View container logs
+        logs_parser = container_subparsers.add_parser('logs', help='View container logs')
+        logs_parser.add_argument('name', nargs='?', help='Container name(s) or ID(s), comma-separated (e.g., app1,app2)')
+        logs_parser.add_argument('--tail', '-n', type=int, default=50, help='Number of lines to show (default: 50)')
         
         # Monitoring
         monitor_parser = subparsers.add_parser('monitor', help='Container monitoring')
@@ -1181,36 +1202,88 @@ class DockerPilotEnhanced:
             sys.exit(1)
 
     def _handle_container_cli(self, args):
-        """Handle container CLI commands"""
+        """Handle container CLI commands with support for multiple targets"""
         if args.container_action == 'list':
             self.list_containers(show_all=args.all, format_output=args.format)
         elif args.container_action in ['start', 'stop', 'restart', 'remove', 'pause', 'unpause']:
+            # Parse multiple container names/IDs
+            containers = self._parse_multi_target(args.name)
+            
+            if not containers:
+                self.console.print("[red]❌ No container names provided[/red]")
+                sys.exit(1)
+            
             kwargs = {}
             if hasattr(args, 'timeout'):
                 kwargs['timeout'] = args.timeout
             if hasattr(args, 'force'):
                 kwargs['force'] = args.force
-            success = self.container_operation(args.container_action, args.name, **kwargs)
-            if not success:
+            
+            # Execute operation on each container
+            all_success = True
+            for container in containers:
+                self.console.print(f"\n[cyan]Processing container: {container}[/cyan]")
+                success = self.container_operation(args.container_action, container, **kwargs)
+                if not success:
+                    all_success = False
+            
+            if not all_success:
+                self.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
                 sys.exit(1)
+            else:
+                self.console.print("\n[green]✅ All operations completed successfully[/green]")
+                
         elif args.container_action == 'exec':
-            command = args.command if hasattr(args, 'command') else '/bin/bash'
-            success = self.exec_container(args.name, command)
-            if not success:
+            # Parse multiple container names/IDs
+            containers = self._parse_multi_target(args.name)
+            
+            if not containers:
+                self.console.print("[red]❌ No container names provided[/red]")
                 sys.exit(1)
+            
+            command = args.command if hasattr(args, 'command') else '/bin/bash'
+            
+            # Execute command in each container sequentially
+            for container in containers:
+                self.console.print(f"\n[cyan]Executing in container: {container}[/cyan]")
+                success = self.exec_container(container, command)
+                if not success:
+                    self.console.print(f"[yellow]⚠️ Failed to exec in {container}, continuing...[/yellow]")
+        
+        elif args.container_action == 'logs':
+            tail = args.tail if hasattr(args, 'tail') else 50
+            if args.name:
+                self.view_container_logs(args.name, tail)
+            else:
+                # Interactive mode when no container name provided
+                self.view_container_logs(None, tail)
+                    
         elif args.container_action == 'run_image':
             # This would need CLI parser setup for run_image - currently only supports interactive mode
             self.console.print("[yellow]run_image is only available in interactive mode[/yellow]")
         elif args.container_action == 'list-images':
             self.list_images(show_all=args.all, format_output=args.format)
         elif args.container_action == 'remove-image':
-            success = self.remove_image(args.name, args.force)
-            if not success:
+            # Parse multiple image names/IDs
+            images = self._parse_multi_target(args.name)
+            
+            if not images:
+                self.console.print("[red]❌ No image names provided[/red]")
                 sys.exit(1)
-        elif args.container_action == 'remove-image':
-            success = self.remove_image(args.name, args.force)
-            if not success:
+            
+            # Remove each image
+            all_success = True
+            for image in images:
+                self.console.print(f"\n[cyan]Processing image: {image}[/cyan]")
+                success = self.remove_image(image, args.force)
+                if not success:
+                    all_success = False
+            
+            if not all_success:
+                self.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
                 sys.exit(1)
+            else:
+                self.console.print("\n[green]✅ All operations completed successfully[/green]")
 
     def _handle_monitor_cli(self, args):
         """Handle monitoring CLI commands"""
@@ -1296,23 +1369,49 @@ class DockerPilotEnhanced:
 
                 elif choice in ("start", "stop", "restart", "remove", "pause", "unpause"):
                     self.list_containers()
-                    name = Prompt.ask("Container name or ID")
+                    names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2)")
+                    containers = self._parse_multi_target(names_input)
+                    
+                    if not containers:
+                        self.console.print("[red]No container names provided[/red]")
+                        continue
+                    
                     kwargs = {}
                     if choice in ("stop", "restart"):
                         kwargs['timeout'] = int(Prompt.ask("Timeout seconds", default="10"))
                     if choice == "remove":
                         kwargs['force'] = Confirm.ask("Force removal?", default=False)
-                    success = self.container_operation(choice, name, **kwargs)
-                    if not success:
-                        self.console.print(f"[red]Operation {choice} failed[/red]")
+                    
+                    # Execute operation on each container
+                    all_success = True
+                    for container in containers:
+                        self.console.print(f"\n[cyan]Processing container: {container}[/cyan]")
+                        success = self.container_operation(choice, container, **kwargs)
+                        if not success:
+                            all_success = False
+                    
+                    if not all_success:
+                        self.console.print(f"[yellow]⚠️ Some operations failed[/yellow]")
+                    else:
+                        self.console.print(f"[green]✅ All operations completed successfully[/green]")
 
                 elif choice == "exec":
                     self.list_containers()
-                    name = Prompt.ask("Container name or ID")
+                    names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2)")
+                    containers = self._parse_multi_target(names_input)
+                    
+                    if not containers:
+                        self.console.print("[red]No container names provided[/red]")
+                        continue
+                    
                     command = Prompt.ask("Command to execute", default="/bin/bash")
-                    success = self.exec_container(name, command)
-                    if not success:
-                        self.console.print("[red]Exec operation failed[/red]")
+                    
+                    # Execute command in each container sequentially
+                    for container in containers:
+                        self.console.print(f"\n[cyan]Executing in container: {container}[/cyan]")
+                        success = self.exec_container(container, command)
+                        if not success:
+                            self.console.print(f"[yellow]⚠️ Failed to exec in {container}, continuing...[/yellow]")
 
                 elif choice == "monitor":
                     self.list_containers()
@@ -1363,16 +1462,37 @@ class DockerPilotEnhanced:
                     self.view_container_json(container_name)    
 
                 elif choice == "logs":
-                    self.view_container_logs()
+                    self.list_containers()
+                    containers_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple, empty for interactive select)", default="").strip()
+                    if containers_input:
+                        self.view_container_logs(containers_input)
+                    else:
+                        self.view_container_logs()
 
                 
                 elif choice == "remove-image":
                     self.list_images()
-                    image_name = Prompt.ask("Image name or ID to remove")
+                    images_input = Prompt.ask("Image name(s) or ID(s) to remove (comma-separated for multiple, e.g., img1:tag,img2:tag)")
+                    images = self._parse_multi_target(images_input)
+                    
+                    if not images:
+                        self.console.print("[red]No image names provided[/red]")
+                        continue
+                    
                     force = Confirm.ask("Force removal?", default=False)
-                    success = self.remove_image(image_name, force)
-                    if not success:
-                        self.console.print("[red]Failed to remove image[/red]")
+                    
+                    # Remove each image
+                    all_success = True
+                    for image in images:
+                        self.console.print(f"\n[cyan]Processing image: {image}[/cyan]")
+                        success = self.remove_image(image, force)
+                        if not success:
+                            all_success = False
+                    
+                    if not all_success:
+                        self.console.print("[yellow]⚠️ Some operations failed[/yellow]")
+                    else:
+                        self.console.print("[green]✅ All operations completed successfully[/green]")
 
                 elif choice == "deploy-init":
                     output = Prompt.ask("Output file", default="deployment.yml")

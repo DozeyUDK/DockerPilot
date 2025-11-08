@@ -230,16 +230,33 @@ class ContainerManager:
         self.logger.warning(f"Container {container_name} did not reach status {expected_status} within {timeout}s")
         return False
     
-    def view_container_logs(self, container_name: str = None, tail: int = 50):
-        """View container logs."""
-        if container_name:
-            try:
-                container = self.client.containers.get(container_name)
-                logs = container.logs(tail=tail).decode()
-                self.console.print(f"\n[cyan]Showing last {tail} lines of {container_name} logs:[/cyan]\n")
-                self.console.print(logs)
-            except docker.errors.NotFound:
-                self.console.print(f"[red]Container '{container_name}' not found[/red]")
+    def view_container_logs(self, container_names: str = None, tail: int = 50):
+        """View container logs. Supports multiple containers separated by comma.
+        
+        Args:
+            container_names: Single container name/ID or comma-separated list of names/IDs
+            tail: Number of log lines to show per container
+        """
+        if container_names:
+            # Parse multiple container names if comma-separated
+            if ',' in container_names:
+                names_list = [name.strip() for name in container_names.split(',') if name.strip()]
+            else:
+                names_list = [container_names.strip()]
+            
+            # Show logs for each container
+            for container_name in names_list:
+                try:
+                    container = self.client.containers.get(container_name)
+                    logs = container.logs(tail=tail).decode()
+                    self.console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+                    self.console.print(f"[cyan]Container: {container_name} - Last {tail} lines[/cyan]")
+                    self.console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
+                    self.console.print(logs)
+                except docker.errors.NotFound:
+                    self.console.print(f"[red]Container '{container_name}' not found[/red]")
+                except Exception as e:
+                    self.console.print(f"[red]Error reading logs for '{container_name}': {e}[/red]")
         else:
             containers = self.client.containers.list(all=True)
             if not containers:
