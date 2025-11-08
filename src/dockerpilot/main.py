@@ -1,4 +1,4 @@
-from dockerpilot.pilot import DockerPilotEnhanced, LogLevel
+from .pilot import DockerPilotEnhanced, LogLevel
 import argparse
 
 def main():
