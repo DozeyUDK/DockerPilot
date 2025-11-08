@@ -1,0 +1,62 @@
+# Troubleshooting Guide
+
+## Common Issues
+
+### Docker Connection Failed
+**Problem**: Cannot connect to Docker daemon
+**Solution**: 
+1. Check if Docker is running: `docker info`
+2. Verify user permissions: `sudo usermod -aG docker $USER`
+3. Restart Docker service: `sudo systemctl restart docker`
+
+### Container Health Check Failed
+**Problem**: Health checks timing out
+**Solution**:
+1. Verify endpoint exists: `curl http://localhost:8080/health`
+2. Check container logs: `docker logs container-name`
+3. Increase health check timeout in config
+
+### Deployment Stuck
+**Problem**: Rolling deployment appears stuck
+**Solution**:
+1. Check container status: `docker ps -a`
+2. Review deployment logs in `docker_pilot.log`
+3. Verify port availability: `netstat -tulpn | grep :8080`
+
+### Memory Issues
+**Problem**: Container using too much memory
+**Solution**:
+1. Set memory limits in deployment config
+2. Monitor with: `docker stats container-name`
+3. Check application memory leaks
+
+### Permission Denied
+**Problem**: Cannot access Docker socket
+**Solution**:
+```bash
+sudo chown $USER:docker /var/run/docker.sock
+sudo chmod 660 /var/run/docker.sock
+```
+
+## Debug Mode
+
+Enable debug logging:
+```bash
+dockerpilot --log-level DEBUG container list
+```
+
+## Log Files
+
+- `docker_pilot.log` - Main application log
+- `docker_metrics.json` - Performance metrics
+- `deployment_history.json` - Deployment records
+- `integration-test-report.json` - Test results
+
+## Getting Help
+
+1. Check logs for detailed error information
+2. Verify Docker daemon status
+3. Test with simple commands first
+4. Review configuration files for syntax errors
+5. Check network connectivity for remote deployments
+

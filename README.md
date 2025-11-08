@@ -25,7 +25,7 @@ cd DockerPilot && install.bat
 
 **What the installer does:**
 - ✅ Checks Python 3.9+ and Docker
-- ✅ Installs all dependencies
+- ✅ Installs Docker Pilot with all dependencies
 - ✅ Sets up `dockerpilot` command globally
 - ✅ Verifies installation
 
@@ -51,7 +51,6 @@ dockerpilot deploy config deployment.yml --type rolling
 ```bash
 git clone https://github.com/DozeyUDK/DockerPilot.git
 cd DockerPilot
-pip install -r requirements.txt
 pip install -e .
 ```
 
@@ -99,11 +98,12 @@ dockerpilot validate  # Check system requirements
 ## Features
 
 ### Core Capabilities (Both Versions)
-- **Container Operations**: Start, stop, restart, remove, pause, unpause containers
+- **Container Operations**: Start, stop, restart, remove, pause, unpause, exec into containers
 - **Image Management**: List, build, and remove Docker images
 - **Real-time Monitoring**: CPU, memory, network I/O, and process tracking
 - **Health Checks**: Automated container health validation
 - **Interactive Dashboard**: Live metrics with trend indicators
+- **Container Shell Access**: Execute interactive bash/sh sessions inside running containers
 
 ### Advanced Deployment (Full Version Only)
 - **Rolling Deployment**: Zero-downtime updates with automatic rollback
@@ -188,6 +188,13 @@ dockerpilot container remove myapp --force
 # Pause/Unpause
 dockerpilot container pause myapp
 dockerpilot container unpause myapp
+
+# Execute interactive shell in container
+dockerpilot container exec myapp
+
+# Execute custom command in container
+dockerpilot container exec myapp --command /bin/sh
+dockerpilot container exec myapp --command "ls -la /app"
 ```
 
 ### View Container Logs

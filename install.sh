@@ -63,18 +63,7 @@ fi
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# Install dependencies
-echo ""
-echo "📦 Installing dependencies..."
-if [ -f "requirements.txt" ]; then
-    pip3 install -r requirements.txt
-    echo -e "${GREEN}✅ Dependencies installed from requirements.txt${NC}"
-else
-    echo -e "${RED}❌ requirements.txt not found${NC}"
-    exit 1
-fi
-
-# Install in development mode
+# Install Docker Pilot (includes all dependencies)
 echo ""
 echo "📦 Installing Docker Pilot..."
 pip3 install -e .

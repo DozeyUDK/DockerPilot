@@ -48,24 +48,7 @@ REM Get script directory
 set SCRIPT_DIR=%~dp0
 cd /d "%SCRIPT_DIR%"
 
-REM Install dependencies
-echo.
-echo [*] Installing dependencies...
-if exist requirements.txt (
-    pip install -r requirements.txt
-    if errorlevel 1 (
-        echo [ERROR] Failed to install dependencies
-        pause
-        exit /b 1
-    )
-    echo [OK] Dependencies installed from requirements.txt
-) else (
-    echo [ERROR] requirements.txt not found
-    pause
-    exit /b 1
-)
-
-REM Install in development mode
+REM Install Docker Pilot (includes all dependencies)
 echo.
 echo [*] Installing Docker Pilot...
 pip install -e .

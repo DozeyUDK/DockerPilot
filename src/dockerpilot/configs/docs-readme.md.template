@@ -1,0 +1,117 @@
+# Docker Pilot Enhanced
+
+Professional Docker Container Management Tool with Advanced Deployment Capabilities
+
+## Features
+
+### Container Management
+- List, start, stop, restart, remove containers
+- Real-time monitoring with resource usage metrics
+- Interactive dashboard with trend indicators
+- Container health checks and status monitoring
+
+### Advanced Deployment Strategies
+- **Rolling Deployment**: Zero-downtime updates with health checks
+- **Blue-Green Deployment**: Parallel environment switching
+- **Canary Deployment**: Gradual traffic shifting with monitoring
+
+### CI/CD Integration
+- GitHub Actions workflow generation
+- GitLab CI configuration
+- Jenkins pipeline support
+- Environment promotion (dev → staging → prod)
+
+### Monitoring & Alerting
+- Real-time resource monitoring
+- Configurable alert rules
+- Multiple notification channels (Slack, Email)
+- Performance metrics tracking
+
+## Installation
+
+```bash
+# Install required dependencies
+pip install docker pyyaml requests rich
+
+# Clone the repository
+git clone https://github.com/your-org/docker-pilot-enhanced.git
+cd docker-pilot-enhanced
+
+# Make executable
+# Install as package: pip install -e .
+```
+
+## Quick Start
+
+### List Containers
+```bash
+dockerpilot container list --all
+```
+
+### Start Monitoring
+```bash
+dockerpilot monitor myapp --duration 300
+```
+
+### Deploy Application
+```bash
+# Create deployment configuration
+dockerpilot deploy init
+
+# Deploy using rolling strategy
+dockerpilot deploy config deployment.yml --type rolling
+```
+
+## Configuration
+
+Create `deployment.yml`:
+
+```yaml
+deployment:
+  image_tag: 'myapp:latest'
+  container_name: 'myapp'
+  port_mapping:
+    '8080': '8080'
+  environment:
+    ENV: 'production'
+    DEBUG: 'false'
+  volumes:
+    './data': '/app/data'
+  restart_policy: 'unless-stopped'
+  health_check_endpoint: '/health'
+  health_check_timeout: 30
+  health_check_retries: 10
+```
+
+## Advanced Usage
+
+### Blue-Green Deployment
+```bash
+dockerpilot deploy config deployment.yml --type blue-green
+```
+
+### Environment Promotion
+```bash
+dockerpilot promote dev staging
+```
+
+### Integration Tests
+```bash
+dockerpilot test integration
+```
+
+## Monitoring
+
+The tool provides real-time monitoring with:
+- CPU usage tracking
+- Memory consumption monitoring
+- Network I/O statistics
+- Process count monitoring
+- Container uptime tracking
+
+## Support
+
+- Documentation: [docs/](./docs/)
+- Issues: [GitHub Issues](https://github.com/your-org/docker-pilot-enhanced/issues)
+- Contact: devops@your-company.com
+

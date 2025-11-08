@@ -52,24 +52,7 @@ try {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
-# Install dependencies
-Write-Host ""
-Write-Host "[*] Installing dependencies..." -ForegroundColor Yellow
-if (Test-Path "requirements.txt") {
-    pip install -r requirements.txt
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[ERROR] Failed to install dependencies" -ForegroundColor Red
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-    Write-Host "[OK] Dependencies installed from requirements.txt" -ForegroundColor Green
-} else {
-    Write-Host "[ERROR] requirements.txt not found" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
-    exit 1
-}
-
-# Install in development mode
+# Install Docker Pilot (includes all dependencies)
 Write-Host ""
 Write-Host "[*] Installing Docker Pilot..." -ForegroundColor Yellow
 pip install -e .

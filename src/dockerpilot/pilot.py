@@ -198,6 +198,46 @@ class DockerPilotEnhanced:
     def run_new_container(self, image_name: str, name: str, ports: dict = None, command: str = None) -> bool:
         """Run a new container."""
         return self.container_manager.run_new_container(image_name, name, ports, command)
+    
+    def exec_container(self, container_name: str, command: str = "/bin/bash") -> bool:
+        """Execute interactive command in running container."""
+        import subprocess
+        
+        with self._error_handler(f"exec into container {container_name}", container_name):
+            # Verify container exists and is running
+            container = self.client.containers.get(container_name)
+            if container.status != 'running':
+                self.console.print(f"[bold red]❌ Container '{container_name}' is not running (status: {container.status})[/bold red]")
+                return False
+            
+            self.logger.info(f"Executing interactive command in container {container_name}: {command}")
+            self.console.print(f"[cyan]📟 Executing '{command}' in container '{container_name}'...[/cyan]")
+            self.console.print(f"[dim]Type 'exit' to leave the container shell[/dim]\n")
+            
+            # Use subprocess to maintain interactive terminal
+            # This allows proper TTY handling for interactive bash session
+            try:
+                result = subprocess.run(
+                    ['docker', 'exec', '-it', container_name, command],
+                    check=False
+                )
+                
+                if result.returncode == 0:
+                    self.console.print(f"\n[green]✅ Exited from container '{container_name}'[/green]")
+                    return True
+                else:
+                    self.console.print(f"\n[yellow]⚠️ Exec command exited with code {result.returncode}[/yellow]")
+                    return False
+                    
+            except FileNotFoundError:
+                self.console.print("[bold red]❌ Docker CLI not found. Please ensure Docker is installed and in PATH.[/bold red]")
+                return False
+            except Exception as e:
+                self.console.print(f"[bold red]❌ Failed to execute command: {e}[/bold red]")
+                self.logger.error(f"Exec failed: {e}")
+                return False
+        
+        return False
 
     # ==================== MONITORING & METRICS ====================
 
@@ -212,50 +252,21 @@ class DockerPilotEnhanced:
     # ==================== ADVANCED DEPLOYMENT ====================
 
     def create_deployment_config(self, config_path: str = "deployment.yml") -> bool:
-        """Create deployment configuration template"""
+        """Create deployment configuration template from file"""
         try:
             # Load template from configs directory
             template_path = Path(__file__).parent / "configs" / "deployment.yml.template"
             
-            if template_path.exists():
-                with open(template_path, 'r') as f:
-                    template_content = f.read()
-                
-                with open(config_path, 'w') as f:
-                    f.write(template_content)
-            else:
-                # Fallback to default template if file doesn't exist
-                template = {
-                    'deployment': {
-                        'image_tag': 'myapp:latest',
-                        'container_name': 'myapp',
-                        'port_mapping': {'8080': '8080'},
-                        'environment': {'ENV': 'production', 'DEBUG': 'false'},
-                        'volumes': {'./data': '/app/data'},
-                        'restart_policy': 'unless-stopped',
-                        'health_check_endpoint': '/health',
-                        'health_check_timeout': 30,
-                        'health_check_retries': 10,
-                        'build_args': {'BUILD_ENV': 'production'},
-                        'network': 'bridge',
-                        'cpu_limit': '1.0',
-                        'memory_limit': '1g'
-                    },
-                    'build': {
-                        'dockerfile_path': '.',
-                        'context': '.',
-                        'no_cache': False,
-                        'pull': True
-                    },
-                    'monitoring': {
-                        'enabled': True,
-                        'metrics_retention_days': 7,
-                        'alert_cpu_threshold': 80.0,
-                        'alert_memory_threshold': 80.0
-                    }
-                }
-                with open(config_path, 'w') as f:
-                    yaml.dump(template, f, default_flow_style=False, indent=2)
+            if not template_path.exists():
+                self.logger.error(f"Template file not found: {template_path}")
+                self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                return False
+            
+            with open(template_path, 'r', encoding='utf-8') as f:
+                template_content = f.read()
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write(template_content)
             
             self.console.print(f"[green]✅ Deployment configuration template created: {config_path}[/green]")
             return True
@@ -1014,6 +1025,11 @@ class DockerPilotEnhanced:
             if action == 'remove':
                 action_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
         
+        # Exec into container
+        exec_parser = container_subparsers.add_parser('exec', help='Execute interactive command in container')
+        exec_parser.add_argument('name', help='Container name or ID')
+        exec_parser.add_argument('--command', '-c', default='/bin/bash', help='Command to execute (default: /bin/bash)')
+        
         # Monitoring
         monitor_parser = subparsers.add_parser('monitor', help='Container monitoring')
         monitor_parser.add_argument('containers', nargs='*', help='Container names (empty for all running)')
@@ -1177,6 +1193,11 @@ class DockerPilotEnhanced:
             success = self.container_operation(args.container_action, args.name, **kwargs)
             if not success:
                 sys.exit(1)
+        elif args.container_action == 'exec':
+            command = args.command if hasattr(args, 'command') else '/bin/bash'
+            success = self.exec_container(args.name, command)
+            if not success:
+                sys.exit(1)
         elif args.container_action == 'run_image':
             # This would need CLI parser setup for run_image - currently only supports interactive mode
             self.console.print("[yellow]run_image is only available in interactive mode[/yellow]")
@@ -1255,7 +1276,7 @@ class DockerPilotEnhanced:
             while True:
                 choice = Prompt.ask(
                     "\n[bold cyan]Docker Pilot - Interactive Menu[/bold cyan]\n"
-                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, policy, run_image, logs, remove-image, json, monitor, build\n"
+                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, exec, policy, run_image, logs, remove-image, json, monitor, build\n"
                     "Deploy: deploy-init, deploy-config, history, promote\n"
                     "System: validate, backup-create, backup-restore, alerts,  test, pipeline, docs, checklist\n"
                     "Config: export-config, import-config\n"
@@ -1284,6 +1305,14 @@ class DockerPilotEnhanced:
                     success = self.container_operation(choice, name, **kwargs)
                     if not success:
                         self.console.print(f"[red]Operation {choice} failed[/red]")
+
+                elif choice == "exec":
+                    self.list_containers()
+                    name = Prompt.ask("Container name or ID")
+                    command = Prompt.ask("Command to execute", default="/bin/bash")
+                    success = self.exec_container(name, command)
+                    if not success:
+                        self.console.print("[red]Exec operation failed[/red]")
 
                 elif choice == "monitor":
                     self.list_containers()
@@ -1903,62 +1932,23 @@ class DockerPilotEnhanced:
         return True
 
     def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml") -> bool:
-        """Setup monitoring and alerting configuration"""
+        """Setup monitoring and alerting configuration from template"""
         
         try:
             if not Path(alert_config_path).exists():
                 # Load template from configs directory
                 template_path = Path(__file__).parent / "configs" / "alerts.yml.template"
                 
-                if template_path.exists():
-                    with open(template_path, 'r') as f:
-                        template_content = f.read()
-                    
-                    with open(alert_config_path, 'w') as f:
-                        f.write(template_content)
-                else:
-                    # Fallback to default alerts
-                    default_alerts = {
-                        'alerts': [
-                            {
-                                'name': 'high_cpu_usage',
-                                'condition': 'cpu_percent > 80',
-                                'duration': '5m',
-                                'severity': 'warning',
-                                'message': 'CPU usage is above 80% for 5 minutes'
-                            },
-                            {
-                                'name': 'high_memory_usage',
-                                'condition': 'memory_percent > 85',
-                                'duration': '3m',
-                                'severity': 'critical',
-                                'message': 'Memory usage is above 85% for 3 minutes'
-                            },
-                            {
-                                'name': 'container_restart',
-                                'condition': 'container_restarts > 3',
-                                'duration': '10m',
-                                'severity': 'warning',
-                                'message': 'Container has restarted more than 3 times in 10 minutes'
-                            }
-                        ],
-                        'notification_channels': [
-                            {
-                                'type': 'slack',
-                                'webhook_url': 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK',
-                                'channel': '#alerts'
-                            },
-                            {
-                                'type': 'email',
-                                'smtp_server': 'smtp.gmail.com',
-                                'smtp_port': 587,
-                                'username': 'your-email@example.com',
-                                'recipients': ['admin@example.com', 'devops@example.com']
-                            }
-                        ]
-                    }
-                    with open(alert_config_path, 'w') as f:
-                        yaml.dump(default_alerts, f, default_flow_style=False, indent=2)
+                if not template_path.exists():
+                    self.logger.error(f"Template file not found: {template_path}")
+                    self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                    return False
+                
+                with open(template_path, 'r', encoding='utf-8') as f:
+                    template_content = f.read()
+                
+                with open(alert_config_path, 'w', encoding='utf-8') as f:
+                    f.write(template_content)
                 
                 self.console.print(f"[green]Alert configuration template created: {alert_config_path}[/green]")
             else:
@@ -2044,69 +2034,20 @@ class DockerPilotEnhanced:
             self.logger.error(f"Failed to send notification: {e}")
 
     def create_production_checklist(self, output_file: str = "production-checklist.md") -> bool:
-        """Generate production deployment checklist"""
-        
-        checklist_content = """# Production Deployment Checklist
-
-## Pre-Deployment
-- [ ] All tests passing in CI/CD pipeline
-- [ ] Security scan completed with no critical vulnerabilities
-- [ ] Performance testing completed
-- [ ] Database migrations tested and ready
-- [ ] Configuration files reviewed and approved
-- [ ] Rollback plan documented and tested
-- [ ] Monitoring alerts configured
-- [ ] Team notifications sent
-
-## During Deployment
-- [ ] Backup current production state
-- [ ] Enable maintenance mode (if applicable)
-- [ ] Execute deployment using Docker Pilot
-- [ ] Monitor application logs during deployment
-- [ ] Verify health checks are passing
-- [ ] Run smoke tests
-- [ ] Disable maintenance mode
-
-## Post-Deployment
-- [ ] Verify all services are running correctly
-- [ ] Check application functionality
-- [ ] Monitor error rates and performance metrics
-- [ ] Verify data integrity
-- [ ] Update documentation
-- [ ] Send deployment success notification
-- [ ] Schedule post-deployment review meeting
-
-## Rollback Procedures
-- [ ] Stop current containers
-- [ ] Deploy previous stable version
-- [ ] Verify rollback success
-- [ ] Investigate deployment failure
-- [ ] Document lessons learned
-
-## Emergency Contacts
-- DevOps Team: devops@company.com
-- Application Team: app-team@company.com
-- On-Call Engineer: +1-XXX-XXX-XXXX
-
-## Useful Commands
-```bash
-# Check deployment status
-dockerpilot container list
-
-# Monitor application
-dockerpilot monitor myapp --duration 300
-
-# View deployment history
-dockerpilot deploy history
-
-# Emergency rollback
-dockerpilot deploy config rollback-config.yml --type blue-green
-```
-"""
-        
-
+        """Generate production deployment checklist from template"""
         try:
-            with open(output_file, 'w') as f:
+            # Load template from configs directory
+            template_path = Path(__file__).parent / "configs" / "production-checklist.md.template"
+            
+            if not template_path.exists():
+                self.logger.error(f"Template not found: {template_path}")
+                self.console.print(f"[red]Template file not found: {template_path}[/red]")
+                return False
+            
+            with open(template_path, 'r', encoding='utf-8') as f:
+                checklist_content = f.read()
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(checklist_content)
             
             self.console.print(f"[green]Production checklist created: {output_file}[/green]")
@@ -2117,263 +2058,36 @@ dockerpilot deploy config rollback-config.yml --type blue-green
             return False
 
     def generate_documentation(self, output_dir: str = "docs") -> bool:
-        """Generate comprehensive project documentation"""
+        """Generate comprehensive project documentation from templates"""
         try:
             docs_path = Path(output_dir)
             docs_path.mkdir(exist_ok=True)
             
-            # Generate README
-            readme_content = """# Docker Pilot Enhanced
-
-Professional Docker Container Management Tool with Advanced Deployment Capabilities
-
-## Features
-
-### Container Management
-- List, start, stop, restart, remove containers
-- Real-time monitoring with resource usage metrics
-- Interactive dashboard with trend indicators
-- Container health checks and status monitoring
-
-### Advanced Deployment Strategies
-- **Rolling Deployment**: Zero-downtime updates with health checks
-- **Blue-Green Deployment**: Parallel environment switching
-- **Canary Deployment**: Gradual traffic shifting with monitoring
-
-### CI/CD Integration
-- GitHub Actions workflow generation
-- GitLab CI configuration
-- Jenkins pipeline support
-- Environment promotion (dev → staging → prod)
-
-### Monitoring & Alerting
-- Real-time resource monitoring
-- Configurable alert rules
-- Multiple notification channels (Slack, Email)
-- Performance metrics tracking
-
-## Installation
-
-```bash
-# Install required dependencies
-pip install docker pyyaml requests rich
-
-# Clone the repository
-git clone https://github.com/your-org/docker-pilot-enhanced.git
-cd docker-pilot-enhanced
-
-# Make executable
-# Install as package: pip install -e .
-```
-
-## Quick Start
-
-### List Containers
-```bash
-dockerpilot container list --all
-```
-
-### Start Monitoring
-```bash
-dockerpilot monitor myapp --duration 300
-```
-
-### Deploy Application
-```bash
-# Create deployment configuration
-dockerpilot deploy init
-
-# Deploy using rolling strategy
-dockerpilot deploy config deployment.yml --type rolling
-```
-
-## Configuration
-
-Create `deployment.yml`:
-
-```yaml
-deployment:
-  image_tag: 'myapp:latest'
-  container_name: 'myapp'
-  port_mapping:
-    '8080': '8080'
-  environment:
-    ENV: 'production'
-    DEBUG: 'false'
-  volumes:
-    './data': '/app/data'
-  restart_policy: 'unless-stopped'
-  health_check_endpoint: '/health'
-  health_check_timeout: 30
-  health_check_retries: 10
-```
-
-## Advanced Usage
-
-### Blue-Green Deployment
-```bash
-dockerpilot deploy config deployment.yml --type blue-green
-```
-
-### Environment Promotion
-```bash
-dockerpilot promote dev staging
-```
-
-### Integration Tests
-```bash
-dockerpilot test integration
-```
-
-## Monitoring
-
-The tool provides real-time monitoring with:
-- CPU usage tracking
-- Memory consumption monitoring
-- Network I/O statistics
-- Process count monitoring
-- Container uptime tracking
-
-## Support
-
-- Documentation: [docs/](./docs/)
-- Issues: [GitHub Issues](https://github.com/your-org/docker-pilot-enhanced/issues)
-- Contact: devops@your-company.com
-"""
+            # Get templates directory
+            templates_dir = Path(__file__).parent / "configs"
             
-            with open(docs_path / "README.md", 'w') as f:
-                f.write(readme_content)
+            # Documentation files to generate
+            doc_files = [
+                ("docs-readme.md.template", "README.md"),
+                ("docs-api.md.template", "API.md"),
+                ("docs-troubleshooting.md.template", "TROUBLESHOOTING.md")
+            ]
             
-            # Generate API documentation
-            api_docs = """# Docker Pilot API Documentation
-
-## Core Classes
-
-### DockerPilotEnhanced
-
-Main class providing Docker container management functionality.
-
-#### Methods
-
-##### Container Management
-- `list_containers(show_all=True, format_output="table")` - List all containers
-- `container_operation(operation, container_name, **kwargs)` - Execute container operations
-- `get_container_stats(container_name)` - Get container resource statistics
-
-##### Monitoring
-- `monitor_containers_dashboard(containers=None, duration=300)` - Real-time monitoring
-- `setup_monitoring_alerts(alert_config_path)` - Configure monitoring alerts
-
-##### Deployment
-- `deploy_from_config(config_path, deployment_type="rolling")` - Deploy from configuration
-- `environment_promotion(source_env, target_env)` - Promote between environments
-
-##### CI/CD Integration
-- `create_pipeline_config(pipeline_type, output_path)` - Generate CI/CD configs
-- `run_integration_tests(test_config_path)` - Run integration test suite
-
-## Configuration Classes
-
-### DeploymentConfig
-Configuration dataclass for deployment parameters.
-
-### ContainerStats
-Statistics dataclass containing container metrics.
-
-## Error Handling
-
-The tool uses comprehensive error handling with:
-- Contextual error messages
-- Logging integration
-- Graceful fallbacks
-- User-friendly error reporting
-
-## Examples
-
-### Basic Container Management
-```python
-from dockerpilot.pilot import DockerPilotEnhanced
-
-pilot = DockerPilotEnhanced()
-pilot.list_containers(show_all=True)
-pilot.container_operation('start', 'myapp')
-```
-
-### Advanced Deployment
-```python
-pilot.deploy_from_config('deployment.yml', 'blue-green')
-```
-"""
-            
-            with open(docs_path / "API.md", 'w') as f:
-                f.write(api_docs)
-            
-            # Generate troubleshooting guide
-            troubleshooting = """# Troubleshooting Guide
-
-## Common Issues
-
-### Docker Connection Failed
-**Problem**: Cannot connect to Docker daemon
-**Solution**: 
-1. Check if Docker is running: `docker info`
-2. Verify user permissions: `sudo usermod -aG docker $USER`
-3. Restart Docker service: `sudo systemctl restart docker`
-
-### Container Health Check Failed
-**Problem**: Health checks timing out
-**Solution**:
-1. Verify endpoint exists: `curl http://localhost:8080/health`
-2. Check container logs: `docker logs container-name`
-3. Increase health check timeout in config
-
-### Deployment Stuck
-**Problem**: Rolling deployment appears stuck
-**Solution**:
-1. Check container status: `docker ps -a`
-2. Review deployment logs in `docker_pilot.log`
-3. Verify port availability: `netstat -tulpn | grep :8080`
-
-### Memory Issues
-**Problem**: Container using too much memory
-**Solution**:
-1. Set memory limits in deployment config
-2. Monitor with: `docker stats container-name`
-3. Check application memory leaks
-
-### Permission Denied
-**Problem**: Cannot access Docker socket
-**Solution**:
-```bash
-sudo chown $USER:docker /var/run/docker.sock
-sudo chmod 660 /var/run/docker.sock
-```
-
-## Debug Mode
-
-Enable debug logging:
-```bash
-dockerpilot --log-level DEBUG container list
-```
-
-## Log Files
-
-- `docker_pilot.log` - Main application log
-- `docker_metrics.json` - Performance metrics
-- `deployment_history.json` - Deployment records
-- `integration-test-report.json` - Test results
-
-## Getting Help
-
-1. Check logs for detailed error information
-2. Verify Docker daemon status
-3. Test with simple commands first
-4. Review configuration files for syntax errors
-5. Check network connectivity for remote deployments
-"""
-            
-            with open(docs_path / "TROUBLESHOOTING.md", 'w') as f:
-                f.write(troubleshooting)
+            # Generate each documentation file from template
+            for template_name, output_name in doc_files:
+                template_path = templates_dir / template_name
+                
+                if not template_path.exists():
+                    self.logger.warning(f"Template not found: {template_path}")
+                    continue
+                
+                with open(template_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                with open(docs_path / output_name, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                self.logger.info(f"Generated {output_name}")
             
             self.console.print(f"[green]Documentation generated in {output_dir}/[/green]")
             return True

@@ -1,0 +1,57 @@
+# Production Deployment Checklist
+
+## Pre-Deployment
+- [ ] All tests passing in CI/CD pipeline
+- [ ] Security scan completed with no critical vulnerabilities
+- [ ] Performance testing completed
+- [ ] Database migrations tested and ready
+- [ ] Configuration files reviewed and approved
+- [ ] Rollback plan documented and tested
+- [ ] Monitoring alerts configured
+- [ ] Team notifications sent
+
+## During Deployment
+- [ ] Backup current production state
+- [ ] Enable maintenance mode (if applicable)
+- [ ] Execute deployment using Docker Pilot
+- [ ] Monitor application logs during deployment
+- [ ] Verify health checks are passing
+- [ ] Run smoke tests
+- [ ] Disable maintenance mode
+
+## Post-Deployment
+- [ ] Verify all services are running correctly
+- [ ] Check application functionality
+- [ ] Monitor error rates and performance metrics
+- [ ] Verify data integrity
+- [ ] Update documentation
+- [ ] Send deployment success notification
+- [ ] Schedule post-deployment review meeting
+
+## Rollback Procedures
+- [ ] Stop current containers
+- [ ] Deploy previous stable version
+- [ ] Verify rollback success
+- [ ] Investigate deployment failure
+- [ ] Document lessons learned
+
+## Emergency Contacts
+- DevOps Team: devops@company.com
+- Application Team: app-team@company.com
+- On-Call Engineer: +1-XXX-XXX-XXXX
+
+## Useful Commands
+```bash
+# Check deployment status
+dockerpilot container list
+
+# Monitor application
+dockerpilot monitor myapp --duration 300
+
+# View deployment history
+dockerpilot deploy history
+
+# Emergency rollback
+dockerpilot deploy config rollback-config.yml --type blue-green
+```
+

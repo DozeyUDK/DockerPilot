@@ -223,6 +223,46 @@ def exec_in_container(container_name, cmd):
     except docker.errors.APIError as e:
         console.print(f"[bold red]Błąd API Dockera przy exec:[/bold red] {e}")
 
+def exec_interactive(container_name, command="/bin/bash"):
+    """Wykonaj interaktywną sesję w kontenerze (exec -it)"""
+    import subprocess
+    try:
+        container = client.containers.get(container_name)
+        if container.status != 'running':
+            console.print(f"[bold red]Kontener '{container_name}' nie jest uruchomiony (status: {container.status})[/bold red]")
+            return False
+        
+        console.print(f"[cyan]Uruchamiam interaktywną sesję '{command}' w kontenerze '{container_name}'...[/cyan]")
+        console.print(f"[dim]Wpisz 'exit' aby wyjść z kontenera[/dim]\n")
+        
+        # Użyj subprocess aby zachować interaktywny terminal
+        try:
+            result = subprocess.run(
+                ['docker', 'exec', '-it', container_name, command],
+                check=False
+            )
+            
+            if result.returncode == 0:
+                console.print(f"\n[green]✅ Wyszedłeś z kontenera '{container_name}'[/green]")
+                return True
+            else:
+                console.print(f"\n[yellow]⚠️ Exec zakończył się z kodem {result.returncode}[/yellow]")
+                return False
+                
+        except FileNotFoundError:
+            console.print("[bold red]❌ Nie znaleziono Docker CLI. Upewnij się, że Docker jest zainstalowany i w PATH.[/bold red]")
+            return False
+        except Exception as e:
+            console.print(f"[bold red]❌ Nie udało się wykonać polecenia: {e}[/bold red]")
+            return False
+            
+    except docker.errors.NotFound:
+        console.print(f"[bold red]Nie znaleziono kontenera: {container_name}[/bold red]")
+        return False
+    except docker.errors.APIError as e:
+        console.print(f"[bold red]Błąd API Dockera przy exec:[/bold red] {e}")
+        return False
+
 def stats_container(container_name):
     if not container_name.strip():
         console.print("[yellow]Nie podano nazwy kontenera, wracam do menu.[/yellow]")
@@ -669,6 +709,7 @@ def main_menu():
         console.print("12. Wykonaj polecenie w kontenerze")
         console.print("13. Statystyki kontenera")
         console.print("17. Live monitoring kontenera (30s)")
+        console.print("18. Exec interaktywny bash (exec -it)")
         console.print("[bold yellow]--- Deployment ---[/bold yellow]")
         console.print("14. Quick Deploy (build + replace)")
         console.print("15. Blue-Green Deploy")
@@ -797,6 +838,15 @@ def main_menu():
             except ValueError:
                 duration = 30
             monitor_container_live(name, duration)
+        elif choice == "18":
+            name = input("Nazwa/ID kontenera: ").strip()
+            if not name:
+                console.print("[yellow]Nie podano nazwy kontenera, wracam do menu.[/yellow]")
+                continue
+            command = input("Polecenie [/bin/bash]: ").strip()
+            if not command:
+                command = "/bin/bash"
+            exec_interactive(name, command)
         elif choice == "0":
             console.print("[green]Do widzenia![/green]")
             sys.exit(0)

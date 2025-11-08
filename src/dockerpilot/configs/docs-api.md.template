@@ -1,0 +1,59 @@
+# Docker Pilot API Documentation
+
+## Core Classes
+
+### DockerPilotEnhanced
+
+Main class providing Docker container management functionality.
+
+#### Methods
+
+##### Container Management
+- `list_containers(show_all=True, format_output="table")` - List all containers
+- `container_operation(operation, container_name, **kwargs)` - Execute container operations
+- `get_container_stats(container_name)` - Get container resource statistics
+
+##### Monitoring
+- `monitor_containers_dashboard(containers=None, duration=300)` - Real-time monitoring
+- `setup_monitoring_alerts(alert_config_path)` - Configure monitoring alerts
+
+##### Deployment
+- `deploy_from_config(config_path, deployment_type="rolling")` - Deploy from configuration
+- `environment_promotion(source_env, target_env)` - Promote between environments
+
+##### CI/CD Integration
+- `create_pipeline_config(pipeline_type, output_path)` - Generate CI/CD configs
+- `run_integration_tests(test_config_path)` - Run integration test suite
+
+## Configuration Classes
+
+### DeploymentConfig
+Configuration dataclass for deployment parameters.
+
+### ContainerStats
+Statistics dataclass containing container metrics.
+
+## Error Handling
+
+The tool uses comprehensive error handling with:
+- Contextual error messages
+- Logging integration
+- Graceful fallbacks
+- User-friendly error reporting
+
+## Examples
+
+### Basic Container Management
+```python
+from dockerpilot.pilot import DockerPilotEnhanced
+
+pilot = DockerPilotEnhanced()
+pilot.list_containers(show_all=True)
+pilot.container_operation('start', 'myapp')
+```
+
+### Advanced Deployment
+```python
+pilot.deploy_from_config('deployment.yml', 'blue-green')
+```
+
