@@ -94,6 +94,7 @@ dockerpilot validate  # Check system requirements
 - [Configuration](#configuration)
 - [Advanced Features](#advanced-features)
 - [Troubleshooting](#troubleshooting)
+- [Additional Guides](#additional-guides)
 
 ## Features
 
@@ -561,6 +562,13 @@ See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
 - **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/DozeyUDK/DockerPilot/issues)
 - **Documentation**: Check the `docs/` directory
 - **Logs**: Review `docker_pilot.log` for detailed error messages
+
+## Additional Guides
+
+Detailed documentation for specific features:
+
+- **[Quick Deploy Guide](docs/quick-deploy.md)** - Rapid deployment with automatic cleanup
+- **[Multiple Containers Operations](docs/multi-container.md)** - Managing multiple containers at once
 
 ## Best Practices
 
