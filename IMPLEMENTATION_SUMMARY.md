@@ -1,129 +1,129 @@
-# Podsumowanie implementacji - Obsługa wielu kontenerów/obrazów
+# Implementation Summary - Multiple Containers/Images Support
 
-## Data implementacji
-8 listopada 2025
+## Implementation Date
+November 8, 2025
 
-## Zaimplementowane funkcjonalności
+## Implemented Features
 
-### 1. Funkcja parsowania wielu celów (`_parse_multi_target`)
-**Plik:** `src/dockerpilot/pilot.py` (linie 90-104)
+### 1. Multi-target Parsing Function (`_parse_multi_target`)
+**File:** `src/dockerpilot/pilot.py` (lines 90-104)
 
-Dodano metodę pomocniczą, która parsuje stringi oddzielone przecinkami i zwraca listę kontenerów/obrazów:
-- Usuwa białe znaki wokół nazw
-- Obsługuje zarówno nazwy jak i ID kontenerów/obrazów
-- Zwraca pustą listę dla pustego stringa
+Added a helper method that parses comma-separated strings and returns a list of containers/images:
+- Removes whitespace around names
+- Handles both names and IDs of containers/images
+- Returns empty list for empty string
 
-**Przykłady użycia:**
+**Usage Examples:**
 ```python
 self._parse_multi_target("app1,app2,app3")  # → ["app1", "app2", "app3"]
 self._parse_multi_target("app1, app2")      # → ["app1", "app2"]
 self._parse_multi_target("fa90f,5c867")     # → ["fa90f", "5c867"]
 ```
 
-### 2. Zaktualizowana obsługa CLI (`_handle_container_cli`)
-**Plik:** `src/dockerpilot/pilot.py` (linie 1199-1273)
+### 2. Updated CLI Handling (`_handle_container_cli`)
+**File:** `src/dockerpilot/pilot.py` (lines 1199-1273)
 
-Zmodyfikowano metodę obsługującą polecenia CLI dla:
+Modified the method handling CLI commands for:
 
-#### a) Operacje na kontenerach (start, stop, restart, remove, pause, unpause)
-- Parsuje wiele nazw/ID kontenerów z args.name
-- Wykonuje operację dla każdego kontenera sekwencyjnie
-- Wyświetla komunikat o postępie dla każdego kontenera
-- Zwraca podsumowanie sukcesu/błędu
+#### a) Container Operations (start, stop, restart, remove, pause, unpause)
+- Parses multiple container names/IDs from args.name
+- Executes operation for each container sequentially
+- Displays progress message for each container
+- Returns success/error summary
 
-#### b) Exec w kontenerach
-- Obsługuje wiele kontenerów
-- Wykonuje polecenie w każdym kontenerze po kolei
-- Kontynuuje w przypadku błędu dla jednego kontenera
+#### b) Exec in Containers
+- Supports multiple containers
+- Executes command in each container sequentially
+- Continues on error for one container
 
-#### c) Logs kontenerów
-- Dodano obsługę CLI dla polecenia logs
-- Obsługuje wiele kontenerów jednocześnie
-- Wyświetla logi z każdego kontenera z separatorami
+#### c) Container Logs
+- Added CLI support for logs command
+- Supports multiple containers at once
+- Displays logs from each container with separators
 
-#### d) Usuwanie obrazów
-- Parsuje wiele nazw/ID obrazów
-- Usuwa każdy obraz sekwencyjnie
-- Wyświetla podsumowanie operacji
+#### d) Remove Images
+- Parses multiple image names/IDs
+- Removes each image sequentially
+- Displays operation summary
 
-### 3. Zaktualizowane parsery CLI
-**Plik:** `src/dockerpilot/pilot.py` (linie 1030-1052)
+### 3. Updated CLI Parsers
+**File:** `src/dockerpilot/pilot.py` (lines 1030-1052)
 
-#### Zmodyfikowane helpy argumentów:
+#### Modified Argument Help:
 - `container start/stop/restart/remove/pause/unpause`: "Container name(s) or ID(s), comma-separated"
 - `container exec`: "Container name(s) or ID(s), comma-separated"
 - `container remove-image`: "Image name(s) or ID(s), comma-separated"
 
-#### Dodano nowy parser:
-- `container logs`: Wyświetlanie logów z wielu kontenerów
-  - Argument: `name` (opcjonalny) - nazwy kontenerów oddzielone przecinkami
-  - Opcja: `--tail` / `-n` - liczba linii do wyświetlenia (domyślnie: 50)
+#### Added New Parser:
+- `container logs`: Display logs from multiple containers
+  - Argument: `name` (optional) - comma-separated container names
+  - Option: `--tail` / `-n` - number of lines to display (default: 50)
 
-### 4. Zaktualizowany tryb interaktywny
-**Plik:** `src/dockerpilot/pilot.py` (linie 1357-1477)
+### 4. Updated Interactive Mode
+**File:** `src/dockerpilot/pilot.py` (lines 1357-1477)
 
-Zmodyfikowano interaktywne menu dla:
+Modified interactive menu for:
 
-#### a) Operacje na kontenerach
+#### a) Container Operations
 ```
 > start/stop/restart/remove/pause/unpause
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2,app3
 ```
 
-#### b) Exec w kontenerach
+#### b) Exec in Containers
 ```
 > exec
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2
 Command to execute [/bin/bash]: ls -la
 ```
 
-#### c) Logi kontenerów
+#### c) Container Logs
 ```
 > logs
 Container name(s) or ID(s) (comma-separated for multiple, empty for interactive select): app1,app2
 ```
 
-#### d) Usuwanie obrazów
+#### d) Remove Images
 ```
 > remove-image
 Image name(s) or ID(s) to remove (comma-separated for multiple, e.g., img1:tag,img2:tag): nginx:latest,redis:alpine
 Force removal? [y/N]: n
 ```
 
-### 5. Zaktualizowany ContainerManager
-**Plik:** `src/dockerpilot/container_manager.py` (linie 233-278)
+### 5. Updated ContainerManager
+**File:** `src/dockerpilot/container_manager.py` (lines 233-278)
 
-Zmodyfikowano metodę `view_container_logs`:
-- Obsługuje zarówno pojedynczy kontener jak i listę oddzieloną przecinkami
-- Wyświetla logi z każdego kontenera z wyraźnymi separatorami
-- Obsługuje błędy dla poszczególnych kontenerów
-- Zachowuje kompatybilność wsteczną z pojedynczym kontenerem
+Modified `view_container_logs` method:
+- Supports both single container and comma-separated list
+- Displays logs from each container with clear separators
+- Handles errors for individual containers
+- Maintains backward compatibility with single container
 
-## Pliki zmodyfikowane
+## Modified Files
 
 1. **src/dockerpilot/pilot.py**
-   - Dodano metodę `_parse_multi_target` (linie 90-104)
-   - Zmodyfikowano `_handle_container_cli` (linie 1199-1273)
-   - Zaktualizowano parsery CLI (linie 1030-1052)
-   - Zaktualizowano tryb interaktywny (linie 1357-1477)
+   - Added `_parse_multi_target` method (lines 90-104)
+   - Modified `_handle_container_cli` (lines 1199-1273)
+   - Updated CLI parsers (lines 1030-1052)
+   - Updated interactive mode (lines 1357-1477)
 
 2. **src/dockerpilot/container_manager.py**
-   - Zmodyfikowano `view_container_logs` (linie 233-278)
+   - Modified `view_container_logs` (lines 233-278)
 
-## Nowe pliki
+## New Files
 
-1. **MULTI_CONTAINER_USAGE.md** - Pełna dokumentacja użycia
-2. **test_multi_container.py** - Skrypt testowy
-3. **IMPLEMENTATION_SUMMARY.md** - Ten plik
+1. **MULTI_CONTAINER_USAGE.md** - Complete usage documentation
+2. **test_multi_container.py** - Test script
+3. **IMPLEMENTATION_SUMMARY.md** - This file
 
-## Testy
+## Tests
 
-Utworzono skrypt testowy `test_multi_container.py`, który:
-- Testuje funkcję parsowania dla 7 różnych scenariuszy
-- Nie wymaga działającego Dockera
-- Wszystkie testy przechodzą pomyślnie ✅
+Created test script `test_multi_container.py` that:
+- Tests parsing function for 7 different scenarios
+- Doesn't require running Docker
+- All tests pass successfully ✅
 
-**Wyniki testów:**
+**Test Results:**
 ```
 Test 1 - Single container: PASS
 Test 2 - Multiple containers: PASS
@@ -134,37 +134,37 @@ Test 6 - Empty string: PASS
 Test 7 - Image names with tags: PASS
 ```
 
-## Kompatybilność
+## Compatibility
 
-Wszystkie zmiany są w pełni kompatybilne wstecz:
-- Pojedyncze kontenery/obrazy działają tak jak wcześniej
-- Istniejące skrypty i polecenia nie wymagają modyfikacji
-- Dodano nową funkcjonalność bez usuwania starej
+All changes are fully backward compatible:
+- Single containers/images work as before
+- Existing scripts and commands require no modification
+- Added new functionality without removing old
 
-## Przykłady użycia
+## Usage Examples
 
 ### CLI
 ```bash
-# Start wielu kontenerów
+# Start multiple containers
 dockerpilot container start app1,app2,app3
 
-# Stop wielu kontenerów
+# Stop multiple containers
 dockerpilot container stop backend,frontend --timeout 20
 
-# Restart z ID
+# Restart with IDs
 dockerpilot container restart fa90f84e0007,5c867ecaebaf
 
-# Exec w wielu kontenerach
+# Exec in multiple containers
 dockerpilot container exec web1,web2,web3 --command "nginx -s reload"
 
-# Logi z wielu kontenerów
+# Logs from multiple containers
 dockerpilot container logs app1,app2,app3 --tail 100
 
-# Usuwanie wielu obrazów
+# Remove multiple images
 dockerpilot container remove-image nginx:old,redis:old,postgres:old --force
 ```
 
-### Tryb interaktywny
+### Interactive Mode
 ```
 > start
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2,app3
@@ -173,30 +173,29 @@ Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1
 Container name(s) or ID(s) (comma-separated for multiple, empty for interactive select): app1,app2
 ```
 
-## Obsługa błędów
+## Error Handling
 
-- Jeśli operacja nie powiedzie się dla jednego z kontenerów, pozostałe są nadal przetwarzane
-- Wyświetlane są komunikaty o błędach dla konkretnych kontenerów
-- Po zakończeniu wyświetlane jest podsumowanie:
-  - ✅ "All operations completed successfully" - gdy wszystkie sukces
-  - ⚠️ "Some operations failed" - gdy przynajmniej jedna operacja się nie powiodła
+- If an operation fails for one container, remaining ones are still processed
+- Error messages are displayed for specific containers
+- Summary displayed after completion:
+  - ✅ "All operations completed successfully" - when all succeed
+  - ⚠️ "Some operations failed" - when at least one operation failed
 
 ## Status
 
-✅ **Wszystkie zadania ukończone**
+✅ **All tasks completed**
 
-1. ✅ Dodano funkcję pomocniczą do parsowania
-2. ✅ Zmodyfikowano metodę _handle_container_cli
-3. ✅ Zaktualizowano exec_container
-4. ✅ Zaktualizowano container_operation
-5. ✅ Zaktualizowano remove_image
-6. ✅ Zaktualizowano view_container_logs
-7. ✅ Przetestowano funkcjonalność
+1. ✅ Added helper function for parsing
+2. ✅ Modified _handle_container_cli method
+3. ✅ Updated exec_container
+4. ✅ Updated container_operation
+5. ✅ Updated remove_image
+6. ✅ Updated view_container_logs
+7. ✅ Tested functionality
 
-## Dodatkowe uwagi
+## Additional Notes
 
-- Operacje są wykonywane sekwencyjnie (jedna po drugiej)
-- Kolejność operacji odpowiada kolejności podanych kontenerów/obrazów
-- Dla exec i logs, każdy kontener jest przetwarzany osobno z wyraźnym oznaczeniem
-- Spacje wokół przecinków są automatycznie usuwane
-
+- Operations are executed sequentially (one after another)
+- Operation order matches the order of provided containers/images
+- For exec and logs, each container is processed separately with clear indication
+- Spaces around commas are automatically removed

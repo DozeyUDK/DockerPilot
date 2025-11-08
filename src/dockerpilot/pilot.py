@@ -264,6 +264,226 @@ class DockerPilotEnhanced:
     def monitor_containers_dashboard(self, containers: List[str] = None, duration: int = 300):
         """Real-time monitoring dashboard for multiple containers."""
         return self.monitoring_manager.monitor_containers_dashboard(containers, duration)
+    
+    def get_container_stats_once(self, container_name: str) -> bool:
+        """Get one-time container statistics snapshot (from dockerpilot-Lite)"""
+        with self._error_handler(f"get stats for {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+            
+            # Get two measurements 1 second apart for accurate CPU calculation
+            self.console.print(f"[cyan]📊 Collecting statistics for {container_name}...[/cyan]")
+            
+            stats1 = container.stats(stream=False)
+            time.sleep(1)
+            stats2 = container.stats(stream=False)
+            
+            # Calculate CPU percentage
+            cpu_percent = 0.0
+            try:
+                cpu1_total = stats1['cpu_stats']['cpu_usage']['total_usage']
+                cpu1_system = stats1['cpu_stats'].get('system_cpu_usage', 0)
+                
+                cpu2_total = stats2['cpu_stats']['cpu_usage']['total_usage']
+                cpu2_system = stats2['cpu_stats'].get('system_cpu_usage', 0)
+                
+                cpu_delta = cpu2_total - cpu1_total
+                system_delta = cpu2_system - cpu1_system
+                
+                online_cpus = len(stats2['cpu_stats']['cpu_usage'].get('percpu_usage', [1]))
+                
+                if system_delta > 0 and cpu_delta >= 0:
+                    cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
+            except (KeyError, ZeroDivisionError) as e:
+                self.logger.warning(f"CPU calculation error: {e}")
+                cpu_percent = 0.0
+            
+            # Memory statistics
+            mem_usage = stats2['memory_stats'].get('usage', 0)
+            mem_limit = stats2['memory_stats'].get('limit', 1)
+            mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0
+            
+            # Network statistics
+            network_stats = stats2.get('networks', {})
+            rx_bytes = 0
+            tx_bytes = 0
+            for interface, net_data in network_stats.items():
+                rx_bytes += net_data.get('rx_bytes', 0)
+                tx_bytes += net_data.get('tx_bytes', 0)
+            
+            # Display results
+            self.console.print(f"\n[bold cyan]📊 Container Statistics: {container_name}[/bold cyan]")
+            self.console.print(f"[green]🖥️  CPU Usage: {cpu_percent:.2f}%[/green]")
+            self.console.print(f"[blue]💾 Memory: {mem_usage/(1024*1024):.2f} MB / {mem_limit/(1024*1024):.2f} MB ({mem_percent:.2f}%)[/blue]")
+            
+            if rx_bytes > 0 or tx_bytes > 0:
+                self.console.print(f"[magenta]🌐 Network RX: {rx_bytes/(1024*1024):.2f} MB, TX: {tx_bytes/(1024*1024):.2f} MB[/magenta]")
+            
+            # Process count
+            if 'pids_stats' in stats2:
+                pids = stats2['pids_stats'].get('current', 0)
+                self.console.print(f"[yellow]⚡ Processes: {pids}[/yellow]")
+            
+            return True
+        
+        return False
+    
+    def monitor_container_live(self, container_name: str, duration: int = 30) -> bool:
+        """Live monitoring with screen clearing (from dockerpilot-Lite)"""
+        with self._error_handler(f"live monitor {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+            
+            self.console.print(f"[cyan]Starting live monitoring for {container_name} ({duration}s)...[/cyan]")
+            self.console.print(f"[yellow]Press Ctrl+C to stop[/yellow]\n")
+            
+            stats_stream = container.stats(stream=True)
+            start_time = time.time()
+            prev_stats = None
+            
+            try:
+                for raw_stats in stats_stream:
+                    current_time = time.time()
+                    if current_time - start_time > duration:
+                        break
+                    
+                    try:
+                        # Parse stats data
+                        if isinstance(raw_stats, bytes):
+                            stats = json.loads(raw_stats.decode('utf-8'))
+                        elif isinstance(raw_stats, str):
+                            stats = json.loads(raw_stats)
+                        else:
+                            stats = raw_stats
+                        
+                        if not isinstance(stats, dict):
+                            time.sleep(1)
+                            continue
+                        
+                        # Calculate CPU if we have previous measurement
+                        cpu_percent = 0.0
+                        if prev_stats and isinstance(prev_stats, dict):
+                            try:
+                                cpu_stats = stats.get('cpu_stats', {})
+                                prev_cpu_stats = prev_stats.get('cpu_stats', {})
+                                
+                                if 'cpu_usage' in cpu_stats and 'cpu_usage' in prev_cpu_stats:
+                                    current_total = cpu_stats['cpu_usage'].get('total_usage', 0)
+                                    prev_total = prev_cpu_stats['cpu_usage'].get('total_usage', 0)
+                                    
+                                    current_system = cpu_stats.get('system_cpu_usage', 0)
+                                    prev_system = prev_cpu_stats.get('system_cpu_usage', 0)
+                                    
+                                    cpu_delta = current_total - prev_total
+                                    system_delta = current_system - prev_system
+                                    
+                                    online_cpus = len(cpu_stats['cpu_usage'].get('percpu_usage', [1]))
+                                    
+                                    if system_delta > 0 and cpu_delta >= 0:
+                                        cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
+                            except (KeyError, ZeroDivisionError, TypeError):
+                                cpu_percent = 0.0
+                        
+                        # Memory stats
+                        memory_stats = stats.get('memory_stats', {})
+                        mem_usage = memory_stats.get('usage', 0) / (1024*1024)
+                        mem_limit = memory_stats.get('limit', 1) / (1024*1024)
+                        mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0
+                        
+                        # Clear screen and display current stats
+                        os.system('clear' if os.name == 'posix' else 'cls')
+                        self.console.print(f"[bold cyan]📊 Live Monitoring: {container_name}[/bold cyan]")
+                        self.console.print(f"[green]🖥️  CPU: {cpu_percent:.2f}%[/green]")
+                        self.console.print(f"[blue]💾 RAM: {mem_usage:.1f}MB / {mem_limit:.1f}MB ({mem_percent:.1f}%)[/blue]")
+                        self.console.print(f"[yellow]⏱️  Time: {int(current_time - start_time)}/{duration}s[/yellow]")
+                        self.console.print(f"[dim]Press Ctrl+C to stop[/dim]")
+                        
+                        prev_stats = stats
+                        
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        self.logger.warning(f"Stats parsing error: {e}")
+                        continue
+                    except Exception as e:
+                        self.logger.warning(f"Stats processing error: {e}")
+                        continue
+                    
+                    time.sleep(1)
+                
+                self.console.print(f"\n[green]✅ Live monitoring completed[/green]")
+                return True
+                
+            except KeyboardInterrupt:
+                self.console.print(f"\n[yellow]⚠️ Monitoring interrupted by user[/yellow]")
+                return True
+        
+        return False
+    
+    def stop_and_remove_container(self, container_name: str, timeout: int = 10) -> bool:
+        """Stop and remove container in one operation (from dockerpilot-Lite)"""
+        with self._error_handler(f"stop and remove {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+            
+            self.console.print(f"[cyan]🛑 Stopping container {container_name}...[/cyan]")
+            if container.status == "running":
+                container.stop(timeout=timeout)
+                self.console.print(f"[green]✅ Container stopped[/green]")
+            else:
+                self.console.print(f"[yellow]ℹ️ Container was not running[/yellow]")
+            
+            self.console.print(f"[cyan]🗑️ Removing container {container_name}...[/cyan]")
+            container.remove()
+            self.console.print(f"[green]✅ Container {container_name} removed[/green]")
+            
+            self.logger.info(f"Container {container_name} stopped and removed")
+            return True
+        
+        return False
+    
+    def exec_command_non_interactive(self, container_name: str, command: str) -> bool:
+        """Execute command in container non-interactively (from dockerpilot-Lite)"""
+        with self._error_handler(f"exec command in {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+            
+            if container.status != 'running':
+                self.console.print(f"[red]❌ Container '{container_name}' is not running[/red]")
+                return False
+            
+            self.console.print(f"[cyan]⚙️ Executing: {command}[/cyan]")
+            exec_log = container.exec_run(command)
+            
+            output = exec_log.output.decode()
+            self.console.print(output)
+            
+            if exec_log.exit_code == 0:
+                self.console.print(f"[green]✅ Command executed successfully[/green]")
+                return True
+            else:
+                self.console.print(f"[yellow]⚠️ Command exited with code {exec_log.exit_code}[/yellow]")
+                return False
+        
+        return False
+    
+    def health_check_standalone(self, port: int, endpoint: str = "/health", 
+                               timeout: int = 30, max_retries: int = 10) -> bool:
+        """Standalone health check menu (from dockerpilot-Lite)"""
+        url = f"http://localhost:{port}{endpoint}"
+        self.console.print(f"[cyan]🩺 Testing health check: {url}[/cyan]")
+        
+        for i in range(max_retries):
+            try:
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    self.console.print(f"[green]✅ Health check OK (attempt {i+1}/{max_retries})[/green]")
+                    self.console.print(f"[green]Response time: {response.elapsed.total_seconds():.2f}s[/green]")
+                    return True
+                else:
+                    self.console.print(f"[yellow]⚠️ Health check returned {response.status_code} (attempt {i+1}/{max_retries})[/yellow]")
+            except requests.exceptions.RequestException as e:
+                self.console.print(f"[yellow]⚠️ Health check failed (attempt {i+1}/{max_retries}): {e}[/yellow]")
+            
+            if i < max_retries - 1:
+                time.sleep(3)
+        
+        self.console.print(f"[red]❌ Health check failed after {max_retries} attempts[/red]")
+        return False
 
     # ==================== ADVANCED DEPLOYMENT ====================
 
@@ -619,6 +839,224 @@ class DockerPilotEnhanced:
         self.console.print(f"\n[bold green]🎉 BLUE-GREEN DEPLOYMENT COMPLETED![/bold green]")
         self.console.print(f"[green]Active slot: {target_name}[/green]")
         self.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
+        
+        return True
+
+    def quick_deploy(self, dockerfile_path: str = ".", image_tag: str = None, 
+                    container_name: str = None, port_mapping: dict = None, 
+                    environment: dict = None, volumes: dict = None,
+                    yaml_config: str = None, cleanup_old_image: bool = True) -> bool:
+        """
+        Quick deployment: build -> stop old -> remove old container -> remove old image -> run new
+        
+        Args:
+            dockerfile_path: Path to directory containing Dockerfile
+            image_tag: Tag for the new image (e.g., 'myapp:v1.2')
+            container_name: Name of the container
+            port_mapping: Port mapping dict (e.g., {'80': '8080'})
+            environment: Environment variables dict
+            volumes: Volume mapping dict
+            yaml_config: Optional path to YAML config file for container settings
+            cleanup_old_image: Whether to remove old image after deployment
+        
+        Returns:
+            bool: True if deployment successful
+        """
+        self.console.print(f"\n[bold cyan]⚡ QUICK DEPLOY STARTED[/bold cyan]")
+        
+        deployment_start = datetime.now()
+        old_image_id = None
+        
+        # Load configuration from YAML if provided
+        if yaml_config and Path(yaml_config).exists():
+            try:
+                with open(yaml_config, 'r') as f:
+                    config = yaml.safe_load(f)
+                
+                # Override with YAML settings if not explicitly provided
+                image_tag = image_tag or config.get('image_tag')
+                container_name = container_name or config.get('container_name')
+                port_mapping = port_mapping or config.get('port_mapping', {})
+                environment = environment or config.get('environment', {})
+                volumes = volumes or config.get('volumes', {})
+                
+                self.console.print(f"[cyan]✓ Loaded configuration from {yaml_config}[/cyan]")
+            except Exception as e:
+                self.logger.error(f"Failed to load YAML config: {e}")
+                self.console.print(f"[yellow]⚠️ Could not load YAML config, using provided parameters[/yellow]")
+        
+        # Validate required parameters
+        if not image_tag or not container_name:
+            self.console.print("[red]❌ image_tag and container_name are required[/red]")
+            return False
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console
+        ) as progress:
+            
+            # Step 1: Get old container info (for image cleanup)
+            check_task = progress.add_task("🔍 Checking existing deployment...", total=None)
+            try:
+                old_container = self.client.containers.get(container_name)
+                old_image_id = old_container.image.id
+                old_image_tags = old_container.image.tags
+                progress.update(check_task, description=f"✅ Found existing container (image: {old_image_tags[0] if old_image_tags else old_image_id[:12]})")
+            except docker.errors.NotFound:
+                progress.update(check_task, description="ℹ️ No existing container (first deployment)")
+                old_image_id = None
+            
+            # Step 2: Build new image
+            build_task = progress.add_task(f"🔨 Building image {image_tag}...", total=None)
+            try:
+                dockerfile = Path(dockerfile_path) / "Dockerfile"
+                if not dockerfile.exists():
+                    progress.update(build_task, description="❌ Dockerfile not found")
+                    self.console.print(f"[red]❌ Dockerfile not found at {dockerfile}[/red]")
+                    return False
+                
+                image, build_logs = self.client.images.build(
+                    path=dockerfile_path,
+                    tag=image_tag,
+                    rm=True,
+                    pull=True
+                )
+                progress.update(build_task, description=f"✅ Image {image_tag} built successfully")
+                
+            except docker.errors.BuildError as e:
+                progress.update(build_task, description="❌ Build failed")
+                self.logger.error(f"Build error: {e}")
+                for log in e.build_log:
+                    if 'stream' in log:
+                        self.console.print(f"[red]{log['stream']}[/red]", end="")
+                return False
+            except Exception as e:
+                progress.update(build_task, description="❌ Build failed")
+                self.logger.error(f"Unexpected build error: {e}")
+                return False
+            
+            # Step 3: Stop old container
+            stop_task = progress.add_task("🛑 Stopping old container...", total=None)
+            try:
+                old_container = self.client.containers.get(container_name)
+                if old_container.status == "running":
+                    old_container.stop(timeout=10)
+                    progress.update(stop_task, description="✅ Old container stopped")
+                else:
+                    progress.update(stop_task, description="ℹ️ Container was not running")
+            except docker.errors.NotFound:
+                progress.update(stop_task, description="ℹ️ No container to stop")
+            except Exception as e:
+                progress.update(stop_task, description="❌ Failed to stop container")
+                self.logger.error(f"Stop failed: {e}")
+                return False
+            
+            # Step 4: Remove old container
+            remove_task = progress.add_task("🗑️ Removing old container...", total=None)
+            try:
+                old_container = self.client.containers.get(container_name)
+                old_container.remove()
+                progress.update(remove_task, description="✅ Old container removed")
+            except docker.errors.NotFound:
+                progress.update(remove_task, description="ℹ️ No container to remove")
+            except Exception as e:
+                progress.update(remove_task, description="❌ Failed to remove container")
+                self.logger.error(f"Remove failed: {e}")
+                # Continue anyway
+            
+            # Step 5: Remove old image (if requested and exists)
+            if cleanup_old_image and old_image_id:
+                cleanup_task = progress.add_task("🧹 Cleaning up old image...", total=None)
+                try:
+                    # Check if old image is different from new one
+                    new_image = self.client.images.get(image_tag)
+                    if old_image_id != new_image.id:
+                        # Check if any other containers are using the old image
+                        containers_using_image = self.client.containers.list(
+                            all=True,
+                            filters={"ancestor": old_image_id}
+                        )
+                        
+                        if len(containers_using_image) == 0:
+                            try:
+                                self.client.images.remove(old_image_id, force=False)
+                                progress.update(cleanup_task, description="✅ Old image removed")
+                            except docker.errors.ImageNotFound:
+                                progress.update(cleanup_task, description="ℹ️ Old image already removed")
+                            except docker.errors.APIError as e:
+                                if "image is being used" in str(e).lower():
+                                    progress.update(cleanup_task, description="⚠️ Old image in use by other containers")
+                                else:
+                                    progress.update(cleanup_task, description=f"⚠️ Could not remove old image: {str(e)[:50]}")
+                        else:
+                            progress.update(cleanup_task, description=f"⚠️ Old image used by {len(containers_using_image)} other container(s)")
+                    else:
+                        progress.update(cleanup_task, description="ℹ️ Same image, no cleanup needed")
+                except Exception as e:
+                    progress.update(cleanup_task, description="⚠️ Image cleanup skipped")
+                    self.logger.warning(f"Image cleanup failed: {e}")
+            
+            # Step 6: Run new container
+            run_task = progress.add_task("🚀 Starting new container...", total=None)
+            try:
+                new_container = self.client.containers.run(
+                    image=image_tag,
+                    name=container_name,
+                    detach=True,
+                    ports=port_mapping,
+                    environment=environment,
+                    volumes=volumes,
+                    restart_policy={"Name": "unless-stopped"}
+                )
+                progress.update(run_task, description="✅ New container started")
+                
+                # Grace period for startup
+                time.sleep(3)
+                
+            except Exception as e:
+                progress.update(run_task, description="❌ Failed to start container")
+                self.logger.error(f"Container start failed: {e}")
+                return False
+            
+            # Step 7: Optional health check
+            if port_mapping:
+                health_task = progress.add_task("🩺 Health check...", total=None)
+                host_port = list(port_mapping.values())[0]
+                
+                if self._advanced_health_check(host_port, "/", timeout=10, max_retries=3):
+                    progress.update(health_task, description="✅ Health check passed")
+                else:
+                    progress.update(health_task, description="⚠️ Health check failed (container still running)")
+                    self.logger.warning("Health check failed but deployment completed")
+        
+        # Deployment summary
+        deployment_end = datetime.now()
+        duration = deployment_end - deployment_start
+        
+        self.console.print(f"\n[bold green]🎉 QUICK DEPLOY COMPLETED SUCCESSFULLY![/bold green]")
+        self.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
+        self.console.print(f"[green]Container: {container_name}[/green]")
+        self.console.print(f"[green]Image: {image_tag}[/green]")
+        
+        if port_mapping:
+            for container_port, host_port in port_mapping.items():
+                self.console.print(f"[green]Available at: http://localhost:{host_port}[/green]")
+        
+        # Record deployment
+        self._record_deployment(
+            f"quick_{int(deployment_start.timestamp())}",
+            DeploymentConfig(
+                image_tag=image_tag,
+                container_name=container_name,
+                port_mapping=port_mapping or {},
+                environment=environment or {},
+                volumes=volumes or {}
+            ),
+            "quick",
+            True,
+            duration
+        )
         
         return True
 
@@ -1041,6 +1479,16 @@ class DockerPilotEnhanced:
             if action == 'remove':
                 action_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
         
+        # Stop and remove in one operation
+        stop_remove_parser = container_subparsers.add_parser('stop-remove', help='Stop and remove container(s) in one operation')
+        stop_remove_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated')
+        stop_remove_parser.add_argument('--timeout', '-t', type=int, default=10, help='Timeout seconds')
+        
+        # Exec non-interactive
+        exec_simple_parser = container_subparsers.add_parser('exec-simple', help='Execute command non-interactively')
+        exec_simple_parser.add_argument('name', help='Container name or ID')
+        exec_simple_parser.add_argument('command', help='Command to execute (e.g., "ls -la")')
+        
         # Exec into container
         exec_parser = container_subparsers.add_parser('exec', help='Execute interactive command in container(s)')
         exec_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated (e.g., app1,app2)')
@@ -1053,8 +1501,27 @@ class DockerPilotEnhanced:
         
         # Monitoring
         monitor_parser = subparsers.add_parser('monitor', help='Container monitoring')
-        monitor_parser.add_argument('containers', nargs='*', help='Container names (empty for all running)')
-        monitor_parser.add_argument('--duration', '-d', type=int, default=300, help='Monitor duration in seconds')
+        monitor_subparsers = monitor_parser.add_subparsers(dest='monitor_action')
+        
+        # Dashboard monitoring
+        dashboard_parser = monitor_subparsers.add_parser('dashboard', help='Multi-container dashboard')
+        dashboard_parser.add_argument('containers', nargs='*', help='Container names (empty for all running)')
+        dashboard_parser.add_argument('--duration', '-d', type=int, default=300, help='Monitor duration in seconds')
+        
+        # Live monitoring (with screen clearing)
+        live_parser = monitor_subparsers.add_parser('live', help='Live monitoring with screen clearing')
+        live_parser.add_argument('container', help='Container name')
+        live_parser.add_argument('--duration', '-d', type=int, default=30, help='Monitor duration in seconds')
+        
+        # One-time stats
+        stats_parser = monitor_subparsers.add_parser('stats', help='Get one-time container statistics')
+        stats_parser.add_argument('container', help='Container name')
+        
+        # Health check standalone
+        health_parser = monitor_subparsers.add_parser('health', help='Test health check endpoint')
+        health_parser.add_argument('port', type=int, help='Port number')
+        health_parser.add_argument('--endpoint', '-e', default='/health', help='Health check endpoint')
+        health_parser.add_argument('--retries', '-r', type=int, default=10, help='Maximum retries')
         
         # Deployment
         deploy_parser = subparsers.add_parser('deploy', help='Deployment operations')
@@ -1073,6 +1540,17 @@ class DockerPilotEnhanced:
         # Deployment history
         history_parser = deploy_subparsers.add_parser('history', help='Show deployment history')
         history_parser.add_argument('--limit', '-l', type=int, default=10, help='Number of records to show')
+        
+        # Quick deploy
+        quick_deploy_parser = deploy_subparsers.add_parser('quick', help='Quick deployment (build + replace)')
+        quick_deploy_parser.add_argument('--dockerfile-path', '-d', default='.', help='Path to Dockerfile directory')
+        quick_deploy_parser.add_argument('--image-tag', '-t', required=True, help='Image tag (e.g., myapp:v1.2)')
+        quick_deploy_parser.add_argument('--container-name', '-n', required=True, help='Container name')
+        quick_deploy_parser.add_argument('--port', '-p', help='Port mapping (format: container:host, e.g., 80:8080)')
+        quick_deploy_parser.add_argument('--env', '-e', action='append', help='Environment variable (format: KEY=VALUE)')
+        quick_deploy_parser.add_argument('--volume', '-v', action='append', help='Volume mapping (format: host:container)')
+        quick_deploy_parser.add_argument('--yaml-config', '-y', help='YAML config file with container settings')
+        quick_deploy_parser.add_argument('--no-cleanup', action='store_true', help='Do not remove old image')
         
         # Nowe parsery dodane # 
         # System validation
@@ -1205,6 +1683,35 @@ class DockerPilotEnhanced:
         """Handle container CLI commands with support for multiple targets"""
         if args.container_action == 'list':
             self.list_containers(show_all=args.all, format_output=args.format)
+        elif args.container_action == 'stop-remove':
+            # Stop and remove in one operation
+            containers = self._parse_multi_target(args.name)
+            
+            if not containers:
+                self.console.print("[red]❌ No container names provided[/red]")
+                sys.exit(1)
+            
+            timeout = args.timeout if hasattr(args, 'timeout') else 10
+            
+            all_success = True
+            for container in containers:
+                self.console.print(f"\n[cyan]Processing container: {container}[/cyan]")
+                success = self.stop_and_remove_container(container, timeout)
+                if not success:
+                    all_success = False
+            
+            if not all_success:
+                self.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
+                sys.exit(1)
+            else:
+                self.console.print("\n[green]✅ All operations completed successfully[/green]")
+        
+        elif args.container_action == 'exec-simple':
+            # Non-interactive exec
+            success = self.exec_command_non_interactive(args.name, args.command)
+            if not success:
+                sys.exit(1)
+        
         elif args.container_action in ['start', 'stop', 'restart', 'remove', 'pause', 'unpause']:
             # Parse multiple container names/IDs
             containers = self._parse_multi_target(args.name)
@@ -1287,8 +1794,34 @@ class DockerPilotEnhanced:
 
     def _handle_monitor_cli(self, args):
         """Handle monitoring CLI commands"""
-        containers = args.containers if args.containers else None
-        self.monitor_containers_dashboard(containers, args.duration)
+        if args.monitor_action == 'dashboard' or not args.monitor_action:
+            # Default to dashboard if no action specified (backward compatibility)
+            containers = args.containers if hasattr(args, 'containers') and args.containers else None
+            duration = args.duration if hasattr(args, 'duration') else 300
+            self.monitor_containers_dashboard(containers, duration)
+        
+        elif args.monitor_action == 'live':
+            # Live monitoring with screen clearing
+            success = self.monitor_container_live(args.container, args.duration)
+            if not success:
+                sys.exit(1)
+        
+        elif args.monitor_action == 'stats':
+            # One-time stats
+            success = self.get_container_stats_once(args.container)
+            if not success:
+                sys.exit(1)
+        
+        elif args.monitor_action == 'health':
+            # Health check
+            success = self.health_check_standalone(
+                args.port, 
+                args.endpoint, 
+                timeout=30,
+                max_retries=args.retries
+            )
+            if not success:
+                sys.exit(1)
 
     def _handle_deploy_cli(self, args):
         """Handle deployment CLI commands"""
@@ -1303,6 +1836,52 @@ class DockerPilotEnhanced:
                 sys.exit(1)
         elif args.deploy_action == 'history':
             self.show_deployment_history(limit=getattr(args, 'limit', 10))
+        elif args.deploy_action == 'quick':
+            # Parse port mapping
+            port_mapping = None
+            if args.port:
+                try:
+                    container_port, host_port = args.port.split(':')
+                    port_mapping = {container_port: host_port}
+                except ValueError:
+                    self.console.print("[red]Invalid port format. Use container:host (e.g., 80:8080)[/red]")
+                    sys.exit(1)
+            
+            # Parse environment variables
+            environment = {}
+            if args.env:
+                for env_var in args.env:
+                    try:
+                        key, value = env_var.split('=', 1)
+                        environment[key] = value
+                    except ValueError:
+                        self.console.print(f"[red]Invalid env format: {env_var}. Use KEY=VALUE[/red]")
+                        sys.exit(1)
+            
+            # Parse volumes
+            volumes = {}
+            if args.volume:
+                for volume in args.volume:
+                    try:
+                        host_path, container_path = volume.split(':')
+                        volumes[host_path] = {'bind': container_path, 'mode': 'rw'}
+                    except ValueError:
+                        self.console.print(f"[red]Invalid volume format: {volume}. Use host:container[/red]")
+                        sys.exit(1)
+            
+            success = self.quick_deploy(
+                dockerfile_path=args.dockerfile_path,
+                image_tag=args.image_tag,
+                container_name=args.container_name,
+                port_mapping=port_mapping,
+                environment=environment if environment else None,
+                volumes=volumes if volumes else None,
+                yaml_config=args.yaml_config,
+                cleanup_old_image=not args.no_cleanup
+            )
+            
+            if not success:
+                sys.exit(1)
         else:
             self.console.print("[yellow]⚠️ Unknown deploy action[/yellow]")
 
@@ -1349,9 +1928,10 @@ class DockerPilotEnhanced:
             while True:
                 choice = Prompt.ask(
                     "\n[bold cyan]Docker Pilot - Interactive Menu[/bold cyan]\n"
-                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, exec, policy, run_image, logs, remove-image, json, monitor, build\n"
-                    "Deploy: deploy-init, deploy-config, history, promote\n"
-                    "System: validate, backup-create, backup-restore, alerts,  test, pipeline, docs, checklist\n"
+                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, stop-remove, exec, exec-simple, policy, run_image, logs, remove-image, json, build\n"
+                    "Monitor: monitor, live-monitor, stats, health-check\n"
+                    "Deploy: quick-deploy, deploy-init, deploy-config, history, promote\n"
+                    "System: validate, backup-create, backup-restore, alerts, test, pipeline, docs, checklist\n"
                     "Config: export-config, import-config\n"
                     "Select",
                     default="list"
@@ -1413,12 +1993,58 @@ class DockerPilotEnhanced:
                         if not success:
                             self.console.print(f"[yellow]⚠️ Failed to exec in {container}, continuing...[/yellow]")
 
+                elif choice == "stop-remove":
+                    self.list_containers()
+                    names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple)")
+                    containers = self._parse_multi_target(names_input)
+                    
+                    if not containers:
+                        self.console.print("[red]No container names provided[/red]")
+                        continue
+                    
+                    timeout = int(Prompt.ask("Timeout seconds", default="10"))
+                    
+                    all_success = True
+                    for container in containers:
+                        self.console.print(f"\n[cyan]Processing container: {container}[/cyan]")
+                        success = self.stop_and_remove_container(container, timeout)
+                        if not success:
+                            all_success = False
+                    
+                    if not all_success:
+                        self.console.print(f"[yellow]⚠️ Some operations failed[/yellow]")
+                    else:
+                        self.console.print(f"[green]✅ All operations completed successfully[/green]")
+                
+                elif choice == "exec-simple":
+                    self.list_containers()
+                    container_name = Prompt.ask("Container name or ID")
+                    command = Prompt.ask("Command to execute (e.g., 'ls -la')")
+                    self.exec_command_non_interactive(container_name, command)
+                
                 elif choice == "monitor":
                     self.list_containers()
                     containers_input = Prompt.ask("Containers (comma separated, empty = all running)", default="").strip()
                     containers = [c.strip() for c in containers_input.split(",")] if containers_input else None
                     duration = int(Prompt.ask("Duration seconds", default="60"))
                     self.monitor_containers_dashboard(containers, duration)
+                
+                elif choice == "live-monitor":
+                    self.list_containers()
+                    container_name = Prompt.ask("Container name")
+                    duration = int(Prompt.ask("Duration seconds", default="30"))
+                    self.monitor_container_live(container_name, duration)
+                
+                elif choice == "stats":
+                    self.list_containers()
+                    container_name = Prompt.ask("Container name")
+                    self.get_container_stats_once(container_name)
+                
+                elif choice == "health-check":
+                    port = int(Prompt.ask("Port number"))
+                    endpoint = Prompt.ask("Health check endpoint", default="/health")
+                    max_retries = int(Prompt.ask("Maximum retries", default="10"))
+                    self.health_check_standalone(port, endpoint, max_retries=max_retries)
 
                 elif choice == "run_image":
                     image_name = Prompt.ask("Image name (e.g., nginx:latest)")
@@ -1493,6 +2119,74 @@ class DockerPilotEnhanced:
                         self.console.print("[yellow]⚠️ Some operations failed[/yellow]")
                     else:
                         self.console.print("[green]✅ All operations completed successfully[/green]")
+
+                elif choice == "quick-deploy":
+                    dockerfile_path = Prompt.ask("Dockerfile directory path", default=".")
+                    image_tag = Prompt.ask("Image tag (e.g., myapp:v1.2)")
+                    container_name = Prompt.ask("Container name")
+                    
+                    # Optional YAML config
+                    use_yaml = Confirm.ask("Load settings from YAML config?", default=False)
+                    yaml_config = None
+                    if use_yaml:
+                        yaml_config = Prompt.ask("YAML config file path")
+                    
+                    # Port mapping (if not using YAML)
+                    port_mapping = None
+                    if not use_yaml:
+                        port_input = Prompt.ask("Port mapping (format: container:host, e.g., 80:8080, empty to skip)", default="").strip()
+                        if port_input:
+                            try:
+                                container_port, host_port = port_input.split(':')
+                                port_mapping = {container_port: host_port}
+                            except ValueError:
+                                self.console.print("[red]Invalid port format[/red]")
+                                continue
+                    
+                    # Environment variables
+                    environment = None
+                    if not use_yaml and Confirm.ask("Add environment variables?", default=False):
+                        environment = {}
+                        while True:
+                            env_var = Prompt.ask("Environment variable (KEY=VALUE, empty to finish)", default="").strip()
+                            if not env_var:
+                                break
+                            try:
+                                key, value = env_var.split('=', 1)
+                                environment[key] = value
+                            except ValueError:
+                                self.console.print("[red]Invalid format. Use KEY=VALUE[/red]")
+                    
+                    # Volumes
+                    volumes = None
+                    if not use_yaml and Confirm.ask("Add volume mappings?", default=False):
+                        volumes = {}
+                        while True:
+                            volume = Prompt.ask("Volume mapping (host:container, empty to finish)", default="").strip()
+                            if not volume:
+                                break
+                            try:
+                                host_path, container_path = volume.split(':')
+                                volumes[host_path] = {'bind': container_path, 'mode': 'rw'}
+                            except ValueError:
+                                self.console.print("[red]Invalid format. Use host:container[/red]")
+                    
+                    # Cleanup old image
+                    cleanup_old_image = Confirm.ask("Remove old image after deployment?", default=True)
+                    
+                    success = self.quick_deploy(
+                        dockerfile_path=dockerfile_path,
+                        image_tag=image_tag,
+                        container_name=container_name,
+                        port_mapping=port_mapping,
+                        environment=environment,
+                        volumes=volumes,
+                        yaml_config=yaml_config,
+                        cleanup_old_image=cleanup_old_image
+                    )
+                    
+                    if not success:
+                        self.console.print("[red]Quick deploy failed[/red]")
 
                 elif choice == "deploy-init":
                     output = Prompt.ask("Output file", default="deployment.yml")

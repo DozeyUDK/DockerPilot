@@ -1,166 +1,166 @@
-# Obsługa wielu kontenerów/obrazów jednocześnie
+# Handling Multiple Containers/Images Simultaneously
 
-## Opis
+## Description
 
-DockerPilot teraz obsługuje wykonywanie poleceń dla wielu kontenerów lub obrazów jednocześnie, przekazując je jako listę oddzieloną przecinkami.
+DockerPilot now supports executing commands for multiple containers or images simultaneously by passing them as a comma-separated list.
 
-## Składnia
+## Syntax
 
-Aby wykonać polecenie dla wielu kontenerów/obrazów, podaj ich nazwy lub ID oddzielone przecinkami:
+To execute a command for multiple containers/images, provide their names or IDs separated by commas:
 ```
-nazwa1,nazwa2,nazwa3
+name1,name2,name3
 ```
-lub
+or
 ```
 id1,id2,id3
 ```
 
-Spacje wokół przecinków są ignorowane, więc można też używać:
+Spaces around commas are ignored, so you can also use:
 ```
-nazwa1, nazwa2, nazwa3
+name1, name2, name3
 ```
 
-## Wspierane polecenia
+## Supported Commands
 
-### 1. Start kontenerów
+### 1. Start containers
 ```bash
 # CLI
 dockerpilot container start app1,app2,app3
 
-# Tryb interaktywny
+# Interactive mode
 > start
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2,app3
 ```
 
-### 2. Stop kontenerów
+### 2. Stop containers
 ```bash
 # CLI
 dockerpilot container stop app1,app2 --timeout 15
 
-# Tryb interaktywny
+# Interactive mode
 > stop
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2
 Timeout seconds [10]: 15
 ```
 
-### 3. Restart kontenerów
+### 3. Restart containers
 ```bash
 # CLI
 dockerpilot container restart app1,app2,app3
 
-# Tryb interaktywny
+# Interactive mode
 > restart
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2,app3
 ```
 
-### 4. Usuwanie kontenerów
+### 4. Remove containers
 ```bash
 # CLI
 dockerpilot container remove app1,app2 --force
 
-# Tryb interaktywny
+# Interactive mode
 > remove
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2
 Force removal? [y/N]: y
 ```
 
-### 5. Pause/Unpause kontenerów
+### 5. Pause/Unpause containers
 ```bash
 # CLI
 dockerpilot container pause app1,app2
 dockerpilot container unpause app1,app2
 
-# Tryb interaktywny
+# Interactive mode
 > pause
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2
 ```
 
-### 6. Exec w kontenerach
+### 6. Exec in containers
 ```bash
-# CLI - wykonuje komendę w każdym kontenerze po kolei
+# CLI - executes command in each container sequentially
 dockerpilot container exec app1,app2 --command "ls -la"
 
-# Tryb interaktywny
+# Interactive mode
 > exec
 Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2): app1,app2
 Command to execute [/bin/bash]: ls -la
 ```
 
-**Uwaga:** Polecenia exec są wykonywane sekwencyjnie (jeden po drugim), co pozwala na interakcję z każdym kontenerem.
+**Note:** Exec commands are executed sequentially (one after another), allowing interaction with each container.
 
-### 7. Logs z kontenerów
+### 7. Logs from containers
 ```bash
 # CLI
 dockerpilot container logs app1,app2,app3 --tail 100
 
-# Tryb interaktywny
+# Interactive mode
 > logs
 Container name(s) or ID(s) (comma-separated for multiple, empty for interactive select): app1,app2
 ```
 
-Logi z każdego kontenera są wyświetlane po kolei z wyraźnym separatorem.
+Logs from each container are displayed sequentially with clear separators.
 
-### 8. Usuwanie obrazów
+### 8. Remove images
 ```bash
 # CLI
 dockerpilot container remove-image nginx:latest,redis:alpine,postgres:13 --force
 
-# Tryb interaktywny
+# Interactive mode
 > remove-image
 Image name(s) or ID(s) to remove (comma-separated for multiple, e.g., img1:tag,img2:tag): nginx:latest,redis:alpine
 Force removal? [y/N]: n
 ```
 
-## Przykłady użycia
+## Usage Examples
 
-### Przykład 1: Restart wielu kontenerów aplikacji
+### Example 1: Restart multiple application containers
 ```bash
 dockerpilot container restart backend-api,frontend-web,worker-queue
 ```
 
-### Przykład 2: Zatrzymanie wszystkich kontenerów microservices
+### Example 2: Stop all microservice containers
 ```bash
 dockerpilot container stop auth-service,user-service,payment-service,notification-service --timeout 20
 ```
 
-### Przykład 3: Usunięcie starych obrazów
+### Example 3: Remove old images
 ```bash
 dockerpilot container remove-image myapp:v1.0,myapp:v1.1,myapp:v1.2 --force
 ```
 
-### Przykład 4: Wykonanie polecenia w wielu kontenerach
+### Example 4: Execute command in multiple containers
 ```bash
 dockerpilot container exec web1,web2,web3 --command "nginx -s reload"
 ```
 
-### Przykład 5: Wyświetlenie logów z wielu kontenerów
+### Example 5: Display logs from multiple containers
 ```bash
 dockerpilot container logs app1,app2,app3 --tail 50
 ```
 
-### Przykład 6: Użycie ID kontenerów
+### Example 6: Use container IDs
 ```bash
 dockerpilot container stop fa90f84e0007,5c867ecaebaf
 ```
 
-## Obsługa błędów
+## Error Handling
 
-- Jeśli operacja nie powiedzie się dla jednego z kontenerów, pozostałe będą nadal przetwarzane
-- Po zakończeniu wszystkich operacji zostanie wyświetlone podsumowanie:
-  - ✅ Wszystkie operacje zakończone sukcesem
-  - ⚠️ Niektóre operacje nie powiodły się
+- If an operation fails for one container, the remaining ones will still be processed
+- After all operations complete, a summary is displayed:
+  - ✅ All operations completed successfully
+  - ⚠️ Some operations failed
 
-## Tryb interaktywny vs CLI
+## Interactive Mode vs CLI
 
-Obie wersje (CLI i interaktywny) wspierają tę samą funkcjonalność. Wybór zależy od preferencji użytkownika:
+Both versions (CLI and interactive) support the same functionality. The choice depends on user preference:
 
-- **CLI**: Szybkie, nadaje się do skryptowania
-- **Interaktywny**: Przyjazny interfejs z podpowiedziami
+- **CLI**: Fast, suitable for scripting
+- **Interactive**: User-friendly interface with hints
 
-## Dodatkowe informacje
+## Additional Information
 
-- Nazwy kontenerów i ID mogą być mieszane w jednej liście
-- Kolejność operacji odpowiada kolejności podanych kontenerów/obrazów
-- Operacje są wykonywane synchronicznie (jedna po drugiej)
-- Dla exec i logs, każdy kontener jest przetwarzany osobno z wyraźnym oznaczeniem
+- Container names and IDs can be mixed in one list
+- Operation order matches the order of provided containers/images
+- Operations are executed synchronously (one after another)
+- For exec and logs, each container is processed separately with clear indication
 

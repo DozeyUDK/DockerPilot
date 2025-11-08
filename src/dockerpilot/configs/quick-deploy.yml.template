@@ -1,0 +1,35 @@
+# Quick Deploy Configuration Template
+# This file can be used with: dockerpilot deploy quick --yaml-config quick-deploy.yml
+
+# Required fields
+image_tag: "myapp:v1.0"
+container_name: "myapp"
+
+# Port mapping (optional)
+# Format: container_port: host_port
+port_mapping:
+  "80": "8080"
+  # "443": "8443"
+
+# Environment variables (optional)
+environment:
+  NODE_ENV: "production"
+  DATABASE_URL: "postgresql://localhost:5432/mydb"
+  API_KEY: "your-api-key-here"
+
+# Volume mappings (optional)
+# Format: host_path: {bind: container_path, mode: rw|ro}
+volumes:
+  "/host/data": 
+    bind: "/app/data"
+    mode: "rw"
+  # "/host/logs": 
+  #   bind: "/app/logs"
+  #   mode: "rw"
+
+# Additional notes:
+# - The Dockerfile should be in the directory where you run the command
+# - Or specify --dockerfile-path to point to the Dockerfile directory
+# - Old containers and images will be automatically cleaned up
+# - Use --no-cleanup flag to keep old images
+
