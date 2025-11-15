@@ -1,9 +1,9 @@
-# Docker Pilot 🐋
+# Docker Pilot
 <img width="2667" height="465" alt="image" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
 
-## ⚡ Quick Install (One-Click)
+## Quick Install (One-Click)
 
 ### Linux/macOS
 ```bash
@@ -25,16 +25,16 @@ cd DockerPilot && install.bat
 ```
 
 **What the installer does:**
-- ✅ Checks Python 3.9+ and Docker
-- ✅ Installs Docker Pilot with all dependencies
-- ✅ Sets up `dockerpilot` command globally
-- ✅ Verifies installation
+- Checks Python 3.9+ and Docker
+- Installs Docker Pilot with all dependencies
+- Sets up `dockerpilot` command globally
+- Verifies installation
 
 **Prerequisites:**
 - Python 3.9+ 
 - Docker 20.10+ (with daemon running)
 
-## 🎯 Quick Start
+## Quick Start
 
 After installation:
 ```bash
@@ -47,7 +47,7 @@ dockerpilot monitor --duration 300
 dockerpilot deploy config deployment.yml --type rolling
 ```
 
-## 📦 Manual Installation
+## Manual Installation
 
 ```bash
 git clone https://github.com/DozeyUDK/DockerPilot.git
@@ -69,15 +69,15 @@ dockerpilot validate  # Check system requirements
 
 ---
 
-## 📋 Two Versions Available
+## Two Versions Available
 
 ### Full Version (Default)
-✅ **Advanced features**: Rolling/Blue-Green/Canary deployments, CI/CD pipelines, monitoring alerts, backup/restore  
-🎯 **Best for**: Production, DevOps teams, advanced workflows
+- **Advanced features**: Rolling/Blue-Green/Canary deployments, CI/CD pipelines, monitoring alerts, backup/restore  
+- **Best for**: Production, DevOps teams, advanced workflows
 
 ### Lite Version
-✅ **Core features**: Container management, image operations, basic monitoring  
-🎯 **Best for**: Development, learning, simple use cases
+- **Core features**: Container management, image operations, basic monitoring  
+- **Best for**: Development, learning, simple use cases
 
 **Note:** The installer installs the Full version by default. Both versions share the same `dockerpilot` command.
 
@@ -114,7 +114,7 @@ dockerpilot validate  # Check system requirements
 
 ### DevOps Integration (Full Version Only)
 - GitHub Actions, GitLab CI, and Jenkins pipeline generation
-- Environment promotion (dev → staging → prod)
+- Environment promotion (dev -> staging -> prod)
 - Integration testing framework
 - Monitoring and alerting system
 - Backup and restore functionality
@@ -263,7 +263,7 @@ dockerpilot monitor webapp database cache --duration 600
 
 The dashboard displays:
 - Container status
-- CPU usage with trend indicators (↗️ ↘️ →)
+- CPU usage with trend indicators (up/down/steady)
 - Memory usage and percentage
 - Network I/O (download/upload)
 - Process count (PIDs)
@@ -271,7 +271,7 @@ The dashboard displays:
 
 Metrics are automatically saved to `docker_metrics.json`.
 
-## 🚀 One-Click Deploy
+## One-Click Deploy
 
 **Quick deploy in 2 steps:**
 
@@ -286,7 +286,7 @@ dockerpilot deploy config deployment.yml --type rolling
 **Deployment types:**
 - `rolling` - Zero-downtime updates (default)
 - `blue-green` - Safest, parallel environments
-- `canary` - Gradual rollout (5% → 100%)
+- `canary` - Gradual rollout (5% -> 100%)
 
 **Example deployment.yml:**
 ```yaml
@@ -541,7 +541,7 @@ Checks:
 - Learning Docker basics
 - Minimal dependencies
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -550,15 +550,15 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 - Make your changes
 - Submit a pull request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
 
-## 📝 Changelog
+## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
 
-## 🆘 Support
+## Support
 
 - **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/DozeyUDK/DockerPilot/issues)
 - **Documentation**: Check the `docs/` directory
