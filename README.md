@@ -1,4 +1,5 @@
 # Docker Pilot 🚀
+<img width="2667" height="465" alt="image" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
 
