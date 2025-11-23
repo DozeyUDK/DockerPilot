@@ -40,16 +40,56 @@ class ContainerManager:
                 self.console.print_json(data=container_data)
                 return containers
             
-            # Enhanced table view
-            table = Table(title="🐳 Docker Containers", show_header=True, header_style="bold blue")
-            table.add_column("Nr", style="bold blue", width=4)
-            table.add_column("ID", style="cyan", width=12)
-            table.add_column("Name", style="green", width=20)
-            table.add_column("Status", style="magenta", width=12)
-            table.add_column("Image", style="yellow", width=25)
-            table.add_column("Ports", style="bright_blue", width=20)
-            table.add_column("Size", style="white", width=10)
-            table.add_column("Uptime", style="bright_green", width=15)
+            # Enhanced table view with auto-scaling to terminal width
+            # Get terminal width for dynamic column sizing
+            terminal_width = self.console.width if hasattr(self.console, 'width') else 120
+            # Reserve space for borders and padding (approximately 8 characters per column)
+            available_width = max(80, terminal_width - 20)  # Minimum 80 chars, reserve 20 for borders
+            
+            # Calculate proportional widths based on content importance
+            # Priority: Name > Image > Ports > Status > ID > Uptime > Size > Nr
+            table = Table(
+                title="🐳 Docker Containers", 
+                show_header=True, 
+                header_style="bold blue",
+                expand=True,  # Allow table to expand to terminal width
+                show_lines=False  # Disable lines for better space usage
+            )
+            
+            # Track if Size and Uptime columns were added
+            include_size_uptime = available_width >= 100
+            
+            # Use proportional widths that adapt to terminal size
+            # For smaller terminals, some columns will be narrower
+            if available_width >= 140:
+                # Large terminal - full width columns
+                table.add_column("Nr", style="bold blue", width=4, overflow="fold")
+                table.add_column("ID", style="cyan", width=12, overflow="fold")
+                table.add_column("Name", style="green", width=min(25, int(available_width * 0.15)), overflow="fold")
+                table.add_column("Status", style="magenta", width=10, overflow="fold")
+                table.add_column("Image", style="yellow", width=min(30, int(available_width * 0.20)), overflow="fold")
+                table.add_column("Ports", style="bright_blue", width=min(30, int(available_width * 0.20)), overflow="fold")
+                table.add_column("Size", style="white", width=10, overflow="fold")
+                table.add_column("Uptime", style="bright_green", width=12, overflow="fold")
+            elif available_width >= 100:
+                # Medium terminal - reduce some columns
+                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
+                table.add_column("ID", style="cyan", width=10, overflow="fold")
+                table.add_column("Name", style="green", width=min(20, int(available_width * 0.18)), overflow="fold")
+                table.add_column("Status", style="magenta", width=8, overflow="fold")
+                table.add_column("Image", style="yellow", width=min(25, int(available_width * 0.22)), overflow="fold")
+                table.add_column("Ports", style="bright_blue", width=min(25, int(available_width * 0.22)), overflow="fold")
+                table.add_column("Size", style="white", width=8, overflow="fold")
+                table.add_column("Uptime", style="bright_green", width=10, overflow="fold")
+            else:
+                # Small terminal - minimal columns, remove less critical ones
+                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
+                table.add_column("ID", style="cyan", width=8, overflow="fold")
+                table.add_column("Name", style="green", width=min(18, int(available_width * 0.25)), overflow="fold")
+                table.add_column("Status", style="magenta", width=7, overflow="fold")
+                table.add_column("Image", style="yellow", width=min(20, int(available_width * 0.30)), overflow="fold")
+                table.add_column("Ports", style="bright_blue", width=min(20, int(available_width * 0.30)), overflow="fold")
+                # Remove Size and Uptime for very small terminals to save space
 
             for idx, c in enumerate(containers, start=1):
                 # Status formatting
@@ -59,22 +99,23 @@ class ContainerManager:
                 # Ports formatting
                 ports = format_ports(c.ports)
                 
-                # Size calculation
-                size = get_container_size(c)
-                
-                # Uptime calculation
-                uptime = calculate_uptime(c)
-                
-                table.add_row(
+                # Build row data
+                row_data = [
                     str(idx),
                     c.short_id,
                     c.name,
                     status,
                     c.image.tags[0] if c.image.tags else "❌ none",
-                    ports,
-                    size,
-                    uptime
-                )
+                    ports
+                ]
+                
+                # Add Size and Uptime only if columns exist
+                if include_size_uptime:
+                    size = get_container_size(c)
+                    uptime = calculate_uptime(c)
+                    row_data.extend([size, uptime])
+                
+                table.add_row(*row_data)
             
             self.console.print(table)
             

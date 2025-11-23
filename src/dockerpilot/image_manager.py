@@ -36,15 +36,54 @@ class ImageManager:
                 self.console.print_json(data=image_data)
                 return images
             
-            # Enhanced table view
-            table = Table(title="📦 Docker Images", show_header=True, header_style="bold blue")
-            table.add_column("Nr", style="bold blue", width=4)
-            table.add_column("ID", style="cyan", width=12)
-            table.add_column("Repository", style="green", width=25)
-            table.add_column("Tag", style="yellow", width=15)
-            table.add_column("Size", style="magenta", width=12)
-            table.add_column("Created", style="bright_blue", width=20)
-            table.add_column("Used By", style="white", width=8)
+            # Enhanced table view with auto-scaling to terminal width
+            # Get terminal width for dynamic column sizing
+            terminal_width = self.console.width if hasattr(self.console, 'width') else 120
+            # Reserve space for borders and padding (approximately 8 characters per column)
+            available_width = max(80, terminal_width - 20)  # Minimum 80 chars, reserve 20 for borders
+            
+            # Calculate proportional widths based on content importance
+            # Priority: Repository > Tag > Created > Size > ID > Used By > Nr
+            table = Table(
+                title="📦 Docker Images", 
+                show_header=True, 
+                header_style="bold blue",
+                expand=True,  # Allow table to expand to terminal width
+                show_lines=False  # Disable lines for better space usage
+            )
+            
+            # Track if "Used By" column was added
+            include_used_by = available_width >= 100
+            
+            # Use proportional widths that adapt to terminal size
+            # For smaller terminals, some columns will be narrower
+            if available_width >= 140:
+                # Large terminal - full width columns
+                table.add_column("Nr", style="bold blue", width=4, overflow="fold")
+                table.add_column("ID", style="cyan", width=12, overflow="fold")
+                table.add_column("Repository", style="green", width=min(30, int(available_width * 0.25)), overflow="fold")
+                table.add_column("Tag", style="yellow", width=min(18, int(available_width * 0.15)), overflow="fold")
+                table.add_column("Size", style="magenta", width=12, overflow="fold")
+                table.add_column("Created", style="bright_blue", width=min(20, int(available_width * 0.15)), overflow="fold")
+                table.add_column("Used By", style="white", width=8, overflow="fold")
+            elif available_width >= 100:
+                # Medium terminal - reduce some columns
+                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
+                table.add_column("ID", style="cyan", width=10, overflow="fold")
+                table.add_column("Repository", style="green", width=min(25, int(available_width * 0.28)), overflow="fold")
+                table.add_column("Tag", style="yellow", width=min(15, int(available_width * 0.18)), overflow="fold")
+                table.add_column("Size", style="magenta", width=10, overflow="fold")
+                table.add_column("Created", style="bright_blue", width=min(18, int(available_width * 0.18)), overflow="fold")
+                table.add_column("Used By", style="white", width=7, overflow="fold")
+            else:
+                # Small terminal - minimal columns, remove less critical ones
+                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
+                table.add_column("ID", style="cyan", width=8, overflow="fold")
+                table.add_column("Repository", style="green", width=min(22, int(available_width * 0.35)), overflow="fold")
+                table.add_column("Tag", style="yellow", width=min(12, int(available_width * 0.20)), overflow="fold")
+                table.add_column("Size", style="magenta", width=9, overflow="fold")
+                table.add_column("Created", style="bright_blue", width=min(15, int(available_width * 0.25)), overflow="fold")
+                # Remove "Used By" for very small terminals to save space
 
             for idx, img in enumerate(images, start=1):
                 # Parse repository and tag
@@ -64,18 +103,22 @@ class ImageManager:
                 # Format creation date
                 created = format_creation_date(img.attrs.get('Created'))
                 
-                # Check if image is used by containers
-                used_by = count_containers_using_image(self.client, img.id)
-                
-                table.add_row(
+                # Build row data
+                row_data = [
                     str(idx),
                     img.id.split(":")[1][:12],
                     repository,
                     tag,
                     size,
-                    created,
-                    str(used_by)
-                )
+                    created
+                ]
+                
+                # Add "Used By" only if column exists
+                if include_used_by:
+                    used_by = count_containers_using_image(self.client, img.id)
+                    row_data.append(str(used_by))
+                
+                table.add_row(*row_data)
             
             self.console.print(table)
             
