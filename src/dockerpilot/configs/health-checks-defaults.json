@@ -1,0 +1,146 @@
+{
+  "health_checks": {
+    "non_http_services": [
+      "ssh",
+      "redis",
+      "mariadb",
+      "mysql",
+      "postgresql",
+      "postgres",
+      "mongodb",
+      "mongo",
+      "db2",
+      "memcached",
+      "rabbitmq",
+      "kafka",
+      "zookeeper"
+    ],
+    "endpoint_mappings": {
+      "qdrant": "/healthz",
+      "milvus": "/healthz",
+      "weaviate": "/v1/.well-known/ready",
+      "ollama": "/api/version",
+      "grafana": "/api/health",
+      "prometheus": "/-/healthy",
+      "loki": "/ready",
+      "tempo": "/ready",
+      "influxdb": "/ready",
+      "timescaledb": "/health",
+      "homeassistant": "/",
+      "home-assistant": "/",
+      "glances": "/",
+      "nginx": "/",
+      "apache": "/",
+      "caddy": "/health",
+      "nextcloud": "/status.php",
+      "elasticsearch": "/_cluster/health",
+      "opensearch": "/_cluster/health",
+      "nats": "/healthz",
+      "traefik": "/ping",
+      "portainer": "/api/status"
+    },
+    "default_endpoint": "/health"
+  },
+  "database_services": {
+    "influxdb": {
+      "startup_grace_period": 30,
+      "additional_wait_before_validation": 10,
+      "max_restart_count": 15,
+      "health_check_retries": 20,
+      "config_paths": ["/etc/influxdb2", "/var/lib/influxdb2"],
+      "log_patterns": {
+        "loading_shards": ["Finished loading shard", "loading shard"],
+        "started": ["Listening", "Starting"]
+      }
+    },
+    "postgres": {
+      "startup_grace_period": 15,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 10,
+      "health_check_retries": 15,
+      "config_paths": ["/var/lib/postgresql/data"],
+      "log_patterns": {
+        "ready": ["database system is ready", "ready to accept connections"],
+        "started": ["database system is ready"]
+      }
+    },
+    "postgresql": {
+      "startup_grace_period": 15,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 10,
+      "health_check_retries": 15,
+      "config_paths": ["/var/lib/postgresql/data"],
+      "log_patterns": {
+        "ready": ["database system is ready", "ready to accept connections"],
+        "started": ["database system is ready"]
+      }
+    },
+    "mysql": {
+      "startup_grace_period": 15,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 10,
+      "health_check_retries": 15,
+      "config_paths": ["/var/lib/mysql"],
+      "log_patterns": {
+        "ready": ["ready for connections", "mysqld: ready for connections"],
+        "started": ["ready for connections"]
+      }
+    },
+    "mariadb": {
+      "startup_grace_period": 15,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 10,
+      "health_check_retries": 15,
+      "config_paths": ["/var/lib/mysql"],
+      "log_patterns": {
+        "ready": ["ready for connections", "mysqld: ready for connections"],
+        "started": ["ready for connections"]
+      }
+    },
+    "mongodb": {
+      "startup_grace_period": 15,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 10,
+      "health_check_retries": 15,
+      "config_paths": ["/data/db", "/var/lib/mongodb"],
+      "log_patterns": {
+        "ready": ["waiting for connections", "listening on"],
+        "started": ["waiting for connections"]
+      }
+    },
+    "db2": {
+      "startup_grace_period": 20,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 12,
+      "health_check_retries": 18,
+      "config_paths": ["/database/config"],
+      "log_patterns": {
+        "ready": ["DB2START", "database is active"],
+        "started": ["database is active"]
+      }
+    },
+    "elasticsearch": {
+      "startup_grace_period": 20,
+      "additional_wait_before_validation": 5,
+      "max_restart_count": 12,
+      "health_check_retries": 20,
+      "config_paths": ["/usr/share/elasticsearch/config", "/var/lib/elasticsearch"],
+      "log_patterns": {
+        "ready": ["started", "cluster_name"],
+        "started": ["started"]
+      }
+    },
+    "cassandra": {
+      "startup_grace_period": 20,
+      "additional_wait_before_validation": 0,
+      "max_restart_count": 12,
+      "health_check_retries": 18,
+      "config_paths": ["/var/lib/cassandra", "/etc/cassandra"],
+      "log_patterns": {
+        "ready": ["Starting listening for CQL clients", "Node state jump to NORMAL"],
+        "started": ["Starting listening"]
+      }
+    }
+  }
+}
+

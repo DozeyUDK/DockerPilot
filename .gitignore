@@ -86,6 +86,8 @@ integration-test-report.json
 *.backup
 *.tar.gz
 *.zip
+backup_*/
+backup_*_pre_deploy_*/
 
 # OS
 .DS_Store
@@ -108,3 +110,4 @@ htmlcov/
 *.temp
 *.swp
 *~
+DockerPilotExtras/

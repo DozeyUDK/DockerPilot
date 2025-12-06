@@ -17,24 +17,48 @@ class ImageManager:
         self.logger = logger
         self._error_handler = error_handler
     
-    def list_images(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
-        """Enhanced image listing with multiple output formats."""
+    def list_images(self, show_all: bool = True, format_output: str = "table", hide_untagged: bool = False) -> List[Any]:
+        """Enhanced image listing with multiple output formats.
+        
+        Args:
+            show_all: Show all images (including intermediate layers)
+            format_output: Output format ('table' or 'json')
+            hide_untagged: Hide images without tags (dangling images)
+        """
         with self._error_handler("list images"):
             images = self.client.images.list(all=show_all)
+            
+            # Filter out untagged images if requested
+            if hide_untagged:
+                images = [img for img in images if img.tags]
             
             if format_output == "json":
                 image_data = []
                 for img in images:
+                    # Parse repository and tag
+                    if img.tags:
+                        repo_tag = img.tags[0]
+                        if ':' in repo_tag:
+                            repository, tag = repo_tag.rsplit(':', 1)
+                        else:
+                            repository, tag = repo_tag, "latest"
+                    else:
+                        repository = "<none>"
+                        tag = "<none>"
+                    
                     image_data.append({
-                        'id': img.id.split(":")[1][:12],
+                        'id': img.id.split(":")[1][:12] if ':' in img.id else img.id[:12],
+                        'repository': repository,
+                        'tag': tag,
                         'tags': img.tags,
                         'created': img.attrs.get('Created'),
                         'size': format_image_size(img.attrs.get('Size', 0)),
                         'architecture': img.attrs.get('Architecture'),
                         'os': img.attrs.get('Os')
                     })
-                self.console.print_json(data=image_data)
-                return images
+                # Don't print JSON in API context, just return data
+                # self.console.print_json(data=image_data)
+                return image_data
             
             # Enhanced table view with auto-scaling to terminal width
             # Get terminal width for dynamic column sizing
@@ -145,6 +169,66 @@ class ImageManager:
             except docker.errors.APIError as e:
                 self.console.print(f"[bold red]Docker API error during image removal:[/bold red] {e}")
                 return False
+    
+    def prune_dangling_images(self, dry_run: bool = False) -> dict:
+        """Remove all dangling images (images without tags).
+        
+        Args:
+            dry_run: If True, only show what would be removed without actually removing
+            
+        Returns:
+            dict: Statistics about removed images (images_deleted, space_reclaimed)
+        """
+        with self._error_handler("prune dangling images"):
+            try:
+                # Get all dangling images first
+                all_images = self.client.images.list(all=True)
+                dangling_images = [img for img in all_images if not img.tags]
+                
+                if not dangling_images:
+                    self.console.print("[yellow]ℹ️ No dangling images found[/yellow]")
+                    return {'images_deleted': 0, 'space_reclaimed': 0}
+                
+                if dry_run:
+                    total_size = sum(img.attrs.get('Size', 0) for img in dangling_images)
+                    total_size_formatted = format_image_size(total_size)
+                    self.console.print(f"[cyan]🔍 Dry run: Would remove {len(dangling_images)} dangling images ({total_size_formatted})[/cyan]")
+                    return {'images_deleted': len(dangling_images), 'space_reclaimed': total_size}
+                
+                # Show what will be removed
+                total_size = sum(img.attrs.get('Size', 0) for img in dangling_images)
+                total_size_formatted = format_image_size(total_size)
+                self.console.print(f"[cyan]🧹 Removing {len(dangling_images)} dangling images...[/cyan]")
+                self.console.print(f"[cyan]Estimated space to reclaim: {total_size_formatted}[/cyan]")
+                
+                # Use Docker's prune_images API which is more efficient
+                # This removes all dangling images at once
+                prune_result = self.client.images.prune(filters={'dangling': True})
+                
+                images_deleted = len(prune_result.get('ImagesDeleted', []))
+                space_reclaimed = prune_result.get('SpaceReclaimed', 0)
+                space_formatted = format_image_size(space_reclaimed)
+                
+                if images_deleted > 0:
+                    self.console.print(f"[green]✅ Removed {images_deleted} dangling images[/green]")
+                    self.console.print(f"[green]💾 Space reclaimed: {space_formatted}[/green]")
+                    self.logger.info(f"Pruned {images_deleted} dangling images, reclaimed {space_formatted}")
+                else:
+                    self.console.print("[yellow]ℹ️ No dangling images were removed[/yellow]")
+                
+                return {
+                    'images_deleted': images_deleted,
+                    'space_reclaimed': space_reclaimed
+                }
+                
+            except docker.errors.APIError as e:
+                self.console.print(f"[bold red]Docker API error during prune:[/bold red] {e}")
+                self.logger.error(f"Failed to prune dangling images: {e}")
+                return {'images_deleted': 0, 'space_reclaimed': 0}
+            except Exception as e:
+                self.console.print(f"[bold red]Error pruning dangling images:[/bold red] {e}")
+                self.logger.error(f"Unexpected error during prune: {e}")
+                return {'images_deleted': 0, 'space_reclaimed': 0}
     
     def build_image(self, dockerfile_path: str, tag: str, no_cache: bool = False, 
                    pull: bool = True, build_args: dict = None) -> bool:

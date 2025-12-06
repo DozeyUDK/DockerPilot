@@ -1,8 +1,10 @@
 from .pilot import DockerPilotEnhanced, LogLevel
+from . import __version__
 import argparse
 
 def main():
     bootstrap_parser = argparse.ArgumentParser(add_help=False)
+    bootstrap_parser.add_argument('--version', action='version', version=f'DockerPilot {__version__}')
     bootstrap_parser.add_argument('--config', '-c', type=str, default=None)
     bootstrap_parser.add_argument('--log-level', '-l', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO')
     known_args, _ = bootstrap_parser.parse_known_args()

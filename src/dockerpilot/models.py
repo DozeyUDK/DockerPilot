@@ -30,6 +30,7 @@ class DeploymentConfig:
     network: str = "bridge"
     cpu_limit: str = None
     memory_limit: str = None
+    privileged: bool = False
 
 
 @dataclass

@@ -1,0 +1,81 @@
+# DockerPilot Health Check Configuration
+# 
+# This file allows you to customize health check endpoints for different Docker images.
+# You can add your own custom mappings or override the defaults.
+
+health_checks:
+  # Services that don't use HTTP (health checks will be skipped)
+  non_http_services:
+    - ssh
+    - redis
+    - mariadb
+    - mysql
+    - postgresql
+    - postgres
+    - mongodb
+    - mongo
+    - db2
+    - memcached
+    - rabbitmq
+    - kafka
+    - zookeeper
+  
+  # Custom health check endpoints for specific images
+  # Format: 'image_pattern': '/endpoint'
+  # The pattern will be matched against the image tag (case-insensitive)
+  endpoint_mappings:
+    # Vector databases
+    qdrant: /healthz
+    milvus: /healthz
+    weaviate: /v1/.well-known/ready
+    
+    # AI/ML services
+    ollama: /api/version
+    
+    # Monitoring & Observability
+    grafana: /api/health
+    prometheus: /-/healthy
+    loki: /ready
+    tempo: /ready
+    
+    # Time-series databases
+    influxdb: /ready
+    timescaledb: /health
+    
+    # Home automation
+    homeassistant: /
+    home-assistant: /
+    
+    # Web servers
+    nginx: /
+    apache: /
+    caddy: /health
+    
+    # Application frameworks
+    nextcloud: /status.php
+    
+    # Search engines
+    elasticsearch: /_cluster/health
+    opensearch: /_cluster/health
+    
+    # Message queues
+    nats: /healthz
+    
+    # Other services
+    traefik: /ping
+    portainer: /api/status
+  
+  # Default endpoint for HTTP services (when no specific mapping is found)
+  default_endpoint: /health
+
+# Example usage in deployment config:
+# 
+# If you want to override health check for a specific container,
+# add this to your deployment-*.yml:
+# 
+# deployment:
+#   container_name: my-custom-app
+#   image_tag: my-custom-app:latest
+#   health_check_endpoint: /custom/health  # This overrides auto-detection
+#   # ... rest of config ...
+

@@ -41,6 +41,8 @@ class DockerPilotEnhanced:
         self.log_file = "docker_pilot.log"
         self.metrics_file = "docker_metrics.json"
         self.deployment_history = []
+        self._health_check_defaults = None  # Lazy-loaded health check defaults
+        self._current_deployment_container = None  # Track current deployment for cancellation
         
         # Setup logging
         self._setup_logging(log_level)
@@ -133,7 +135,140 @@ class DockerPilotEnhanced:
         except Exception as e:
             self.logger.error(f"Failed to load config: {e}")
             self.config = {}
-
+    
+    def _check_cancel_flag(self, container_name: str = None) -> bool:
+        """Check if deployment should be cancelled
+        
+        Args:
+            container_name: Container being deployed (uses self._current_deployment_container if not provided)
+        
+        Returns:
+            bool: True if deployment should be cancelled
+        """
+        if not container_name:
+            container_name = self._current_deployment_container
+        
+        if not container_name:
+            return False
+        
+        # Look for cancel flag in multiple locations
+        cancel_flag_locations = [
+            Path.cwd() / f'cancel_{container_name}.flag',
+            Path.home() / 'DockerPilot' / f'cancel_{container_name}.flag',
+            Path.home() / 'DockerPilot' / '.dockerpilot_extras' / f'cancel_{container_name}.flag',
+        ]
+        
+        for flag_path in cancel_flag_locations:
+            if flag_path.exists():
+                self.logger.warning(f"Cancel flag detected for {container_name} at {flag_path}")
+                # Remove flag after detecting
+                try:
+                    flag_path.unlink()
+                except:
+                    pass
+                return True
+        
+        return False
+    
+    def _load_health_check_defaults(self) -> dict:
+        """Load default health check configuration from JSON file
+        
+        Returns cached defaults or loads from health-checks-defaults.json
+        """
+        if self._health_check_defaults is not None:
+            return self._health_check_defaults
+        
+        try:
+            defaults_path = Path(__file__).parent / "configs" / "health-checks-defaults.json"
+            
+            if defaults_path.exists():
+                with open(defaults_path, 'r', encoding='utf-8') as f:
+                    self._health_check_defaults = json.load(f)
+                self.logger.debug(f"Loaded health check defaults from {defaults_path}")
+            else:
+                # Fallback to minimal defaults if file doesn't exist
+                self.logger.warning(f"Health check defaults file not found: {defaults_path}")
+                self._health_check_defaults = {
+                    'health_checks': {
+                        'non_http_services': ['ssh', 'redis', 'mysql', 'postgresql', 'mongodb'],
+                        'endpoint_mappings': {},
+                        'default_endpoint': '/health'
+                    }
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to load health check defaults: {e}")
+            # Fallback to minimal defaults
+            self._health_check_defaults = {
+                'health_checks': {
+                    'non_http_services': ['ssh', 'redis', 'mysql', 'postgresql', 'mongodb'],
+                    'endpoint_mappings': {},
+                    'default_endpoint': '/health'
+                }
+            }
+        
+        return self._health_check_defaults
+    
+    def _get_database_config(self, image_tag: str) -> dict:
+        """Get database-specific configuration based on image tag.
+        
+        Args:
+            image_tag: Docker image tag to check
+            
+        Returns:
+            dict: Database configuration or empty dict if not a database
+        """
+        defaults = self._load_health_check_defaults()
+        database_services = defaults.get('database_services', {})
+        
+        image_lower = image_tag.lower()
+        
+        # Check each database service pattern (longest match first for specificity)
+        # Sort by length descending to match more specific names first
+        sorted_db_names = sorted(database_services.keys(), key=len, reverse=True)
+        
+        for db_name in sorted_db_names:
+            if db_name in image_lower:
+                self.logger.debug(f"Matched database service: {db_name} for image {image_tag}")
+                return database_services[db_name]
+        
+        # Return default/empty config for non-database services
+        return {}
+    
+    def _get_database_name(self, image_tag: str) -> str:
+        """Get database service name from image tag.
+        
+        Args:
+            image_tag: Docker image tag to check
+            
+        Returns:
+            str: Database name or empty string if not a database
+        """
+        defaults = self._load_health_check_defaults()
+        database_services = defaults.get('database_services', {})
+        
+        image_lower = image_tag.lower()
+        
+        # Check each database service pattern (longest match first)
+        sorted_db_names = sorted(database_services.keys(), key=len, reverse=True)
+        
+        for db_name in sorted_db_names:
+            if db_name in image_lower:
+                return db_name
+        
+        return ""
+    
+    def _is_database_service(self, image_tag: str) -> bool:
+        """Check if image tag represents a database service.
+        
+        Args:
+            image_tag: Docker image tag to check
+            
+        Returns:
+            bool: True if it's a database service
+        """
+        db_config = self._get_database_config(image_tag)
+        return len(db_config) > 0
+    
     def _init_docker_client(self, max_retries: int = 3):
         """Initialize Docker client with retry logic"""
         for attempt in range(max_retries):
@@ -185,13 +320,30 @@ class DockerPilotEnhanced:
         """Enhanced container listing with multiple output formats."""
         return self.container_manager.list_containers(show_all, format_output)
 
-    def list_images(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
-        """Enhanced image listing with multiple output formats."""
-        return self.image_manager.list_images(show_all, format_output)
+    def list_images(self, show_all: bool = True, format_output: str = "table", hide_untagged: bool = False) -> List[Any]:
+        """Enhanced image listing with multiple output formats.
+        
+        Args:
+            show_all: Show all images (including intermediate layers)
+            format_output: Output format ('table' or 'json')
+            hide_untagged: Hide images without tags (dangling images)
+        """
+        return self.image_manager.list_images(show_all, format_output, hide_untagged)
     
     def remove_image(self, image_name: str, force: bool = False) -> bool:
         """Remove Docker image."""
         return self.image_manager.remove_image(image_name, force)
+    
+    def prune_dangling_images(self, dry_run: bool = False) -> dict:
+        """Remove all dangling images (images without tags).
+        
+        Args:
+            dry_run: If True, only show what would be removed without actually removing
+            
+        Returns:
+            dict: Statistics about removed images (images_deleted, space_reclaimed)
+        """
+        return self.image_manager.prune_dangling_images(dry_run)
 
     def container_operation(self, operation: str, container_name: str, **kwargs) -> bool:
         """Unified container operation handler with progress tracking."""
@@ -202,7 +354,14 @@ class DockerPilotEnhanced:
                 kwargs.get('image_name'),
                 kwargs.get('name', container_name),
                 kwargs.get('ports'),
-                kwargs.get('command')
+                kwargs.get('command'),
+                kwargs.get('environment'),
+                kwargs.get('volumes'),
+                kwargs.get('restart_policy', 'unless-stopped'),
+                kwargs.get('network'),
+                kwargs.get('privileged', False),
+                kwargs.get('cpu_limit'),
+                kwargs.get('memory_limit')
             )
         else:
             return self.container_manager.container_operation(operation, container_name, **kwargs)
@@ -211,9 +370,30 @@ class DockerPilotEnhanced:
         """Set restart policy on container."""
         return self.container_manager.update_restart_policy(container_name, policy)
     
-    def run_new_container(self, image_name: str, name: str, ports: dict = None, command: str = None) -> bool:
-        """Run a new container."""
-        return self.container_manager.run_new_container(image_name, name, ports, command)
+    def run_new_container(self, image_name: str, name: str, ports: dict = None, 
+                        command: str = None, environment: dict = None,
+                        volumes: dict = None, restart_policy: str = 'unless-stopped',
+                        network: str = None, privileged: bool = False,
+                        cpu_limit: str = None, memory_limit: str = None) -> bool:
+        """Run a new container with full configuration options.
+        
+        Args:
+            image_name: Docker image name/tag
+            name: Container name
+            ports: Port mapping dict (e.g., {'80': '8080'})
+            command: Command to run in container
+            environment: Environment variables dict
+            volumes: Volume mappings dict
+            restart_policy: Restart policy (no, on-failure, always, unless-stopped)
+            network: Network name or 'host' for host network
+            privileged: Run container in privileged mode
+            cpu_limit: CPU limit (e.g., '1.5' for 1.5 CPUs)
+            memory_limit: Memory limit (e.g., '1g' for 1GB)
+        """
+        return self.container_manager.run_new_container(
+            image_name, name, ports, command, environment, volumes,
+            restart_policy, network, privileged, cpu_limit, memory_limit
+        )
     
     def exec_container(self, container_name: str, command: str = "/bin/bash") -> bool:
         """Execute interactive command in running container."""
@@ -516,7 +696,19 @@ class DockerPilotEnhanced:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            deployment_config = DeploymentConfig(**config['deployment'])
+            # Normalize deployment config to ensure all fields are in correct format
+            deployment = config['deployment']
+            # Ensure volumes is a dict
+            if 'volumes' not in deployment or not isinstance(deployment.get('volumes'), dict):
+                deployment['volumes'] = {}
+            # Ensure port_mapping is a dict
+            if 'port_mapping' not in deployment or not isinstance(deployment.get('port_mapping'), dict):
+                deployment['port_mapping'] = {}
+            # Ensure environment is a dict
+            if 'environment' not in deployment or not isinstance(deployment.get('environment'), dict):
+                deployment['environment'] = {}
+            
+            deployment_config = DeploymentConfig(**deployment)
             build_config = config.get('build', {})
             
             self.logger.info(f"Starting {deployment_type} deployment from config: {config_path}")
@@ -538,6 +730,12 @@ class DockerPilotEnhanced:
 
         deployment_start = datetime.now()
         deployment_id = f"deploy_{int(deployment_start.timestamp())}"
+        
+        # Auto-detect health check endpoint based on image type
+        detected_endpoint = self._detect_health_check_endpoint(config.image_tag)
+        if detected_endpoint != config.health_check_endpoint:
+            self.logger.info(f"Auto-detected health check endpoint: {detected_endpoint} (was: {config.health_check_endpoint})")
+            config.health_check_endpoint = detected_endpoint
 
         with Progress(
             SpinnerColumn(),
@@ -545,17 +743,19 @@ class DockerPilotEnhanced:
             console=self.console
         ) as progress:
 
-            # Phase 1: Build new image
-            build_task = progress.add_task("🔨 Building new image...", total=None)
+            # Phase 1: Prepare image (check, pull, or build)
+            build_task = progress.add_task("🔨 Preparing image...", total=None)
             try:
-                success = self._build_image_enhanced(config.image_tag, build_config)
+                success, message = self._prepare_image(config.image_tag, build_config)
                 if not success:
-                    progress.update(build_task, description="❌ Image build failed")
+                    progress.update(build_task, description=f"❌ {message}")
+                    self.console.print(f"[bold red]❌ {message}[/bold red]")
                     return False
-                progress.update(build_task, description="✅ Image built successfully")
+                progress.update(build_task, description=f"✅ {message}")
             except Exception as e:
-                progress.update(build_task, description="❌ Image build failed")
-                self.logger.error(f"Build failed: {e}")
+                progress.update(build_task, description="❌ Image preparation failed")
+                self.logger.error(f"Image preparation failed: {e}")
+                self.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
                 return False
 
             # Phase 2: Check existing container
@@ -574,16 +774,24 @@ class DockerPilotEnhanced:
             temp_name = f"{config.container_name}_new_{deployment_id}"
             deploy_task = progress.add_task("🚀 Deploying new version...", total=None)
             try:
-                new_container = self.client.containers.create(
-                    image=config.image_tag,
-                    name=temp_name,
-                    ports=config.port_mapping,
-                    environment=config.environment,
-                    volumes=config.volumes,
-                    restart_policy={"Name": config.restart_policy},
-                    network=config.network,
+                # Add command if provided in config (for images that exit immediately without command)
+                create_kwargs = {
+                    'image': config.image_tag,
+                    'name': temp_name,
+                    'ports': config.port_mapping,
+                    'environment': config.environment,
+                    'volumes': self._normalize_volumes(config.volumes),
+                    'restart_policy': {"Name": config.restart_policy},
+                    'network': config.network,
                     **self._get_resource_limits(config)
-                )
+                }
+                if hasattr(config, 'command') and config.command:
+                    create_kwargs['command'] = config.command
+                elif 'alpine' in config.image_tag.lower():
+                    # Alpine needs a command to stay running
+                    create_kwargs['command'] = ['sh', '-c', 'sleep 3600']
+                
+                new_container = self.client.containers.create(**create_kwargs)
 
                 # Start container
                 try:
@@ -599,8 +807,22 @@ class DockerPilotEnhanced:
                         pass
                     return False
 
-                # Grace period
-                time.sleep(5)
+                # Grace period - longer for HTTP services like nginx
+                grace_period = 5
+                if 'nginx' in config.image_tag.lower() or 'http' in config.image_tag.lower():
+                    grace_period = 15  # nginx needs more time to start
+                time.sleep(grace_period)
+                
+                # Verify container is running before health check
+                try:
+                    new_container.reload()
+                    if new_container.status != "running":
+                        self.logger.error(f"Container {new_container.name} is not running (status: {new_container.status})")
+                        new_container.stop()
+                        new_container.remove()
+                        return False
+                except Exception as e:
+                    self.logger.warning(f"Could not verify container status: {e}")
 
             except Exception as e:
                 progress.update(deploy_task, description="❌ New container creation failed")
@@ -611,6 +833,19 @@ class DockerPilotEnhanced:
             if config.port_mapping:
                 health_check_task = progress.add_task("🩺 Health checking new deployment...", total=None)
                 host_port = list(config.port_mapping.values())[0]
+                
+                # Wait a bit more and verify container is running before health check
+                time.sleep(2)
+                try:
+                    new_container.reload()
+                    if new_container.status != "running":
+                        progress.update(health_check_task, description="❌ Container not running")
+                        new_container.stop()
+                        new_container.remove()
+                        return False
+                except Exception as e:
+                    self.logger.warning(f"Could not verify container status: {e}")
+                
                 if not self._advanced_health_check(
                     host_port,
                     config.health_check_endpoint,
@@ -673,12 +908,27 @@ class DockerPilotEnhanced:
         return self.container_manager.view_container_json(container_name)
 
 
-    def _blue_green_deploy_enhanced(self, config: DeploymentConfig, build_config: dict) -> bool:
-        """Enhanced Blue-Green deployment with advanced features"""
+    def _blue_green_deploy_enhanced(self, config: DeploymentConfig, build_config: dict, skip_backup: bool = False) -> bool:
+        """Enhanced Blue-Green deployment with advanced features
+        
+        Args:
+            config: Deployment configuration
+            build_config: Build configuration
+            skip_backup: Skip data backup (faster but risky for production)
+        """
         self.console.print(f"\n[bold cyan]🔵🟢 BLUE-GREEN DEPLOYMENT STARTED[/bold cyan]")
         
         deployment_start = datetime.now()
         deployment_id = f"bg_deploy_{int(deployment_start.timestamp())}"
+        
+        # Track current deployment for cancellation support
+        self._current_deployment_container = config.container_name
+        
+        # Auto-detect health check endpoint based on image type
+        detected_endpoint = self._detect_health_check_endpoint(config.image_tag)
+        if detected_endpoint != config.health_check_endpoint:
+            self.logger.info(f"Auto-detected health check endpoint: {detected_endpoint} (was: {config.health_check_endpoint})")
+            config.health_check_endpoint = detected_endpoint
         
         blue_name = f"{config.container_name}_blue"
         green_name = f"{config.container_name}_green"
@@ -687,6 +937,7 @@ class DockerPilotEnhanced:
         active_container = None
         active_name = None
         
+        # Check for blue-green containers first
         try:
             blue_container = self.client.containers.get(blue_name)
             if blue_container.status == "running":
@@ -704,18 +955,72 @@ class DockerPilotEnhanced:
             except docker.errors.NotFound:
                 pass
         
+        # If no blue-green container found, check for main container (without suffix)
+        # This handles migration from old deployment to blue-green
+        if not active_container:
+            try:
+                main_container = self.client.containers.get(config.container_name)
+                if main_container.status == "running":
+                    active_container = main_container
+                    active_name = "main"
+                    self.console.print(f"[yellow]Found existing container '{config.container_name}', will migrate to blue-green[/yellow]")
+            except docker.errors.NotFound:
+                pass
+        
         target_name = "green" if active_name == "blue" else "blue"
         target_container_name = green_name if target_name == "green" else blue_name
         
         self.console.print(f"[cyan]Current active: {active_name or 'none'} | Deploying to: {target_name}[/cyan]")
         
+        # CHECKPOINT 1: Check for cancellation before backup
+        if self._check_cancel_flag():
+            self.console.print("[yellow]🛑 Deployment cancelled by user (before backup)[/yellow]")
+            self._current_deployment_container = None
+            return False
+        
+        # Backup OUTSIDE Progress context to avoid "Only one live display" error
+        backup_path = None
+        if active_container and not skip_backup:
+            self.console.print(f"[cyan]💾 Backing up container data...[/cyan]")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"backup_{config.container_name}_pre_deploy_{timestamp}"
+            
+            if self.backup_container_data(active_container.name, backup_path):
+                self.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+            else:
+                self.console.print(f"[yellow]⚠️ Data backup failed, but continuing deployment...[/yellow]")
+                self.logger.warning("Data backup failed before deployment - this is risky for production!")
+        elif skip_backup and active_container:
+            self.console.print("[yellow]⚠️ Skipping data backup (--skip-backup flag)[/yellow]")
+        else:
+            self.console.print("[cyan]ℹ️ No active container to backup[/cyan]")
+        
+        # CHECKPOINT 2: Check for cancellation after backup
+        if self._check_cancel_flag():
+            self.console.print("[yellow]🛑 Deployment cancelled by user (after backup)[/yellow]")
+            self._current_deployment_container = None
+            return False
+        
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             
-            # Build new image
-            build_task = progress.add_task("🔨 Building new image...", total=None)
-            if not self._build_image_enhanced(config.image_tag, build_config):
+            # Add backup status to progress display
+            if backup_path:
+                progress.add_task(f"✅ Data backed up to {backup_path}", total=None)
+            
+            # Build or pull image
+            build_task = progress.add_task("🔨 Preparing image...", total=None)
+            try:
+                success, message = self._prepare_image(config.image_tag, build_config)
+                if not success:
+                    progress.update(build_task, description=f"❌ {message}")
+                    self.console.print(f"[bold red]❌ {message}[/bold red]")
+                    return False
+                progress.update(build_task, description=f"✅ {message}")
+            except Exception as e:
+                progress.update(build_task, description="❌ Image preparation failed")
+                self.logger.error(f"Image preparation failed: {e}")
+                self.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
                 return False
-            progress.update(build_task, description="✅ Image built successfully")
             
             # Clean up existing target container
             cleanup_task = progress.add_task(f"🧹 Cleaning up {target_name} slot...", total=None)
@@ -730,66 +1035,245 @@ class DockerPilotEnhanced:
             # Deploy to target slot
             deploy_task = progress.add_task(f"🚀 Deploying to {target_name} slot...", total=None)
             
-            # Use different port for parallel testing
-            temp_port_mapping = {}
-            for container_port, host_port in config.port_mapping.items():
-                temp_port_mapping[container_port] = str(int(host_port) + 1000)  # +1000 for temp
+            # Prepare container creation parameters
+            normalized_volumes = self._normalize_volumes(config.volumes)
+            self.logger.debug(f"Normalized volumes: {normalized_volumes}")
+            
+            container_kwargs = {
+                'image': config.image_tag,
+                'name': target_container_name,
+                'detach': True,
+                'environment': config.environment,
+                'volumes': normalized_volumes,
+                'restart_policy': {"Name": config.restart_policy},
+            }
+            
+            # Handle network mode
+            if config.network == 'host':
+                # With host network, ports are directly mapped - no port mapping needed
+                container_kwargs['network_mode'] = 'host'
+                # For host network, we can't use different ports for testing
+                # So we need to stop the active container first to free up the port
+                if active_container:
+                    # Stop the active container to free up the port for host network
+                    container_to_stop_name = active_container.name
+                    self.console.print(f"[yellow]Stopping active container '{container_to_stop_name}' to free port for host network...[/yellow]")
+                    try:
+                        active_container.stop(timeout=10)
+                        self.console.print(f"[green]Active container stopped[/green]")
+                        # Wait a moment for port to be released
+                        time.sleep(2)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to stop active container: {e}")
+                        # Try to continue anyway - the new container might fail with port conflict
+                temp_port_mapping = None
+            else:
+                # Use different port for parallel testing when not using host network
+                temp_port_mapping = None  # Initialize before conditional
+                if config.port_mapping and len(config.port_mapping) > 0:
+                    temp_port_mapping = {}
+                    for container_port, host_port in config.port_mapping.items():
+                        temp_port_mapping[container_port] = str(int(host_port) + 1000)  # +1000 for temp
+                    container_kwargs['ports'] = temp_port_mapping
+                if config.network and config.network != 'bridge':
+                    container_kwargs['network'] = config.network
+            
+            # Add resource limits
+            container_kwargs.update(self._get_resource_limits(config))
+            
+            # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
+            if hasattr(config, 'privileged') and config.privileged:
+                container_kwargs['privileged'] = True
+                self.logger.info(f"Container {target_container_name} will run in privileged mode")
+            
+            # Add command if provided in config (for images that exit immediately without command)
+            if hasattr(config, 'command') and config.command:
+                container_kwargs['command'] = config.command
+            elif 'alpine' in config.image_tag.lower():
+                # Alpine needs a command to stay running
+                container_kwargs['command'] = ['sh', '-c', 'sleep 3600']
             
             try:
-                target_container = self.client.containers.run(
-                    image=config.image_tag,
-                    name=target_container_name,
-                    detach=True,
-                    ports=temp_port_mapping,
-                    environment=config.environment,
-                    volumes=config.volumes,
-                    restart_policy={"Name": config.restart_policy},
-                    **self._get_resource_limits(config)
-                )
+                target_container = self.client.containers.run(**container_kwargs)
                 
                 progress.update(deploy_task, description=f"✅ {target_name.title()} container deployed")
-                time.sleep(5)  # Startup grace period
+                
+                # Longer startup grace period for databases and services with slow startup
+                startup_grace = 5
+                db_config = self._get_database_config(config.image_tag)
+                if db_config:
+                    startup_grace = db_config.get('startup_grace_period', 15)
+                    db_name = self._get_database_name(config.image_tag) or 'database'
+                    self.logger.info(f"Extended startup grace period: {startup_grace}s for {db_name} service")
+                
+                time.sleep(startup_grace)
+                
+                # CHECKPOINT 3: Check for cancellation after container creation
+                if self._check_cancel_flag():
+                    self.console.print("[yellow]🛑 Deployment cancelled by user (after container creation)[/yellow]")
+                    # Cleanup new container
+                    try:
+                        target_container.stop()
+                        target_container.remove()
+                    except:
+                        pass
+                    self._current_deployment_container = None
+                    return False
+                
+                # Migrate data from active container to new container
+                if active_container and active_container.status == "running":
+                    migrate_task = progress.add_task("📦 Migrating data to new container...", total=None)
+                    try:
+                        migration_success = self._migrate_container_data(active_container, target_container, config)
+                        if migration_success:
+                            progress.update(migrate_task, description="✅ Data migration completed")
+                        else:
+                            progress.update(migrate_task, description="⚠️ Data migration had issues (continuing...)")
+                            self.logger.warning("Data migration completed with warnings, continuing deployment")
+                    except Exception as e:
+                        self.logger.error(f"Data migration failed: {e}")
+                        progress.update(migrate_task, description="⚠️ Data migration failed (continuing...)")
+                        # Don't fail deployment if migration fails - just log warning
                 
             except Exception as e:
                 progress.update(deploy_task, description=f"❌ {target_name.title()} deployment failed")
+                self.logger.error(f"Container creation failed: {e}")
+                self.logger.error(f"Container kwargs: {container_kwargs}")
+                # Try to get more details about the error
+                if hasattr(e, 'explanation'):
+                    self.logger.error(f"Error explanation: {e.explanation}")
                 return False
             
-            # Health check new deployment
-            health_task = progress.add_task(f"🩺 Health checking {target_name} deployment...", total=None)
-
-            if temp_port_mapping:
-                temp_port = list(temp_port_mapping.values())[0]
+            # Comprehensive validation of new deployment
+            health_task = progress.add_task(f"🔍 Comprehensive validation of {target_name} deployment...", total=None)
+            
+            # Determine port for validation
+            validation_port = None
+            if config.network == 'host':
+                # With host network, use the original port directly
+                validation_port = list(config.port_mapping.values())[0] if config.port_mapping else '3000'
+            elif 'temp_port_mapping' in locals() and temp_port_mapping and len(temp_port_mapping) > 0:
+                validation_port = list(temp_port_mapping.values())[0]
+            else:
+                validation_port = list(config.port_mapping.values())[0] if config.port_mapping else None
+            
+            if validation_port:
+                # First, do basic health check to ensure service is responding
+                progress.update(health_task, description=f"🩺 Basic health check ({target_name})...")
+                
+                # Increase retries for slow-starting services (databases, etc.)
+                health_retries = config.health_check_retries
+                db_config = self._get_database_config(config.image_tag)
+                if db_config:
+                    health_retries = max(health_retries, db_config.get('health_check_retries', 20))
+                    db_name = self._get_database_name(config.image_tag) or 'database'
+                    self.logger.info(f"Extended health check retries: {health_retries} for {db_name} service")
+                    
+                    # Add extra wait time before validation if configured
+                    additional_wait = db_config.get('additional_wait_before_validation', 0)
+                    if additional_wait > 0:
+                        self.logger.info(f"Waiting additional {additional_wait}s for {db_name} to finish initialization...")
+                        time.sleep(additional_wait)
+                
                 if not self._advanced_health_check(
-                    temp_port, 
+                    validation_port,
                     config.health_check_endpoint,
                     config.health_check_timeout,
-                    config.health_check_retries
+                    health_retries
                 ):
-                    progress.update(health_task, description=f"❌ {target_name.title()} health check failed")
+                    progress.update(health_task, description=f"❌ {target_name.title()} basic health check failed")
                     try:
                         target_container.stop()
                         target_container.remove()
                     except:
                         pass
                     return False
-                progress.update(health_task, description=f"✅ {target_name.title()} health check passed")
+                
+                # Then, comprehensive validation
+                progress.update(health_task, description=f"🔍 Comprehensive validation ({target_name})...")
+                is_valid, error_msg = self._comprehensive_container_validation(
+                    target_container, config, validation_port, target_name
+                )
+                
+                if not is_valid:
+                    progress.update(health_task, description=f"❌ {target_name.title()} validation failed")
+                    self.logger.error(f"Container validation failed: {error_msg}")
+                    
+                    # Get container logs for debugging
+                    try:
+                        logs = target_container.logs(tail=50).decode('utf-8', errors='ignore')
+                        self.logger.error(f"Container logs (last 50 lines):\n{logs}")
+                    except:
+                        pass
+                    
+                    # Cleanup failed container
+                    try:
+                        target_container.stop()
+                        target_container.remove()
+                    except:
+                        pass
+                    
+                    return False
+                
+                progress.update(health_task, description=f"✅ {target_name.title()} validation passed")
             else:
-                self.logger.warning("No ports mapped for temporary deployment, skipping health check")
-                progress.update(health_task, description=f"⚠️ {target_name.title()} no ports to check")
+                self.logger.warning("No ports mapped for validation, skipping comprehensive check")
+                progress.update(health_task, description=f"⚠️ {target_name.title()} no ports to validate")
+                
+                # Still do basic container status check
+                try:
+                    target_container.reload()
+                    if target_container.status != "running":
+                        progress.update(health_task, description=f"❌ {target_name.title()} container not running")
+                        try:
+                            target_container.stop()
+                            target_container.remove()
+                        except:
+                            pass
+                        return False
+                except Exception as e:
+                    self.logger.warning(f"Could not verify container status: {e}")
             
             # Parallel testing phase (optional)
             if self._should_run_parallel_tests():
                 test_task = progress.add_task("🧪 Running parallel tests...", total=None)
-                if not self._run_parallel_tests(temp_port, config):
-                    progress.update(test_task, description="❌ Parallel tests failed")
-                    # Cleanup and abort
-                    try:
-                        target_container.stop()
-                        target_container.remove()
-                    except:
-                        pass
-                    return False
-                progress.update(test_task, description="✅ Parallel tests passed")
+                # Check if container has ports for testing
+                has_ports = config.port_mapping and len(config.port_mapping) > 0
+                
+                if not has_ports:
+                    self.logger.warning("No ports mapped, skipping parallel tests")
+                    progress.update(test_task, description="⚠️ No ports to test")
+                else:
+                    # Determine test port based on network mode
+                    if config.network == 'host':
+                        test_port = list(config.port_mapping.values())[0]
+                    elif 'temp_port_mapping' in locals() and temp_port_mapping and len(temp_port_mapping) > 0:
+                        test_port = list(temp_port_mapping.values())[0]
+                    else:
+                        test_port = list(config.port_mapping.values())[0]
+                    
+                    if not self._run_parallel_tests(test_port, config):
+                        progress.update(test_task, description="❌ Parallel tests failed")
+                        # Cleanup and abort
+                        try:
+                            target_container.stop()
+                            target_container.remove()
+                        except:
+                            pass
+                        return False
+                    progress.update(test_task, description="✅ Parallel tests passed")
+            
+            # CHECKPOINT 4: Check for cancellation before traffic switch
+            if self._check_cancel_flag():
+                self.console.print("[yellow]🛑 Deployment cancelled by user (before traffic switch)[/yellow]")
+                # Cleanup target container
+                try:
+                    target_container.stop()
+                    target_container.remove()
+                except:
+                    pass
+                self._current_deployment_container = None
+                return False
             
             # Traffic switch with zero-downtime
             switch_task = progress.add_task("🔄 Zero-downtime traffic switch...", total=None)
@@ -799,30 +1283,161 @@ class DockerPilotEnhanced:
                 target_container.stop()
                 target_container.remove()
                 
-                # Create final container with correct ports
-                final_container = self.client.containers.run(
-                    image=config.image_tag,
-                    name=target_container_name,
-                    detach=True,
-                    ports=config.port_mapping,  # Final ports
-                    environment=config.environment,
-                    volumes=config.volumes,
-                    restart_policy={"Name": config.restart_policy},
-                    **self._get_resource_limits(config)
-                )
+                # CRITICAL: Stop old container BEFORE creating final container with original ports
+                # Otherwise we'll get "port is already allocated" error
+                if active_container and active_container.status == "running":
+                    self.console.print(f"[cyan]🛑 Stopping old container '{active_container.name}' to free ports...[/cyan]")
+                    try:
+                        active_container.stop(timeout=10)
+                        self.console.print(f"[green]✅ Old container '{active_container.name}' stopped[/green]")
+                        # Wait for ports to be released
+                        time.sleep(2)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to stop old container: {e}")
+                        raise Exception(f"Cannot proceed: failed to stop old container: {e}")
+                
+                # Create final container with correct configuration
+                final_normalized_volumes = self._normalize_volumes(config.volumes)
+                self.logger.debug(f"Final normalized volumes: {final_normalized_volumes}")
+                
+                final_container_kwargs = {
+                    'image': config.image_tag,
+                    'name': target_container_name,
+                    'detach': True,
+                    'environment': config.environment,
+                    'volumes': final_normalized_volumes,
+                    'restart_policy': {"Name": config.restart_policy},
+                }
+                
+                # Handle network and ports
+                if config.network == 'host':
+                    final_container_kwargs['network_mode'] = 'host'
+                else:
+                    if config.port_mapping and len(config.port_mapping) > 0:
+                        final_container_kwargs['ports'] = config.port_mapping  # Final ports
+                    if config.network and config.network != 'bridge':
+                        final_container_kwargs['network'] = config.network
+                
+                # Add resource limits
+                final_container_kwargs.update(self._get_resource_limits(config))
+                
+                # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
+                if hasattr(config, 'privileged') and config.privileged:
+                    final_container_kwargs['privileged'] = True
+                    self.logger.info(f"Final container {target_container_name} will run in privileged mode")
+                
+                # Add command if provided in config (for images that exit immediately without command)
+                if hasattr(config, 'command') and config.command:
+                    final_container_kwargs['command'] = config.command
+                elif 'alpine' in config.image_tag.lower():
+                    # Alpine needs a command to stay running
+                    final_container_kwargs['command'] = ['sh', '-c', 'sleep 3600']
+                
+                # Create final container with retry on port conflict
+                # Note: Final container uses the same volumes from config, so data migrated to target_container
+                # will be available in final_container since they share the same volume definitions
+                try:
+                    final_container = self.client.containers.run(**final_container_kwargs)
+                    self.logger.info("Final container created with migrated data (shares volumes with target)")
+                except Exception as create_error:
+                    error_msg = str(create_error)
+                    # If port conflict and we have an active container, try to stop it and retry
+                    if ('port is already allocated' in error_msg.lower() or 'bind for' in error_msg.lower()) and active_container:
+                        self.console.print(f"[yellow]⚠️ Port conflict detected, stopping old container '{active_container.name}' and retrying...[/yellow]")
+                        try:
+                            # Force stop old container
+                            active_container.stop(timeout=5)
+                            active_container.remove()
+                            time.sleep(3)  # Wait for port to be released
+                            # Retry creating final container
+                            final_container = self.client.containers.run(**final_container_kwargs)
+                            self.console.print(f"[green]✅ Final container created after stopping old container[/green]")
+                        except Exception as retry_error:
+                            self.logger.error(f"Failed to stop old container and retry: {retry_error}")
+                            raise Exception(f"Port conflict: {error_msg}. Failed to resolve by stopping old container: {retry_error}")
+                    else:
+                        raise
                 
                 # Wait for final container to be ready
                 time.sleep(3)
                 
-                # Final health check
-                final_port = list(config.port_mapping.values())[0]
-                if not self._advanced_health_check(final_port, config.health_check_endpoint, 10, 5):
-                    raise Exception("Final health check failed")
+                # Final comprehensive validation before traffic switch
+                # Check if container has port mapping for health checks
+                has_ports = config.port_mapping and len(config.port_mapping) > 0
                 
-                # Now safe to stop old container
+                if has_ports:
+                    if config.network == 'host':
+                        # With host network, use the original port directly
+                        final_port = list(config.port_mapping.values())[0]
+                    else:
+                        final_port = list(config.port_mapping.values())[0]
+                    
+                    # Final health check
+                    if not self._advanced_health_check(final_port, config.health_check_endpoint, 10, 5):
+                        raise Exception("Final health check failed")
+                    
+                    # Final comprehensive validation - critical check before traffic switch
+                    self.console.print(f"[yellow]🔍 Final validation before traffic switch...[/yellow]")
+                    is_valid, error_msg = self._comprehensive_container_validation(
+                        final_container, config, final_port, target_name
+                    )
+                else:
+                    # No ports - just verify container is running
+                    self.console.print(f"[yellow]🔍 Final validation before traffic switch (no ports)...[/yellow]")
+                    try:
+                        final_container.reload()
+                        if final_container.status != "running":
+                            raise Exception(f"Container is not running: {final_container.status}")
+                        is_valid = True
+                        error_msg = None
+                    except Exception as e:
+                        is_valid = False
+                        error_msg = str(e)
+                
+                if not is_valid:
+                    error_msg_full = f"Final validation failed before traffic switch: {error_msg}"
+                    self.logger.error(error_msg_full)
+                    
+                    # Get detailed logs
+                    try:
+                        logs = final_container.logs(tail=100).decode('utf-8', errors='ignore')
+                        self.logger.error(f"Final container logs:\n{logs}")
+                    except:
+                        pass
+                    
+                    # Cleanup and rollback
+                    try:
+                        final_container.stop()
+                        final_container.remove()
+                    except:
+                        pass
+                    
+                    # Restart old container if it exists (rollback)
+                    if active_container:
+                        try:
+                            self.console.print(f"[yellow]🔄 Rolling back to previous container...[/yellow]")
+                            active_container.start()
+                            self.console.print(f"[green]✅ Rollback successful - previous container restarted[/green]")
+                        except Exception as e:
+                            self.logger.error(f"Rollback failed: {e}")
+                    
+                    raise Exception(error_msg_full)
+                
+                self.console.print(f"[green]✅ Final validation passed - deployment successful[/green]")
+                
+                # Old container was already stopped before creating final container
+                # Now just remove it if it still exists
                 if active_container:
-                    active_container.stop(timeout=10)
-                    active_container.remove()
+                    try:
+                        if active_container.status != 'exited':
+                            active_container.stop(timeout=10)
+                        active_container.remove()
+                        self.console.print(f"[green]✅ Old container '{active_container.name}' removed[/green]")
+                    except docker.errors.NotFound:
+                        # Already removed, that's fine
+                        pass
+                    except Exception as e:
+                        self.logger.warning(f"Failed to remove old container: {e}")
                 
                 progress.update(switch_task, description="✅ Traffic switched successfully")
                 
@@ -835,6 +1450,9 @@ class DockerPilotEnhanced:
         duration = deployment_end - deployment_start
         
         self._record_deployment(deployment_id, config, "blue-green", True, duration)
+        
+        # Clear deployment tracking
+        self._current_deployment_container = None
         
         self.console.print(f"\n[bold green]🎉 BLUE-GREEN DEPLOYMENT COMPLETED![/bold green]")
         self.console.print(f"[green]Active slot: {target_name}[/green]")
@@ -1071,11 +1689,20 @@ class DockerPilotEnhanced:
         
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             
-            # Build image
-            build_task = progress.add_task("🔨 Building canary image...", total=None)
-            if not self._build_image_enhanced(config.image_tag, build_config):
+            # Prepare image
+            build_task = progress.add_task("🔨 Preparing canary image...", total=None)
+            try:
+                success, message = self._prepare_image(config.image_tag, build_config)
+                if not success:
+                    progress.update(build_task, description=f"❌ {message}")
+                    self.console.print(f"[bold red]❌ {message}[/bold red]")
+                    return False
+                progress.update(build_task, description=f"✅ {message}")
+            except Exception as e:
+                progress.update(build_task, description="❌ Image preparation failed")
+                self.logger.error(f"Image preparation failed: {e}")
+                self.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
                 return False
-            progress.update(build_task, description="✅ Canary image built")
             
             # Deploy canary container (5% traffic simulation)
             canary_name = f"{config.container_name}_canary"
@@ -1101,7 +1728,7 @@ class DockerPilotEnhanced:
                     detach=True,
                     ports=canary_port_mapping,
                     environment={**config.environment, "CANARY": "true"},
-                    volumes=config.volumes,
+                    volumes=self._normalize_volumes(config.volumes),
                     restart_policy={"Name": config.restart_policy},
                     **self._get_resource_limits(config)
                 )
@@ -1152,7 +1779,7 @@ class DockerPilotEnhanced:
                     detach=True,
                     ports=config.port_mapping,
                     environment=config.environment,
-                    volumes=config.volumes,
+                    volumes=self._normalize_volumes(config.volumes),
                     restart_policy={"Name": config.restart_policy},
                     **self._get_resource_limits(config)
                 )
@@ -1172,6 +1799,42 @@ class DockerPilotEnhanced:
         self.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
         
         return True
+
+    def _prepare_image(self, image_tag: str, build_config: dict = None):
+        """Prepare image for deployment - check if exists, pull, or build.
+        
+        Args:
+            image_tag: Docker image tag to prepare
+            build_config: Optional build configuration dict
+        
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        # Check if image already exists locally
+        try:
+            self.client.images.get(image_tag)
+            self.logger.info(f"Image {image_tag} already exists locally")
+            return True, "Image already exists"
+        except docker.errors.ImageNotFound:
+            pass
+        
+        # If build_config is provided and has dockerfile_path, try to build
+        if build_config and build_config.get('dockerfile_path'):
+            build_success = self._build_image_enhanced(image_tag, build_config)
+            if build_success:
+                return True, "Image built successfully"
+            # If build failed, try to pull as fallback
+            self.logger.warning(f"Build failed, trying to pull image {image_tag}")
+        
+        # Try to pull image from registry
+        try:
+            self.logger.info(f"Pulling image {image_tag} from registry...")
+            self.client.images.pull(image_tag)
+            return True, "Image pulled successfully"
+        except Exception as pull_error:
+            error_msg = f"Failed to pull image {image_tag}: {pull_error}"
+            self.logger.error(error_msg)
+            return False, error_msg
 
     def _build_image_enhanced(self, image_tag: str, build_config: dict) -> bool:
         """Enhanced image building with advanced features"""
@@ -1243,18 +1906,80 @@ class DockerPilotEnhanced:
 
         return success
 
+    def _detect_health_check_endpoint(self, image_tag: str) -> str:
+        """Detect appropriate health check endpoint based on image name
+        
+        Uses configuration from:
+        1. User config (self.config from YAML) - highest priority
+        2. Default config file (health-checks-defaults.json) - fallback
+        
+        Returns:
+            str: Health check endpoint path, or None for non-HTTP services
+        """
+        image_lower = image_tag.lower()
+        
+        # Load defaults from JSON file
+        defaults = self._load_health_check_defaults()
+        default_health_checks = defaults.get('health_checks', {})
+        
+        # User config overrides defaults
+        user_health_checks = self.config.get('health_checks', {})
+        
+        # Merge: user config takes precedence over defaults
+        non_http_services = user_health_checks.get(
+            'non_http_services',
+            default_health_checks.get('non_http_services', [])
+        )
+        
+        endpoint_mappings = {
+            **default_health_checks.get('endpoint_mappings', {}),  # Defaults first
+            **user_health_checks.get('endpoint_mappings', {})      # User overrides
+        }
+        
+        default_endpoint = user_health_checks.get(
+            'default_endpoint',
+            default_health_checks.get('default_endpoint', '/health')
+        )
+        
+        # Check for non-HTTP services
+        for service in non_http_services:
+            if service in image_lower:
+                self.logger.info(f"Detected non-HTTP service ({service}) - skipping HTTP health check")
+                return None
+        
+        # Try to find matching endpoint mapping
+        for image_pattern, endpoint in endpoint_mappings.items():
+            if image_pattern.lower() in image_lower:
+                self.logger.info(f"Detected image pattern '{image_pattern}' -> endpoint '{endpoint}'")
+                return endpoint
+        
+        # Use default endpoint
+        self.logger.info(f"Using default health check endpoint: {default_endpoint}")
+        return default_endpoint
+    
     def _advanced_health_check(self, port: str, endpoint: str, timeout: int, max_retries: int) -> bool:
-        """Advanced health check with detailed reporting"""
+        """Advanced health check with detailed reporting
+        
+        Returns True if health check passes or if endpoint is None (skip check)
+        """
+        # Skip health check if endpoint is None (for non-HTTP services like SSH, Redis, etc.)
+        if endpoint is None:
+            self.logger.info("Skipping HTTP health check (non-HTTP service)")
+            return True
+        
         url = f"http://localhost:{port}{endpoint}"
         
         for attempt in range(max_retries):
             try:
                 start_time = time.time()
-                response = requests.get(url, timeout=5)
+                # Use longer timeout for first attempts (service may be starting)
+                request_timeout = 10 if attempt < 3 else 5
+                response = requests.get(url, timeout=request_timeout)
                 response_time = time.time() - start_time
                 
-                if response.status_code == 200:
-                    self.logger.info(f"Health check passed (attempt {attempt + 1}): {response_time:.2f}s")
+                # Accept 200-299 status codes as successful health checks
+                if 200 <= response.status_code < 300:
+                    self.logger.info(f"Health check passed (attempt {attempt + 1}): {response_time:.2f}s (status {response.status_code})")
                     return True
                 else:
                     self.logger.warning(f"Health check returned {response.status_code} (attempt {attempt + 1})")
@@ -1263,9 +1988,199 @@ class DockerPilotEnhanced:
                 self.logger.warning(f"Health check failed (attempt {attempt + 1}): {e}")
             
             if attempt < max_retries - 1:
-                time.sleep(3)
+                # Longer wait between retries for first attempts
+                wait_time = 5 if attempt < 3 else 3
+                time.sleep(wait_time)
         
         return False
+
+    def _comprehensive_container_validation(self, container, config: DeploymentConfig, 
+                                          port: str, target_name: str) -> tuple:
+        """
+        Comprehensive validation of container before traffic switch.
+        Returns (is_valid, error_message)
+        
+        Checks:
+        1. Container status (must be running, not restarting)
+        2. Health check endpoint response
+        3. Container logs for errors
+        4. Resource usage (CPU, memory)
+        5. Volumes mounting
+        6. Port availability
+        7. Response time
+        8. No crash loops
+        """
+        validation_errors = []
+        
+        # 1. Check container status
+        try:
+            container.reload()  # Refresh container state
+            status = container.status
+            
+            if status != "running":
+                validation_errors.append(f"Container status is '{status}', expected 'running'")
+                return False, "; ".join(validation_errors)
+            
+            # Check restart count - be more lenient for databases that may restart during initialization
+            restart_count = container.attrs.get('RestartCount', 0) if hasattr(container, 'attrs') else 0
+            
+            # Detect if this is a database service and get its configuration
+            db_config = self._get_database_config(config.image_tag)
+            is_database = len(db_config) > 0
+            
+            # Set restart threshold based on service type (from config or default)
+            max_restarts = db_config.get('max_restart_count', 15) if is_database else 3
+            
+            if restart_count > max_restarts:
+                validation_errors.append(f"Container has restarted {restart_count} times (possible crash loop, max allowed: {max_restarts})")
+                return False, "; ".join(validation_errors)
+            
+            # For databases with high restart count, check if container is stable now
+            # Wait a bit and check if it's still running (not restarting)
+            if is_database and restart_count > 5:
+                self.logger.info(f"Database container has {restart_count} restarts, checking stability...")
+                time.sleep(5)  # Wait 5 seconds
+                try:
+                    container.reload()
+                    if container.status != "running":
+                        validation_errors.append(f"Container not stable after {restart_count} restarts (current status: {container.status})")
+                        return False, "; ".join(validation_errors)
+                    # Check if restart count increased (still restarting)
+                    new_restart_count = container.attrs.get('RestartCount', 0) if hasattr(container, 'attrs') else 0
+                    if new_restart_count > restart_count:
+                        validation_errors.append(f"Container still restarting (restart count increased from {restart_count} to {new_restart_count})")
+                        return False, "; ".join(validation_errors)
+                    self.logger.info(f"Container appears stable after {restart_count} restarts")
+                except Exception as e:
+                    self.logger.warning(f"Could not verify container stability: {e}")
+                
+        except Exception as e:
+            validation_errors.append(f"Failed to check container status: {e}")
+            return False, "; ".join(validation_errors)
+        
+        # 2. Health check endpoint (skip for non-HTTP services)
+        health_check_passed = False
+        response_time = None
+        
+        if config.health_check_endpoint is None:
+            # Non-HTTP service (SSH, Redis, etc.) - skip HTTP health check
+            self.logger.info("Skipping HTTP health check for non-HTTP service")
+            health_check_passed = True
+        else:
+            try:
+                url = f"http://localhost:{port}{config.health_check_endpoint}"
+                start_time = time.time()
+                response = requests.get(url, timeout=10)
+                response_time = time.time() - start_time
+                
+                if 200 <= response.status_code < 300:
+                    health_check_passed = True
+                    self.logger.info(f"Health check passed: {response_time:.2f}s response time")
+                else:
+                    validation_errors.append(f"Health check returned status {response.status_code}, expected 200-299")
+            except requests.exceptions.Timeout:
+                validation_errors.append(f"Health check timeout after 10s")
+            except requests.exceptions.ConnectionError:
+                validation_errors.append(f"Health check connection error - service may not be ready")
+            except Exception as e:
+                validation_errors.append(f"Health check failed: {e}")
+            
+            if not health_check_passed:
+                return False, "; ".join(validation_errors)
+        
+        # 3. Check container logs for critical errors
+        try:
+            logs = container.logs(tail=100).decode('utf-8', errors='ignore')
+            
+            # For database services, check for normal initialization patterns
+            db_config = self._get_database_config(config.image_tag)
+            if db_config:
+                log_patterns = db_config.get('log_patterns', {})
+                loading_patterns = log_patterns.get('loading_shards', []) + log_patterns.get('loading', [])
+                
+                if loading_patterns:
+                    for pattern in loading_patterns:
+                        if pattern.lower() in logs.lower():
+                            db_name = self._get_database_name(config.image_tag) or 'database'
+                            self.logger.info(f"{db_name} is loading data - this is normal and may take time")
+                            break
+            
+            # Common error patterns
+            error_patterns = [
+                'FATAL', 'CRITICAL', 'panic', 'segmentation fault',
+                'out of memory', 'OOM', 'cannot bind', 'address already in use',
+                'permission denied', 'access denied', 'failed to start'
+            ]
+            
+            found_errors = []
+            for pattern in error_patterns:
+                if pattern.lower() in logs.lower():
+                    found_errors.append(pattern)
+            
+            if found_errors:
+                validation_errors.append(f"Found critical errors in logs: {', '.join(found_errors)}")
+                # Don't fail immediately, but log it
+                self.logger.warning(f"Warning: Found error patterns in logs: {', '.join(found_errors)}")
+        except Exception as e:
+            self.logger.warning(f"Could not check container logs: {e}")
+        
+        # 4. Check resource usage (CPU, memory)
+        try:
+            stats = container.stats(stream=False)
+            
+            # Check memory usage
+            if 'memory_stats' in stats:
+                mem_usage = stats['memory_stats'].get('usage', 0)
+                mem_limit = stats['memory_stats'].get('limit', 1)
+                
+                if mem_limit > 0:
+                    mem_percent = (mem_usage / mem_limit) * 100.0
+                    if mem_percent > 95:
+                        validation_errors.append(f"Memory usage critical: {mem_percent:.1f}%")
+                    elif mem_percent > 80:
+                        self.logger.warning(f"Memory usage high: {mem_percent:.1f}%")
+            
+            # Check CPU usage (if available)
+            if 'cpu_stats' in stats and 'precpu_stats' in stats:
+                # CPU calculation would require more complex logic
+                # For now, just check if stats are available
+                pass
+                
+        except Exception as e:
+            self.logger.warning(f"Could not check resource usage: {e}")
+        
+        # 5. Check volumes mounting
+        try:
+            mounts = container.attrs.get('Mounts', [])
+            if config.volumes:
+                expected_volumes = len(config.volumes) if isinstance(config.volumes, (dict, list)) else 0
+                if len(mounts) < expected_volumes:
+                    validation_errors.append(f"Expected {expected_volumes} volume(s), found {len(mounts)}")
+        except Exception as e:
+            self.logger.warning(f"Could not verify volumes: {e}")
+        
+        # 6. Check response time (should be reasonable)
+        if response_time:
+            if response_time > 5.0:
+                validation_errors.append(f"Health check response time too slow: {response_time:.2f}s")
+            elif response_time > 2.0:
+                self.logger.warning(f"Health check response time slow: {response_time:.2f}s")
+        
+        # 7. Wait a bit and check again to ensure stability
+        time.sleep(2)
+        try:
+            container.reload()
+            if container.status != "running":
+                validation_errors.append(f"Container status changed to '{container.status}' after validation")
+                return False, "; ".join(validation_errors)
+        except Exception as e:
+            self.logger.warning(f"Could not re-check container status: {e}")
+        
+        # If we have critical errors, fail validation
+        if validation_errors:
+            return False, "; ".join(validation_errors)
+        
+        return True, "All validations passed"
 
     def _get_resource_limits(self, config: DeploymentConfig) -> dict:
         """Convert resource limits to Docker API format"""
@@ -1295,6 +2210,56 @@ class DockerPilotEnhanced:
                 pass
         
         return limits
+
+    def _normalize_volumes(self, volumes: Dict[str, str]) -> list:
+        """Convert volumes from config format to Docker API format.
+        
+        Docker Python API's containers.run() expects volumes as a list of strings
+        in the format: ['/host/path:/container/path', 'volume_name:/container/path']
+        
+        Supports:
+        - Named volumes: 'volume_name': '/container/path' -> ['volume_name:/container/path']
+        - Bind mounts: '/host/path': '/container/path' -> ['/host/path:/container/path']
+        - Already formatted as list: ['volume:/path'] -> unchanged
+        - Already formatted as dict with bind/mode: {'/host': {'bind': '/container', 'mode': 'rw'}} -> ['/host:/container:rw']
+        """
+        if not volumes:
+            return []
+        
+        # Handle case where volumes might already be a list (from previous normalization)
+        if isinstance(volumes, list):
+            return volumes
+        
+        # Handle case where volumes might not be a dict (defensive programming)
+        if not isinstance(volumes, dict):
+            self.logger.warning(f"Volumes is not a dict or list, got {type(volumes)}: {volumes}")
+            return []
+        
+        normalized = []
+        for key, value in volumes.items():
+            if isinstance(value, dict):
+                # Already in correct format with bind and mode
+                # Format: {'/host/path': {'bind': '/container/path', 'mode': 'rw'}}
+                if 'bind' in value:
+                    bind_path = value['bind']
+                    mode = value.get('mode', 'rw')
+                    normalized.append(f"{key}:{bind_path}:{mode}")
+                else:
+                    self.logger.warning(f"Volume dict for '{key}' missing 'bind', skipping: {value}")
+            elif isinstance(value, str):
+                # Check if it's a named volume (doesn't start with / or ./)
+                # Named volumes don't have leading slash in Docker
+                if not key.startswith('/') and not key.startswith('./') and not key.startswith('../'):
+                    # Named volume: format as 'volume_name:/container/path'
+                    normalized.append(f"{key}:{value}")
+                else:
+                    # Bind mount: format as '/host/path:/container/path'
+                    normalized.append(f"{key}:{value}")
+            else:
+                # Unknown format, log warning and skip
+                self.logger.warning(f"Unknown volume format for key '{key}': {type(value)} - {value}")
+        
+        return normalized
 
     def _should_run_parallel_tests(self) -> bool:
         """Determine if parallel tests should be run"""
@@ -1353,7 +2318,7 @@ class DockerPilotEnhanced:
         return error_rate < 0.05  # Accept if error rate < 5%
 
     def _record_deployment(self, deployment_id: str, config: DeploymentConfig, 
-                          deployment_type: str, success: bool, duration: timedelta):
+                          deployment_type: str, success: bool, duration: timedelta, target_env: str = None):
         """Record deployment in history"""
         deployment_record = {
             'id': deployment_id,
@@ -1364,6 +2329,10 @@ class DockerPilotEnhanced:
             'success': success,
             'duration_seconds': duration.total_seconds()
         }
+        
+        # Add environment information if provided
+        if target_env:
+            deployment_record['environment'] = target_env
         
         self.deployment_history.append(deployment_record)
         
@@ -1438,11 +2407,18 @@ class DockerPilotEnhanced:
 
     def create_cli_parser(self) -> argparse.ArgumentParser:
         """Create comprehensive CLI parser"""
+        # Import version from __init__
+        try:
+            from . import __version__
+        except ImportError:
+            __version__ = "Enhanced"
+        
         parser = argparse.ArgumentParser(
             description="Docker Pilot Enhanced - Professional Docker Management Tool",
             formatter_class=argparse.RawDescriptionHelpFormatter
         )
         
+        parser.add_argument('--version', action='version', version=f'DockerPilot {__version__}')
         parser.add_argument('--config', '-c', type=str, help='Configuration file path')
         parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
                           default='INFO', help='Logging level')
@@ -1463,11 +2439,16 @@ class DockerPilotEnhanced:
         images_parser = container_subparsers.add_parser('list-images', help='List Docker images')
         images_parser.add_argument('--all', '-a', action='store_true', help='Show all images')
         images_parser.add_argument('--format', choices=['table', 'json'], default='table')
+        images_parser.add_argument('--hide-untagged', action='store_true', help='Hide images without tags (dangling images)')
 
         # Remove image
         remove_img_parser = container_subparsers.add_parser('remove-image', help='Remove Docker image(s)')
         remove_img_parser.add_argument('name', help='Image name(s) or ID(s), comma-separated (e.g., image1:tag,image2:tag)')
         remove_img_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
+
+        # Prune dangling images
+        prune_img_parser = container_subparsers.add_parser('prune-images', help='Remove all dangling images (images without tags)')
+        prune_img_parser.add_argument('--dry-run', action='store_true', help='Show what would be removed without actually removing')
 
         
         # Container actions
@@ -1483,6 +2464,21 @@ class DockerPilotEnhanced:
         stop_remove_parser = container_subparsers.add_parser('stop-remove', help='Stop and remove container(s) in one operation')
         stop_remove_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated')
         stop_remove_parser.add_argument('--timeout', '-t', type=int, default=10, help='Timeout seconds')
+        
+        # Run new container
+        run_parser = container_subparsers.add_parser('run', help='Run a new container from image')
+        run_parser.add_argument('image', nargs='?', help='Docker image name/tag (e.g., nginx:latest)')
+        run_parser.add_argument('--name', '-n', help='Container name')
+        run_parser.add_argument('--port', '-p', action='append', help='Port mapping (format: container:host, e.g., 80:8080). Can be used multiple times')
+        run_parser.add_argument('--env', '-e', action='append', help='Environment variable (format: KEY=VALUE). Can be used multiple times')
+        run_parser.add_argument('--volume', '-v', action='append', help='Volume mapping (format: host:container or host:container:mode). Can be used multiple times')
+        run_parser.add_argument('--command', '-c', help='Command to run in container')
+        run_parser.add_argument('--restart', default='unless-stopped', choices=['no', 'on-failure', 'always', 'unless-stopped'], help='Restart policy')
+        run_parser.add_argument('--network', help='Network name or "host" for host network')
+        run_parser.add_argument('--privileged', action='store_true', help='Run container in privileged mode')
+        run_parser.add_argument('--cpu-limit', help='CPU limit (e.g., 1.5 for 1.5 CPUs)')
+        run_parser.add_argument('--memory-limit', '-m', help='Memory limit (e.g., 1g for 1GB, 512m for 512MB)')
+        run_parser.add_argument('--interactive', '--more', '-i', action='store_true', help='Interactive mode: ask for all parameters one by one')
         
         # Exec non-interactive
         exec_simple_parser = container_subparsers.add_parser('exec-simple', help='Execute command non-interactively')
@@ -1565,6 +2561,16 @@ class DockerPilotEnhanced:
 
         backup_restore_parser = backup_subparsers.add_parser('restore', help='Restore from backup')
         backup_restore_parser.add_argument('backup_path', help='Path to backup directory')
+        
+        # Container data backup (actual data from volumes)
+        backup_data_parser = backup_subparsers.add_parser('container-data', help='Backup container data (volumes)')
+        backup_data_parser.add_argument('container', help='Container name to backup')
+        backup_data_parser.add_argument('--path', '-p', help='Backup path (auto-generated if not provided)')
+        
+        # Container data restore
+        restore_data_parser = backup_subparsers.add_parser('restore-data', help='Restore container data from backup')
+        restore_data_parser.add_argument('container', help='Container name to restore data to')
+        restore_data_parser.add_argument('backup_path', help='Path to backup directory')
 
         # Configuration management
         config_parser = subparsers.add_parser('config', help='Configuration management')
@@ -1620,14 +2626,17 @@ class DockerPilotEnhanced:
         parser = self.create_cli_parser()
         args = parser.parse_args()
         
-        if not args.command:
+        # Check if we have a container action even if command is None (happens with subparsers)
+        has_container_action = hasattr(args, 'container_action') and args.container_action is not None
+        
+        if not args.command and not has_container_action:
             # Interactive mode
             self._run_interactive_menu()
             return
         
         # Execute CLI command
         try:
-            if args.command == 'container':
+            if args.command == 'container' or has_container_action:
                 self._handle_container_cli(args)
             elif args.command == 'monitor':
                 self._handle_monitor_cli(args)
@@ -1653,7 +2662,8 @@ class DockerPilotEnhanced:
                     sys.exit(1)
             elif args.command == 'promote':
                 config_path = getattr(args, 'config', None)
-                success = self.environment_promotion(args.source, args.target, config_path)
+                skip_backup = getattr(args, 'skip_backup', False)
+                success = self.environment_promotion(args.source, args.target, config_path, skip_backup)
                 if not success:
                     sys.exit(1)
             elif args.command == 'alerts':
@@ -1679,6 +2689,189 @@ class DockerPilotEnhanced:
             self.console.print(f"[red]❌ Command failed: {e}[/red]")
             sys.exit(1)
 
+    def _run_container_interactive(self, args):
+        """Interactive mode for running containers - asks for all parameters one by one"""
+        self.console.print("\n[bold cyan]🚀 Interactive Container Run Mode[/bold cyan]")
+        self.console.print("[dim]Press Enter to use default value or leave empty to skip[/dim]\n")
+        
+        # Image (required)
+        image_name = args.image if args.image else None
+        if not image_name:
+            image_name = Prompt.ask("Docker image name/tag", default="")
+            if not image_name:
+                self.console.print("[red]❌ Image name is required[/red]")
+                sys.exit(1)
+        
+        # Container name (required)
+        container_name = args.name if args.name else None
+        if not container_name:
+            container_name = Prompt.ask("Container name", default="")
+            if not container_name:
+                self.console.print("[red]❌ Container name is required[/red]")
+                sys.exit(1)
+        
+        # Port mappings
+        ports = {}
+        if args.port:
+            # Parse existing ports
+            for port_mapping in args.port:
+                if ':' in port_mapping:
+                    container_port, host_port = port_mapping.split(':')
+                    ports[container_port.strip()] = host_port.strip()
+        
+        self.console.print("\n[cyan]Port mappings (format: container:host, e.g., 80:8080)[/cyan]")
+        while True:
+            port_input = Prompt.ask("Port mapping (empty to finish)", default="").strip()
+            if not port_input:
+                break
+            if ':' in port_input:
+                try:
+                    container_port, host_port = port_input.split(':')
+                    ports[container_port.strip()] = host_port.strip()
+                    self.console.print(f"[green]✓ Added port mapping: {container_port} -> {host_port}[/green]")
+                except ValueError:
+                    self.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+            else:
+                self.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+        
+        # Environment variables
+        environment = {}
+        if args.env:
+            # Parse existing env vars
+            for env_var in args.env:
+                if '=' in env_var:
+                    key, value = env_var.split('=', 1)
+                    environment[key.strip()] = value.strip()
+        
+        self.console.print("\n[cyan]Environment variables (format: KEY=VALUE)[/cyan]")
+        while True:
+            env_input = Prompt.ask("Environment variable (empty to finish)", default="").strip()
+            if not env_input:
+                break
+            if '=' in env_input:
+                key, value = env_input.split('=', 1)
+                environment[key.strip()] = value.strip()
+                self.console.print(f"[green]✓ Added environment variable: {key}[/green]")
+            else:
+                self.console.print("[yellow]⚠️ Invalid format. Use KEY=VALUE[/yellow]")
+        
+        # Volumes
+        volumes = {}
+        if args.volume:
+            # Parse existing volumes
+            for volume_mapping in args.volume:
+                if ':' in volume_mapping:
+                    parts = volume_mapping.split(':')
+                    if len(parts) == 2:
+                        host_path, container_path = parts
+                        volumes[host_path.strip()] = container_path.strip()
+                    elif len(parts) == 3:
+                        host_path, container_path, mode = parts
+                        volumes[host_path.strip()] = {
+                            'bind': container_path.strip(),
+                            'mode': mode.strip()
+                        }
+        
+        self.console.print("\n[cyan]Volume mappings (format: host:container or host:container:mode)[/cyan]")
+        while True:
+            vol_input = Prompt.ask("Volume mapping (empty to finish)", default="").strip()
+            if not vol_input:
+                break
+            if ':' in vol_input:
+                parts = vol_input.split(':')
+                if len(parts) == 2:
+                    host_path, container_path = parts
+                    volumes[host_path.strip()] = container_path.strip()
+                    self.console.print(f"[green]✓ Added volume: {host_path} -> {container_path}[/green]")
+                elif len(parts) == 3:
+                    host_path, container_path, mode = parts
+                    volumes[host_path.strip()] = {
+                        'bind': container_path.strip(),
+                        'mode': mode.strip()
+                    }
+                    self.console.print(f"[green]✓ Added volume: {host_path} -> {container_path} ({mode})[/green]")
+                else:
+                    self.console.print("[yellow]⚠️ Invalid format. Use host:container or host:container:mode[/yellow]")
+            else:
+                self.console.print("[yellow]⚠️ Invalid format. Use host:container[/yellow]")
+        
+        # Command
+        command = args.command if args.command else None
+        if not command:
+            command = Prompt.ask("Command to run (empty for default)", default="").strip()
+            command = command if command else None
+        
+        # Restart policy
+        restart_policy = args.restart if args.restart else 'unless-stopped'
+        restart_policy = Prompt.ask("Restart policy", default=restart_policy, choices=['no', 'on-failure', 'always', 'unless-stopped'])
+        
+        # Network
+        network = args.network if args.network else None
+        if not network:
+            network = Prompt.ask("Network name (or 'host' for host network, empty for default)", default="").strip()
+            network = network if network else None
+        
+        # Privileged mode
+        privileged = args.privileged if args.privileged else False
+        if not privileged:
+            privileged = Confirm.ask("Run in privileged mode?", default=False)
+        
+        # CPU limit
+        cpu_limit = args.cpu_limit if args.cpu_limit else None
+        if not cpu_limit:
+            cpu_input = Prompt.ask("CPU limit (e.g., 1.5 for 1.5 CPUs, empty to skip)", default="").strip()
+            cpu_limit = cpu_input if cpu_input and cpu_input.lower() not in ['n', 'no'] else None
+        
+        # Memory limit
+        memory_limit = args.memory_limit if args.memory_limit else None
+        if not memory_limit:
+            memory_input = Prompt.ask("Memory limit (e.g., 1g for 1GB, 512m for 512MB, empty to skip)", default="").strip()
+            memory_limit = memory_input if memory_input and memory_input.lower() not in ['n', 'no'] else None
+        
+        # Summary
+        self.console.print("\n[bold cyan]📋 Configuration Summary:[/bold cyan]")
+        self.console.print(f"  Image: {image_name}")
+        self.console.print(f"  Container name: {container_name}")
+        if ports:
+            self.console.print(f"  Ports: {ports}")
+        if environment:
+            self.console.print(f"  Environment variables: {len(environment)} set")
+        if volumes:
+            self.console.print(f"  Volumes: {len(volumes)} mounted")
+        if command:
+            self.console.print(f"  Command: {command}")
+        self.console.print(f"  Restart policy: {restart_policy}")
+        if network:
+            self.console.print(f"  Network: {network}")
+        if privileged:
+            self.console.print(f"  Privileged mode: enabled")
+        if cpu_limit:
+            self.console.print(f"  CPU limit: {cpu_limit}")
+        if memory_limit:
+            self.console.print(f"  Memory limit: {memory_limit}")
+        
+        # Confirm
+        if not Confirm.ask("\n[bold]Proceed with container creation?[/bold]", default=True):
+            self.console.print("[yellow]❌ Cancelled by user[/yellow]")
+            sys.exit(0)
+        
+        # Run container
+        success = self.run_new_container(
+            image_name=image_name,
+            name=container_name,
+            ports=ports if ports else None,
+            command=command,
+            environment=environment if environment else None,
+            volumes=volumes if volumes else None,
+            restart_policy=restart_policy,
+            network=network,
+            privileged=privileged,
+            cpu_limit=cpu_limit,
+            memory_limit=memory_limit
+        )
+        if not success:
+            sys.exit(1)
+    
     def _handle_container_cli(self, args):
         """Handle container CLI commands with support for multiple targets"""
         if args.container_action == 'list':
@@ -1765,11 +2958,79 @@ class DockerPilotEnhanced:
                 # Interactive mode when no container name provided
                 self.view_container_logs(None, tail)
                     
-        elif args.container_action == 'run_image':
-            # This would need CLI parser setup for run_image - currently only supports interactive mode
-            self.console.print("[yellow]run_image is only available in interactive mode[/yellow]")
+        elif args.container_action == 'run':
+            # Check if interactive mode or missing required parameters
+            interactive = getattr(args, 'interactive', False)
+            missing_required = not args.image or not args.name
+            
+            if interactive or missing_required:
+                # Interactive mode: ask for all parameters
+                self._run_container_interactive(args)
+            else:
+                # Non-interactive mode: use provided arguments
+                ports = {}
+                if hasattr(args, 'port') and args.port:
+                    for port_mapping in args.port:
+                        try:
+                            if ':' in port_mapping:
+                                container_port, host_port = port_mapping.split(':')
+                                ports[container_port.strip()] = host_port.strip()
+                            else:
+                                self.console.print(f"[yellow]Invalid port format: {port_mapping}. Use container:host[/yellow]")
+                        except ValueError:
+                            self.console.print(f"[yellow]Invalid port format: {port_mapping}[/yellow]")
+                
+                # Parse environment variables
+                environment = {}
+                if hasattr(args, 'env') and args.env:
+                    for env_var in args.env:
+                        if '=' in env_var:
+                            key, value = env_var.split('=', 1)
+                            environment[key.strip()] = value.strip()
+                        else:
+                            self.console.print(f"[yellow]Invalid env format: {env_var}. Use KEY=VALUE[/yellow]")
+                
+                # Parse volumes
+                volumes = {}
+                if hasattr(args, 'volume') and args.volume:
+                    for volume_mapping in args.volume:
+                        if ':' in volume_mapping:
+                            parts = volume_mapping.split(':')
+                            if len(parts) == 2:
+                                # Simple format: host:container
+                                host_path, container_path = parts
+                                volumes[host_path.strip()] = container_path.strip()
+                            elif len(parts) == 3:
+                                # Format with mode: host:container:mode
+                                host_path, container_path, mode = parts
+                                volumes[host_path.strip()] = {
+                                    'bind': container_path.strip(),
+                                    'mode': mode.strip()
+                                }
+                            else:
+                                self.console.print(f"[yellow]Invalid volume format: {volume_mapping}[/yellow]")
+                        else:
+                            self.console.print(f"[yellow]Invalid volume format: {volume_mapping}[/yellow]")
+                
+                # Run container
+                success = self.run_new_container(
+                    image_name=args.image,
+                    name=args.name,
+                    ports=ports if ports else None,
+                    command=getattr(args, 'command', None),
+                    environment=environment if environment else None,
+                    volumes=volumes if volumes else None,
+                    restart_policy=getattr(args, 'restart', 'unless-stopped'),
+                    network=getattr(args, 'network', None),
+                    privileged=getattr(args, 'privileged', False),
+                    cpu_limit=getattr(args, 'cpu_limit', None),
+                    memory_limit=getattr(args, 'memory_limit', None)
+                )
+                if not success:
+                    sys.exit(1)
         elif args.container_action == 'list-images':
-            self.list_images(show_all=args.all, format_output=args.format)
+            hide_untagged = getattr(args, 'hide_untagged', False)
+            self.list_images(show_all=args.all, format_output=args.format, hide_untagged=hide_untagged)
         elif args.container_action == 'remove-image':
             # Parse multiple image names/IDs
             images = self._parse_multi_target(args.name)
@@ -1791,6 +3052,21 @@ class DockerPilotEnhanced:
                 sys.exit(1)
             else:
                 self.console.print("\n[green]✅ All operations completed successfully[/green]")
+        
+        elif args.container_action == 'prune-images':
+            dry_run = getattr(args, 'dry_run', False)
+            result = self.prune_dangling_images(dry_run=dry_run)
+            
+            if not dry_run and result['images_deleted'] > 0:
+                self.console.print(f"\n[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+            elif dry_run:
+                if result['images_deleted'] > 0:
+                    self.console.print(f"\n[cyan]ℹ️ Use without --dry-run to actually remove {result['images_deleted']} images[/cyan]")
+                else:
+                    self.console.print("\n[yellow]ℹ️ No dangling images to remove[/yellow]")
+            else:
+                if result['images_deleted'] == 0:
+                    self.console.print("\n[yellow]ℹ️ No dangling images were removed[/yellow]")
 
     def _handle_monitor_cli(self, args):
         """Handle monitoring CLI commands"""
@@ -1896,6 +3172,15 @@ class DockerPilotEnhanced:
             success = self.restore_deployment_state(args.backup_path)
             if not success:
                 sys.exit(1)
+        elif args.backup_action == 'container-data':
+            backup_path = getattr(args, 'path', None)
+            success = self.backup_container_data(args.container, backup_path)
+            if not success:
+                sys.exit(1)
+        elif args.backup_action == 'restore-data':
+            success = self.restore_container_data(args.container, args.backup_path)
+            if not success:
+                sys.exit(1)
         else:
             self.console.print("[yellow]⚠️ Unknown backup action[/yellow]")
 
@@ -1928,7 +3213,7 @@ class DockerPilotEnhanced:
             while True:
                 choice = Prompt.ask(
                     "\n[bold cyan]Docker Pilot - Interactive Menu[/bold cyan]\n"
-                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, stop-remove, exec, exec-simple, policy, run_image, logs, remove-image, json, build\n"
+                    "Container: list, list-img, start, stop, restart, remove, pause, unpause, stop-remove, exec, exec-simple, policy, run_image, logs, remove-image, prune-images, json, build\n"
                     "Monitor: monitor, live-monitor, stats, health-check\n"
                     "Deploy: quick-deploy, deploy-init, deploy-config, history, promote\n"
                     "System: validate, backup-create, backup-restore, alerts, test, pipeline, docs, checklist\n"
@@ -1945,7 +3230,8 @@ class DockerPilotEnhanced:
                     self.list_containers(show_all=True, format_output="table")
 
                 elif choice == "list-img":
-                    self.list_images(show_all=True, format_output="table")
+                    hide_untagged = Confirm.ask("Hide untagged images (dangling)?", default=False)
+                    self.list_images(show_all=True, format_output="table", hide_untagged=hide_untagged)
 
                 elif choice in ("start", "stop", "restart", "remove", "pause", "unpause"):
                     self.list_containers()
@@ -2049,27 +3335,101 @@ class DockerPilotEnhanced:
                 elif choice == "run_image":
                     image_name = Prompt.ask("Image name (e.g., nginx:latest)")
                     container_name = Prompt.ask("Container name")
-                    ports_input = Prompt.ask("Port mapping (format: host:container, e.g., 8080:80, empty for none)", default="").strip()
                     
-                    # Parse port mapping
+                    # Port mapping
                     ports = {}
+                    ports_input = Prompt.ask("Port mapping (format: container:host, e.g., 80:8080, or multiple: 80:8080,443:8443, empty for none)", default="").strip()
                     if ports_input:
                         try:
-                            host_port, container_port = ports_input.split(":")
-                            ports = {container_port: host_port}
+                            # Support multiple ports: "80:8080,443:8443"
+                            for port_pair in ports_input.split(','):
+                                port_pair = port_pair.strip()
+                                if ':' in port_pair:
+                                    container_port, host_port = port_pair.split(':')
+                                    ports[container_port.strip()] = host_port.strip()
                         except ValueError:
-                            self.console.print("[red]Invalid port format. Use host:container (e.g., 8080:80)[/red]")
+                            self.console.print("[red]Invalid port format. Use container:host (e.g., 80:8080)[/red]")
                             continue
+                    
+                    # Environment variables
+                    environment = {}
+                    if Confirm.ask("Add environment variables?", default=False):
+                        while True:
+                            env_input = Prompt.ask("Environment variable (KEY=VALUE, empty to finish)", default="").strip()
+                            if not env_input:
+                                break
+                            if '=' in env_input:
+                                key, value = env_input.split('=', 1)
+                                environment[key.strip()] = value.strip()
+                            else:
+                                self.console.print("[yellow]Invalid format. Use KEY=VALUE[/yellow]")
+                    
+                    # Volumes
+                    volumes = {}
+                    if Confirm.ask("Add volume mappings?", default=False):
+                        while True:
+                            vol_input = Prompt.ask("Volume mapping (host:container or host:container:mode, empty to finish)", default="").strip()
+                            if not vol_input:
+                                break
+                            if ':' in vol_input:
+                                parts = vol_input.split(':')
+                                if len(parts) == 2:
+                                    # Simple format: host:container
+                                    host_path, container_path = parts
+                                    volumes[host_path.strip()] = container_path.strip()
+                                elif len(parts) == 3:
+                                    # Format with mode: host:container:mode
+                                    host_path, container_path, mode = parts
+                                    volumes[host_path.strip()] = {
+                                        'bind': container_path.strip(),
+                                        'mode': mode.strip()
+                                    }
+                                else:
+                                    self.console.print("[yellow]Invalid format. Use host:container or host:container:mode[/yellow]")
+                            else:
+                                self.console.print("[yellow]Invalid format. Use host:container[/yellow]")
                     
                     # Optional command
                     command = Prompt.ask("Command to run (empty for default)", default="").strip()
                     command = command if command else None
                     
-                    success = self.container_operation('run_image', container_name, 
-                                                       image_name=image_name, 
-                                                       name=container_name,
-                                                       ports=ports, 
-                                                       command=command)
+                    # Restart policy
+                    restart_policy = Prompt.ask("Restart policy (no/on-failure/always/unless-stopped)", default="unless-stopped")
+                    
+                    # Network
+                    network = None
+                    if Confirm.ask("Use custom network?", default=False):
+                        network = Prompt.ask("Network name (or 'host' for host network)", default="")
+                        network = network if network else None
+                    
+                    # Privileged mode
+                    privileged = Confirm.ask("Run in privileged mode?", default=False)
+                    
+                    # Resource limits
+                    cpu_limit = None
+                    if Confirm.ask("Set CPU limit?", default=False):
+                        cpu_limit = Prompt.ask("CPU limit (e.g., 1.5 for 1.5 CPUs)", default="")
+                        cpu_limit = cpu_limit if cpu_limit else None
+                    
+                    memory_limit = None
+                    if Confirm.ask("Set memory limit?", default=False):
+                        memory_limit = Prompt.ask("Memory limit (e.g., 1g for 1GB, 512m for 512MB)", default="")
+                        memory_limit = memory_limit if memory_limit else None
+                    
+                    # Run container
+                    success = self.run_new_container(
+                        image_name=image_name,
+                        name=container_name,
+                        ports=ports if ports else None,
+                        command=command,
+                        environment=environment if environment else None,
+                        volumes=volumes if volumes else None,
+                        restart_policy=restart_policy,
+                        network=network,
+                        privileged=privileged,
+                        cpu_limit=cpu_limit,
+                        memory_limit=memory_limit
+                    )
                     if not success:
                         self.console.print("[red]Failed to run container[/red]")
                 
@@ -2119,6 +3479,23 @@ class DockerPilotEnhanced:
                         self.console.print("[yellow]⚠️ Some operations failed[/yellow]")
                     else:
                         self.console.print("[green]✅ All operations completed successfully[/green]")
+
+                elif choice == "prune-images":
+                    self.console.print("[cyan]🧹 Cleaning up dangling images (images without tags)...[/cyan]")
+                    dry_run = Confirm.ask("Dry run (show what would be removed)?", default=True)
+                    result = self.prune_dangling_images(dry_run=dry_run)
+                    
+                    if not dry_run and result['images_deleted'] > 0:
+                        self.console.print(f"[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+                    elif dry_run:
+                        if result['images_deleted'] > 0:
+                            proceed = Confirm.ask("Proceed with removal?", default=False)
+                            if proceed:
+                                result = self.prune_dangling_images(dry_run=False)
+                                if result['images_deleted'] > 0:
+                                    self.console.print(f"[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+                        else:
+                            self.console.print("[yellow]ℹ️ No dangling images to remove[/yellow]")
 
                 elif choice == "quick-deploy":
                     dockerfile_path = Prompt.ask("Dockerfile directory path", default=".")
@@ -2621,8 +3998,15 @@ class DockerPilotEnhanced:
             self.logger.error(f"Failed to save test report: {e}")
 
     def environment_promotion(self, source_env: str, target_env: str, 
-                            config_path: str = None) -> bool:
-        """Promote deployment between environments (dev -> staging -> prod)"""
+                            config_path: str = None, skip_backup: bool = False) -> bool:
+        """Promote deployment between environments (dev -> staging -> prod)
+        
+        Args:
+            source_env: Source environment (dev/staging)
+            target_env: Target environment (staging/prod)
+            config_path: Path to deployment config (optional)
+            skip_backup: Skip data backup before deployment (faster but risky)
+        """
         self.console.print(f"[cyan]Promoting from {source_env} to {target_env}...[/cyan]")
         
         # Environment-specific configurations
@@ -2663,21 +4047,79 @@ class DockerPilotEnhanced:
             # Apply environment-specific settings
             target_config = env_configs[target_env]
             
-            # Update image tag
-            base_image = config['deployment']['image_tag'].split(':')[0]
-            config['deployment']['image_tag'] = f"{base_image}:latest{target_config['image_tag_suffix']}"
+            # Keep original image tag for all environments
+            # Don't modify image tags during promotion - same image should be used across environments
+            # Environment-specific tags should be set manually in deployment configs if needed
+            original_image_tag = config['deployment']['image_tag']
+            config['deployment']['image_tag'] = original_image_tag
+            self.logger.info(f"Using original image tag for promotion: {original_image_tag}")
             
             # Update resources
             config['deployment']['cpu_limit'] = target_config['resources']['cpu']
             config['deployment']['memory_limit'] = target_config['resources']['memory']
+            
+            # For STAGING environment, check if container already exists in PROD
+            # If it does, don't create duplicate - just save config and mark as promoted
+            original_container_name = config['deployment']['container_name']
+            if target_env == 'staging':
+                # Check if container with base name or variants already exists (likely in PROD)
+                existing_prod_container = None
+                try:
+                    existing_prod_container = self.client.containers.get(original_container_name)
+                except docker.errors.NotFound:
+                    # Also check for blue/green variants
+                    for suffix in ['_blue', '_green']:
+                        try:
+                            existing_prod_container = self.client.containers.get(f"{original_container_name}{suffix}")
+                            break
+                        except docker.errors.NotFound:
+                            pass
+                
+                if existing_prod_container and existing_prod_container.status == 'running':
+                    # Container already exists in PROD - don't create duplicate for STAGING
+                    # Just save config and record promotion without deploying
+                    self.console.print(f"[yellow]⚠️ Container '{original_container_name}' already exists in PROD[/yellow]")
+                    self.console.print(f"[cyan]Saving STAGING configuration without creating new container...[/cyan]")
+                    
+                    # Save config for staging (will be used for future deployments)
+                    container_name = config['deployment']['container_name']
+                    image_tag = config['deployment']['image_tag']
+                    config_dir = Path(config_path).parent
+                    target_config_path = config_dir / f'deployment-{target_env}.yml'
+                    with open(target_config_path, 'w', encoding='utf-8') as f:
+                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+                    self.logger.info(f"Saved deployment config for {target_env} environment to {target_config_path}")
+                    
+                    # Record promotion without deploying
+                    deployment_id = f"promote_{source_env}_to_{target_env}_{int(time.time())}"
+                    duration = timedelta(seconds=1)
+                    
+                    # Create a deployment record for staging
+                    deployment_config = DeploymentConfig(**config['deployment'])
+                    self._record_deployment(deployment_id, deployment_config, f'promotion-{target_env}', True, duration, target_env=target_env)
+                    
+                    self.console.print(f"[green]✓ STAGING configuration saved. Container already running in PROD, no new deployment needed.[/green]")
+                    return True
             
             # Run pre-promotion checks
             if not self._run_pre_promotion_checks(source_env, target_env):
                 self.console.print("[red]Pre-promotion checks failed[/red]")
                 return False
             
+            # Normalize deployment config to ensure all fields are in correct format
+            deployment = config['deployment']
+            # Ensure volumes is a dict
+            if 'volumes' not in deployment or not isinstance(deployment.get('volumes'), dict):
+                deployment['volumes'] = {}
+            # Ensure port_mapping is a dict
+            if 'port_mapping' not in deployment or not isinstance(deployment.get('port_mapping'), dict):
+                deployment['port_mapping'] = {}
+            # Ensure environment is a dict
+            if 'environment' not in deployment or not isinstance(deployment.get('environment'), dict):
+                deployment['environment'] = {}
+            
             # Execute deployment
-            deployment_config = DeploymentConfig(**config['deployment'])
+            deployment_config = DeploymentConfig(**deployment)
             build_config = config.get('build', {})
             
             # Use appropriate deployment strategy based on target environment
@@ -2691,6 +4133,38 @@ class DockerPilotEnhanced:
             if success:
                 # Run post-promotion validation
                 if self._run_post_promotion_validation(target_env, deployment_config):
+                    # Save deployment config for target environment
+                    # Extract container name from config
+                    container_name = config['deployment']['container_name']
+                    image_tag = config['deployment']['image_tag']
+                    
+                    # Save config to unified deployment directory structure
+                    # Save directly next to source config
+                    config_dir = Path(config_path).parent
+                    target_config_path = config_dir / f'deployment-{target_env}.yml'
+                    with open(target_config_path, 'w', encoding='utf-8') as f:
+                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+                    self.logger.info(f"Saved deployment config for {target_env} environment to {target_config_path}")
+                    
+                    # Update metadata.json if it exists
+                    metadata_path = config_dir / 'metadata.json'
+                    if metadata_path.exists():
+                        try:
+                            with open(metadata_path, 'r', encoding='utf-8') as f:
+                                metadata = json.load(f)
+                            metadata['last_updated'] = datetime.now().isoformat()
+                            metadata[f'env_{target_env}_config'] = str(target_config_path)
+                            with open(metadata_path, 'w', encoding='utf-8') as f:
+                                json.dump(metadata, f, indent=2)
+                            self.logger.info(f"Updated metadata.json with {target_env} config path")
+                        except Exception as e:
+                            self.logger.warning(f"Could not update metadata.json: {e}")
+                    
+                    # Record deployment with environment information
+                    deployment_id = f"promote_{source_env}_to_{target_env}_{int(time.time())}"
+                    duration = timedelta(seconds=5)  # Approximate duration
+                    self._record_deployment(deployment_id, deployment_config, f'promotion-{target_env}', True, duration, target_env=target_env)
+                    
                     self.console.print(f"[green]Successfully promoted to {target_env}[/green]")
                     return True
                 else:
@@ -2908,6 +4382,896 @@ class DockerPilotEnhanced:
             
         except Exception as e:
             self.logger.error(f"Failed to generate documentation: {e}")
+            return False
+
+    def _check_sudo_required_for_backup(self, container_name: str) -> tuple[bool, list[str]]:
+        """Check if backup will require sudo access
+        
+        Returns:
+            tuple: (requires_sudo: bool, privileged_paths: list[str])
+        """
+        try:
+            container = self.client.containers.get(container_name)
+            mounts = container.attrs.get('Mounts', [])
+            
+            privileged_paths = []
+            
+            for mount in mounts:
+                source = mount.get('Source')
+                if source:
+                    # Check if path requires sudo
+                    if (str(source).startswith('/var/lib/docker/volumes/') or
+                        str(source).startswith('/var/lib/docker/') or
+                        str(source).startswith('/root/') or
+                        not os.access(source, os.R_OK)):
+                        privileged_paths.append(source)
+            
+            return len(privileged_paths) > 0, privileged_paths
+            
+        except Exception as e:
+            self.logger.warning(f"Could not check sudo requirements: {e}")
+            return False, []
+    
+    def backup_container_data(self, container_name: str, backup_path: str = None) -> bool:
+        """
+        Backup ALL data from container volumes (actual data, not just metadata).
+        Creates a complete backup of all volumes mounted to the container.
+        
+        Args:
+            container_name: Name of the container to backup
+            backup_path: Optional path for backup (auto-generated if not provided)
+        
+        Returns:
+            bool: True if backup successful
+        """
+        try:
+            container = self.client.containers.get(container_name)
+            
+            if not backup_path:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = f"backup_{container_name}_{timestamp}"
+            
+            backup_dir = Path(backup_path)
+            backup_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Pre-check: will we need sudo?
+            requires_sudo, privileged_paths = self._check_sudo_required_for_backup(container_name)
+            
+            if requires_sudo:
+                self.console.print(f"[yellow]⚠️  BACKUP REQUIRES SUDO ACCESS[/yellow]")
+                self.console.print(f"[yellow]Privileged paths ({len(privileged_paths)}):[/yellow]")
+                for path in privileged_paths[:3]:  # Show first 3
+                    self.console.print(f"[dim]  - {path}[/dim]")
+                if len(privileged_paths) > 3:
+                    self.console.print(f"[dim]  ... and {len(privileged_paths) - 3} more[/dim]")
+                self.console.print(f"[yellow]You may be prompted for sudo password during backup.[/yellow]")
+                self.console.print(f"[yellow]To skip backup: use --skip-backup flag[/yellow]")
+                
+                # Give user 3 seconds to cancel
+                import sys
+                for i in range(3, 0, -1):
+                    sys.stdout.write(f"\rContinuing in {i}s... (Ctrl+C to cancel)")
+                    sys.stdout.flush()
+                    time.sleep(1)
+                sys.stdout.write("\r" + " " * 50 + "\r")  # Clear line
+            
+            self.console.print(f"[cyan]📦 Creating data backup for container '{container_name}'...[/cyan]")
+            
+            # Get container mounts
+            mounts = container.attrs.get('Mounts', [])
+            
+            if not mounts:
+                self.console.print(f"[yellow]⚠️ No volumes mounted to container '{container_name}'[/yellow]")
+                return True  # Not an error, just no data to backup
+            
+            # System paths that should be skipped during backup (they can hang or are too large)
+            system_paths_to_skip = [
+                '/lib/modules',
+                '/proc',
+                '/sys',
+                '/dev',
+                '/run',
+                '/tmp',
+                '/var/run',
+                '/boot',
+            ]
+            
+            # Backup each volume
+            backed_up_volumes = []
+            for mount in mounts:
+                # Check for cancellation before each mount backup
+                if self._check_cancel_flag(container_name):
+                    self.logger.warning(f"Backup cancelled by user for {container_name}")
+                    self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                    return False
+                
+                volume_name = mount.get('Name')
+                mount_point = mount.get('Destination')  # Path inside container
+                source = mount.get('Source')  # Path on host (for bind mounts)
+                
+                # Skip system paths
+                if source:
+                    source_path = Path(source)
+                    # Check if source is a system path to skip
+                    skip_mount = False
+                    for system_path in system_paths_to_skip:
+                        if str(source_path) == system_path or str(source_path).startswith(system_path + '/'):
+                            self.logger.warning(f"Skipping system bind mount: {source} -> {mount_point}")
+                            self.console.print(f"[yellow]⚠️ Skipping system bind mount '{source}' (system path)[/yellow]")
+                            skip_mount = True
+                            break
+                    
+                    if skip_mount:
+                        continue
+                
+                if volume_name:
+                    # Named volume - backup using Docker container (no sudo needed!)
+                    self.console.print(f"[cyan]Backing up named volume: {volume_name} -> {mount_point}[/cyan]")
+                    try:
+                        backup_file = backup_dir / f"{volume_name}.tar.gz"
+                        
+                        # Use Docker to backup volume (runs as root inside container)
+                        # This avoids permission issues without requiring sudo
+                        success = self._backup_volume_using_docker(volume_name, backup_file, container_name)
+                        
+                        # Check for cancellation after backup
+                        if self._check_cancel_flag(container_name):
+                            self.logger.warning(f"Backup cancelled by user for {container_name}")
+                            self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                            return False
+                        
+                        if success:
+                            backed_up_volumes.append({
+                                'type': 'named_volume',
+                                'name': volume_name,
+                                'mount_point': mount_point,
+                                'backup_file': str(backup_file),
+                                'size': backup_file.stat().st_size if backup_file.exists() else 0
+                            })
+                            self.console.print(f"[green]✅ Backed up volume '{volume_name}' to {backup_file}[/green]")
+                        else:
+                            self.logger.warning(f"Failed to backup volume {volume_name}, continuing...")
+                            self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}', continuing...[/yellow]")
+                            # Don't return False - continue with other volumes
+                    except Exception as e:
+                        self.logger.error(f"Failed to backup volume {volume_name}: {e}")
+                        self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}': {e}, continuing...[/yellow]")
+                        # Don't return False - continue with other volumes
+                
+                elif source:
+                    # Bind mount - backup using Docker container (faster and no sudo needed for many paths)
+                    self.console.print(f"[cyan]Backing up bind mount: {source} -> {mount_point}[/cyan]")
+                    try:
+                        if Path(source).exists():
+                            # Create safe filename from path
+                            safe_name = source.replace('/', '_').replace('\\', '_').strip('_')
+                            backup_file = backup_dir / f"bind_{safe_name}.tar.gz"
+                            
+                            # Use Docker container for backup (faster, no sudo needed, better for large directories)
+                            success = self._backup_bind_mount_using_docker(source, backup_file, container_name)
+                            
+                            # Check for cancellation after backup
+                            if self._check_cancel_flag(container_name):
+                                self.logger.warning(f"Backup cancelled by user for {container_name}")
+                                self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                                return False
+                            
+                            if success:
+                                backed_up_volumes.append({
+                                    'type': 'bind_mount',
+                                    'source': source,
+                                    'mount_point': mount_point,
+                                    'backup_file': str(backup_file),
+                                    'size': backup_file.stat().st_size if backup_file.exists() else 0
+                                })
+                                self.console.print(f"[green]✅ Backed up bind mount '{source}' to {backup_file}[/green]")
+                            else:
+                                self.logger.warning(f"Failed to backup bind mount {source}, continuing...")
+                                self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
+                                # Don't return False - continue with other volumes
+                        else:
+                            self.logger.warning(f"Bind mount source does not exist: {source}")
+                            self.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
+                    except Exception as e:
+                        self.logger.error(f"Failed to backup bind mount {source}: {e}")
+                        self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
+                        # Don't return False - continue with other volumes
+            
+            # Save backup metadata
+            backup_metadata = {
+                'container_name': container_name,
+                'backup_time': datetime.now().isoformat(),
+                'container_image': container.image.tags[0] if container.image.tags else container.image.id,
+                'volumes': backed_up_volumes,
+                'total_size': sum(v.get('size', 0) for v in backed_up_volumes)
+            }
+            
+            metadata_file = backup_dir / 'backup_metadata.json'
+            with open(metadata_file, 'w') as f:
+                json.dump(backup_metadata, f, indent=2)
+            
+            total_size_mb = backup_metadata['total_size'] / (1024 * 1024)
+            self.console.print(f"[bold green]✅ Data backup completed![/bold green]")
+            self.console.print(f"[green]Backup location: {backup_path}[/green]")
+            self.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
+            self.console.print(f"[green]Volumes backed up: {len(backed_up_volumes)}[/green]")
+            
+            return True
+            
+        except docker.errors.NotFound:
+            self.console.print(f"[red]❌ Container '{container_name}' not found[/red]")
+            return False
+        except Exception as e:
+            self.logger.error(f"Container data backup failed: {e}")
+            self.console.print(f"[red]❌ Backup failed: {e}[/red]")
+            return False
+    
+    def _backup_volume_using_docker(self, volume_name: str, backup_file: Path, container_name: str = None) -> bool:
+        """Backup Docker volume using a temporary container (no sudo needed!)
+        
+        This method uses Docker itself to backup volumes, avoiding permission issues.
+        The container runs as root and can access the volume data.
+        
+        Args:
+            volume_name: Name of the Docker volume to backup
+            backup_file: Path to the backup file to create
+            container_name: Container name for cancel flag checking
+        """
+        try:
+            import subprocess
+            import signal
+            
+            # Get current user UID and GID for ownership fix
+            uid = os.getuid()
+            gid = os.getgid()
+            
+            # Use docker run to create tar backup of volume
+            # This runs as root inside container, so no permission issues
+            # We also fix ownership of the backup file
+            process = subprocess.Popen(
+                [
+                    'docker', 'run', '--rm',
+                    '-v', f'{volume_name}:/volume:ro',  # Mount volume as read-only
+                    '-v', f'{backup_file.parent.absolute()}:/backup',  # Mount backup dir
+                    'alpine:latest',  # Lightweight image
+                    'sh', '-c',
+                    f'tar -czf /backup/{backup_file.name} -C /volume . 2>/dev/null'
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait with periodic cancel checks
+            timeout = 600  # 10 minutes timeout (large volumes like influxdb2)
+            start_time = time.time()
+            check_interval = 2  # Check cancel flag every 2 seconds
+            
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    self.logger.error(f"Volume backup timed out for {volume_name}")
+                    return False
+                
+                # Check for cancellation
+                if container_name and self._check_cancel_flag(container_name):
+                    self.logger.warning(f"Backup cancelled during volume backup: {volume_name}")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False
+                
+                # Check if process finished
+                if process.poll() is not None:
+                    break
+                
+                # Wait a bit before next check
+                time.sleep(check_interval)
+            
+            # Get result
+            stdout, stderr = process.communicate()
+            returncode = process.returncode
+            
+            # Fix ownership of backup file after container finishes
+            if returncode == 0:
+                if backup_file.exists():
+                    try:
+                        # Use sudo to fix ownership if file is owned by root
+                        subprocess.run(['sudo', 'chown', f'{uid}:{gid}', str(backup_file)], 
+                                     capture_output=True, timeout=10, check=False)
+                    except:
+                        self.logger.warning(f"Could not fix ownership of {backup_file} - may require manual chown")
+                
+                self.logger.info(f"Volume {volume_name} backed up successfully using Docker")
+                return True
+            else:
+                # Log stderr but don't fail on socket warnings
+                if stderr and 'socket ignored' not in stderr:
+                    self.logger.warning(f"Docker volume backup warnings: {stderr}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Docker volume backup failed: {e}")
+            return False
+    
+    def _backup_bind_mount_using_docker(self, source_path: str, backup_file: Path, container_name: str = None) -> bool:
+        """Backup bind mount directory using a temporary Docker container (no sudo needed!)
+        
+        This method uses Docker container to backup directories, which is faster and avoids
+        permission issues. The container runs as root and can access the directory data.
+        
+        Args:
+            source_path: Path to the directory on host to backup
+            backup_file: Path to the backup file to create
+            container_name: Container name for cancel flag checking
+        """
+        try:
+            import subprocess
+            
+            source = Path(source_path)
+            if not source.exists():
+                self.logger.warning(f"Source path does not exist: {source_path}")
+                return False
+            
+            # Get current user UID and GID for ownership fix
+            uid = os.getuid()
+            gid = os.getgid()
+            
+            # Use docker run to create tar backup of directory
+            # This runs as root inside container, so no permission issues
+            # Mount the parent directory and backup the child directory name
+            source_parent = str(source.parent.absolute())
+            source_name = source.name
+            
+            process = subprocess.Popen(
+                [
+                    'docker', 'run', '--rm',
+                    '-v', f'{source_parent}:/source:ro',  # Mount parent dir as read-only
+                    '-v', f'{backup_file.parent.absolute()}:/backup',  # Mount backup dir
+                    'alpine:latest',  # Lightweight image
+                    'sh', '-c',
+                    f'tar -czf /backup/{backup_file.name} -C /source {source_name} 2>/dev/null || true'
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait with periodic cancel checks
+            timeout = 600  # 10 minutes timeout (large directories like influxdb)
+            start_time = time.time()
+            check_interval = 2  # Check cancel flag every 2 seconds
+            
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    self.logger.error(f"Bind mount backup timed out for {source_path}")
+                    return False
+                
+                # Check for cancellation
+                if container_name and self._check_cancel_flag(container_name):
+                    self.logger.warning(f"Backup cancelled during bind mount backup: {source_path}")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False
+                
+                # Check if process finished
+                if process.poll() is not None:
+                    break
+                
+                # Wait a bit before next check
+                time.sleep(check_interval)
+            
+            # Get result
+            stdout, stderr = process.communicate()
+            returncode = process.returncode
+            
+            # Fix ownership of backup file after container finishes
+            if returncode == 0 and backup_file.exists():
+                try:
+                    # Use sudo to fix ownership if file is owned by root
+                    subprocess.run(['sudo', 'chown', f'{uid}:{gid}', str(backup_file)], 
+                                 capture_output=True, timeout=10, check=False)
+                except:
+                    self.logger.warning(f"Could not fix ownership of {backup_file} - may require manual chown")
+                
+                self.logger.info(f"Bind mount {source_path} backed up successfully using Docker")
+                return True
+            else:
+                # If Docker method failed, fall back to direct tar with timeout
+                self.logger.info(f"Docker backup method failed, falling back to direct tar for {source_path}")
+                return self._backup_directory(source_path, backup_file, container_name)
+                
+        except Exception as e:
+            self.logger.error(f"Docker bind mount backup failed: {e}, falling back to direct method")
+            return self._backup_directory(source_path, backup_file, container_name)
+    
+    def _backup_directory(self, source_path: str, backup_file: Path, container_name: str = None) -> bool:
+        """Backup a directory to tar.gz file using tar command with timeout
+        
+        Uses sudo for paths that require elevated privileges (like /var/lib/docker/volumes/).
+        Uses tar command instead of tarfile module to avoid hanging on large directories.
+        """
+        try:
+            import subprocess
+            import threading
+            
+            source = Path(source_path)
+            if not source.exists():
+                self.logger.warning(f"Source path does not exist: {source_path}")
+                return False
+            
+            # Check if path requires sudo (Docker volume paths or system paths)
+            requires_sudo = (
+                str(source_path).startswith('/var/lib/docker/volumes/') or
+                str(source_path).startswith('/var/lib/docker/') or
+                str(source_path).startswith('/root/') or
+                not os.access(source_path, os.R_OK)  # Check if we can read without sudo
+            )
+            
+            timeout = 600  # 10 minutes timeout for large directories
+            tar_cmd = ['tar', '-czf', str(backup_file), '-C', str(source.parent), source.name]
+            
+            if requires_sudo:
+                tar_cmd = ['sudo'] + tar_cmd
+                self.logger.info(f"Using sudo for backup of privileged path: {source_path}")
+            else:
+                self.logger.info(f"Using direct tar for backup of: {source_path}")
+            
+            # Use Popen for better cancellation support
+            process = subprocess.Popen(
+                tar_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait with periodic cancel checks
+            start_time = time.time()
+            check_interval = 2  # Check cancel flag every 2 seconds
+            
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    self.logger.error(f"Backup timed out for {source_path}")
+                    return False
+                
+                # Check for cancellation
+                if container_name and self._check_cancel_flag(container_name):
+                    self.logger.warning(f"Backup cancelled during directory backup: {source_path}")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False
+                
+                # Check if process finished
+                if process.poll() is not None:
+                    break
+                
+                # Wait a bit before next check
+                time.sleep(check_interval)
+            
+            # Get result
+            stdout, stderr = process.communicate()
+            returncode = process.returncode
+            
+            if returncode == 0:
+                if requires_sudo and backup_file.exists():
+                    # Fix ownership of created backup file
+                    subprocess.run(['sudo', 'chown', f"{os.getuid()}:{os.getgid()}", str(backup_file)], 
+                                 capture_output=True, timeout=10, check=False)
+                return True
+            else:
+                error_msg = stderr.strip() if stderr else "Unknown error"
+                self.logger.error(f"Tar backup failed for {source_path}: {error_msg}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Failed to create tar backup: {e}")
+            return False
+    
+    def restore_container_data(self, container_name: str, backup_path: str) -> bool:
+        """
+        Restore container data from backup.
+        
+        Args:
+            container_name: Name of the container to restore data to
+            backup_path: Path to backup directory
+        
+        Returns:
+            bool: True if restore successful
+        """
+        try:
+            backup_dir = Path(backup_path)
+            if not backup_dir.exists():
+                self.console.print(f"[red]❌ Backup directory not found: {backup_path}[/red]")
+                return False
+            
+            metadata_file = backup_dir / 'backup_metadata.json'
+            if not metadata_file.exists():
+                self.console.print(f"[red]❌ Backup metadata not found: {metadata_file}[/red]")
+                return False
+            
+            with open(metadata_file, 'r') as f:
+                backup_metadata = json.load(f)
+            
+            self.console.print(f"[cyan]📦 Restoring data for container '{container_name}' from backup...[/cyan]")
+            self.console.print(f"[cyan]Backup created: {backup_metadata.get('backup_time', 'unknown')}[/cyan]")
+            
+            container = self.client.containers.get(container_name)
+            mounts = container.attrs.get('Mounts', [])
+            
+            # Restore each volume
+            for volume_info in backup_metadata.get('volumes', []):
+                backup_file = Path(volume_info['backup_file'])
+                if not backup_file.exists():
+                    # Try relative to backup_dir
+                    backup_file = backup_dir / backup_file.name
+                
+                if not backup_file.exists():
+                    self.console.print(f"[yellow]⚠️ Backup file not found: {volume_info['backup_file']}[/yellow]")
+                    continue
+                
+                if volume_info['type'] == 'named_volume':
+                    volume_name = volume_info['name']
+                    self.console.print(f"[cyan]Restoring named volume: {volume_name}[/cyan]")
+                    
+                    try:
+                        volume = self.client.volumes.get(volume_name)
+                        volume_path = volume.attrs['Mountpoint']
+                        
+                        # Extract backup to volume
+                        self._restore_from_tar(backup_file, volume_path)
+                        self.console.print(f"[green]✅ Restored volume '{volume_name}'[/green]")
+                    except Exception as e:
+                        self.logger.error(f"Failed to restore volume {volume_name}: {e}")
+                        self.console.print(f"[red]❌ Failed to restore volume '{volume_name}': {e}[/red]")
+                        return False
+                
+                elif volume_info['type'] == 'bind_mount':
+                    source_path = volume_info['source']
+                    self.console.print(f"[cyan]Restoring bind mount: {source_path}[/cyan]")
+                    
+                    try:
+                        if Path(source_path).exists():
+                            # Backup existing data first
+                            existing_backup = Path(source_path).parent / f"{Path(source_path).name}.backup_{int(time.time())}"
+                            if Path(source_path).is_dir():
+                                import shutil
+                                shutil.move(str(source_path), str(existing_backup))
+                                Path(source_path).mkdir(parents=True, exist_ok=True)
+                            
+                            # Extract backup
+                            self._restore_from_tar(backup_file, source_path)
+                            self.console.print(f"[green]✅ Restored bind mount '{source_path}'[/green]")
+                        else:
+                            self.console.print(f"[yellow]⚠️ Bind mount path does not exist: {source_path}[/yellow]")
+                    except Exception as e:
+                        self.logger.error(f"Failed to restore bind mount {source_path}: {e}")
+                        self.console.print(f"[red]❌ Failed to restore bind mount '{source_path}': {e}[/red]")
+                        return False
+            
+            self.console.print(f"[bold green]✅ Data restore completed![/bold green]")
+            return True
+            
+        except docker.errors.NotFound:
+            self.console.print(f"[red]❌ Container '{container_name}' not found[/red]")
+            return False
+        except Exception as e:
+            self.logger.error(f"Container data restore failed: {e}")
+            self.console.print(f"[red]❌ Restore failed: {e}[/red]")
+            return False
+    
+    def _restore_from_tar(self, tar_file: Path, destination: str) -> bool:
+        """Extract tar.gz file to destination"""
+        try:
+            import tarfile
+            
+            destination_path = Path(destination)
+            destination_path.mkdir(parents=True, exist_ok=True)
+            
+            with tarfile.open(tar_file, 'r:gz') as tar:
+                tar.extractall(path=destination_path.parent)
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to extract tar backup: {e}")
+            return False
+    
+    def _migrate_container_data(self, source_container, target_container, config: DeploymentConfig) -> bool:
+        """Migrate data from source container to target container during blue-green deployment
+        
+        This function copies data from the active container to the new container to ensure
+        data persistence during blue-green deployment.
+        
+        Args:
+            source_container: The active (source) container to migrate data from
+            target_container: The new (target) container to migrate data to
+            config: Deployment configuration
+            
+        Returns:
+            bool: True if migration successful or not needed, False on error
+        """
+        try:
+            if not source_container:
+                self.logger.info("No source container to migrate data from")
+                return True
+            
+            self.console.print(f"[cyan]📦 Migrating data from '{source_container.name}' to '{target_container.name}'...[/cyan]")
+            
+            # Get mounts from both containers
+            source_mounts = source_container.attrs.get('Mounts', [])
+            target_mounts = target_container.attrs.get('Mounts', [])
+            
+            if not source_mounts:
+                self.logger.info("No mounts in source container to migrate")
+                return True
+            
+            # Create mapping of mount points
+            source_volumes = {}
+            for mount in source_mounts:
+                volume_name = mount.get('Name')
+                mount_point = mount.get('Destination')
+                source_path = mount.get('Source')
+                
+                if volume_name:
+                    source_volumes[mount_point] = {'type': 'named_volume', 'name': volume_name, 'source': None}
+                elif source_path:
+                    source_volumes[mount_point] = {'type': 'bind_mount', 'name': None, 'source': source_path}
+            
+            target_volumes = {}
+            for mount in target_mounts:
+                volume_name = mount.get('Name')
+                mount_point = mount.get('Destination')
+                source_path = mount.get('Source')
+                
+                if volume_name:
+                    target_volumes[mount_point] = {'type': 'named_volume', 'name': volume_name, 'source': None}
+                elif source_path:
+                    target_volumes[mount_point] = {'type': 'bind_mount', 'name': None, 'source': source_path}
+            
+            # System paths to skip
+            system_paths_to_skip = [
+                '/lib/modules', '/proc', '/sys', '/dev', '/run', '/tmp', '/var/run', '/boot'
+            ]
+            
+            migrated_count = 0
+            skipped_count = 0
+            
+            # Migrate each volume
+            for mount_point, source_info in source_volumes.items():
+                # Skip system paths
+                skip = False
+                if source_info['source']:
+                    for system_path in system_paths_to_skip:
+                        if str(source_info['source']).startswith(system_path):
+                            skip = True
+                            break
+                
+                if skip:
+                    skipped_count += 1
+                    continue
+                
+                # Check if target has the same mount point
+                if mount_point not in target_volumes:
+                    self.logger.warning(f"Mount point '{mount_point}' not found in target container, skipping")
+                    continue
+                
+                target_info = target_volumes[mount_point]
+                
+                # Handle named volumes - copy data between volumes
+                if source_info['type'] == 'named_volume' and target_info['type'] == 'named_volume':
+                    source_volume_name = source_info['name']
+                    target_volume_name = target_info['name']
+                    
+                    # If volumes are the same, no migration needed
+                    if source_volume_name == target_volume_name:
+                        self.logger.info(f"Volume '{source_volume_name}' is shared, no migration needed")
+                        continue
+                    
+                    self.console.print(f"[cyan]Migrating named volume: {source_volume_name} -> {target_volume_name}[/cyan]")
+                    
+                    # Copy data using Docker container
+                    success = self._copy_volume_data(source_volume_name, target_volume_name, config.container_name)
+                    if success:
+                        migrated_count += 1
+                        self.console.print(f"[green]✅ Migrated volume '{source_volume_name}' to '{target_volume_name}'[/green]")
+                    else:
+                        self.logger.warning(f"Failed to migrate volume '{source_volume_name}', continuing...")
+                
+                # Handle bind mounts - check if same source path (data is already shared)
+                elif source_info['type'] == 'bind_mount' and target_info['type'] == 'bind_mount':
+                    source_path = source_info['source']
+                    target_path = target_info['source']
+                    
+                    # If same path, data is already available
+                    if source_path == target_path:
+                        self.logger.info(f"Bind mount '{source_path}' is shared, no migration needed")
+                        continue
+                    
+                    # If different paths, copy data
+                    self.console.print(f"[cyan]Migrating bind mount: {source_path} -> {target_path}[/cyan]")
+                    
+                    if Path(source_path).exists():
+                        success = self._copy_bind_mount_data(source_path, target_path, config.container_name)
+                        if success:
+                            migrated_count += 1
+                            self.console.print(f"[green]✅ Migrated bind mount '{source_path}' to '{target_path}'[/green]")
+                        else:
+                            self.logger.warning(f"Failed to migrate bind mount '{source_path}', continuing...")
+                    else:
+                        self.logger.warning(f"Source bind mount path does not exist: {source_path}")
+            
+            # Copy internal configuration files for databases
+            db_config = self._get_database_config(config.image_tag)
+            
+            if db_config:
+                self.console.print(f"[cyan]📋 Detected database container, migrating configuration files...[/cyan]")
+                
+                # Get config paths from database configuration
+                config_paths = db_config.get('config_paths', [])
+                
+                for config_path in config_paths:
+                    success = self._copy_container_files(source_container, target_container, config_path, config.container_name)
+                    if success:
+                        self.console.print(f"[green]✅ Migrated config from '{config_path}'[/green]")
+            
+            self.console.print(f"[green]✅ Data migration completed: {migrated_count} volumes migrated, {skipped_count} skipped[/green]")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Data migration failed: {e}")
+            self.console.print(f"[yellow]⚠️ Data migration failed: {e}, continuing deployment...[/yellow]")
+            # Don't fail deployment if migration fails - just log warning
+            return True  # Return True to not block deployment
+    
+    def _copy_volume_data(self, source_volume_name: str, target_volume_name: str, container_name: str = None) -> bool:
+        """Copy data from source named volume to target named volume using Docker"""
+        try:
+            import subprocess
+            
+            # Use Docker container to copy data between volumes
+            # This runs as root inside container, so no permission issues
+            result = subprocess.run(
+                [
+                    'docker', 'run', '--rm',
+                    '-v', f'{source_volume_name}:/source:ro',  # Mount source volume as read-only
+                    '-v', f'{target_volume_name}:/target',      # Mount target volume
+                    'alpine:latest',  # Lightweight image
+                    'sh', '-c',
+                    'cp -a /source/. /target/ 2>/dev/null || true'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minutes timeout for large volumes
+            )
+            
+            if result.returncode == 0:
+                self.logger.info(f"Successfully copied data from volume '{source_volume_name}' to '{target_volume_name}'")
+                return True
+            else:
+                self.logger.warning(f"Volume copy warnings: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Volume copy timed out for {source_volume_name} -> {target_volume_name}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to copy volume data: {e}")
+            return False
+    
+    def _copy_bind_mount_data(self, source_path: str, target_path: str, container_name: str = None) -> bool:
+        """Copy data from source bind mount path to target bind mount path"""
+        try:
+            import subprocess
+            import shutil
+            
+            source = Path(source_path)
+            target = Path(target_path)
+            
+            if not source.exists():
+                self.logger.warning(f"Source path does not exist: {source_path}")
+                return False
+            
+            # Create target directory if it doesn't exist
+            target.mkdir(parents=True, exist_ok=True)
+            
+            # Use rsync if available, otherwise use cp
+            if shutil.which('rsync'):
+                result = subprocess.run(
+                    ['rsync', '-a', '--info=progress2', f'{source_path}/', f'{target_path}/'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600
+                )
+            else:
+                result = subprocess.run(
+                    ['cp', '-a', f'{source_path}/.', f'{target_path}/'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600
+                )
+            
+            if result.returncode == 0:
+                self.logger.info(f"Successfully copied bind mount data from '{source_path}' to '{target_path}'")
+                return True
+            else:
+                self.logger.warning(f"Bind mount copy failed: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Failed to copy bind mount data: {e}")
+            return False
+    
+    def _copy_container_files(self, source_container, target_container, source_path: str, container_name: str = None) -> bool:
+        """Copy files from source container to target container using docker cp"""
+        try:
+            import subprocess
+            import tempfile
+            
+            # Create temporary tar file
+            with tempfile.NamedTemporaryFile(suffix='.tar', delete=False) as tmp_tar:
+                tmp_tar_path = tmp_tar.name
+            
+            try:
+                # Copy from source container to tar
+                result1 = subprocess.run(
+                    ['docker', 'cp', f'{source_container.name}:{source_path}', '-'],
+                    stdout=open(tmp_tar_path, 'wb'),
+                    stderr=subprocess.PIPE,
+                    timeout=300
+                )
+                
+                if result1.returncode != 0:
+                    self.logger.warning(f"Failed to copy from source container: {result1.stderr.decode()}")
+                    return False
+                
+                # Extract tar to target container
+                result2 = subprocess.run(
+                    ['docker', 'cp', '-', f'{target_container.name}:{Path(source_path).parent}/'],
+                    stdin=open(tmp_tar_path, 'rb'),
+                    stderr=subprocess.PIPE,
+                    timeout=300
+                )
+                
+                if result2.returncode == 0:
+                    self.logger.info(f"Successfully copied files from '{source_path}' between containers")
+                    return True
+                else:
+                    self.logger.warning(f"Failed to copy to target container: {result2.stderr.decode()}")
+                    return False
+                    
+            finally:
+                # Cleanup temp file
+                try:
+                    Path(tmp_tar_path).unlink()
+                except:
+                    pass
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to copy container files: {e}")
             return False
 
     def backup_deployment_state(self, backup_path: str = None) -> bool:
@@ -3202,8 +5566,14 @@ def check_all_requirements():
     return pilot.validate_system_requirements()
 
 if __name__ == "__main__":
-    # Minimal bootstrap to honor --config and --log-level before launching CLI
+    # Minimal bootstrap to honor --config, --log-level and --version before launching CLI
+    try:
+        from . import __version__
+    except ImportError:
+        __version__ = "Enhanced"
+    
     bootstrap_parser = argparse.ArgumentParser(add_help=False)
+    bootstrap_parser.add_argument('--version', action='version', version=f'DockerPilot {__version__}')
     bootstrap_parser.add_argument('--config', '-c', type=str, default=None)
     bootstrap_parser.add_argument('--log-level', '-l', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO')
     known_args, _ = bootstrap_parser.parse_known_args()

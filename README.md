@@ -34,19 +34,6 @@ cd DockerPilot && install.bat
 - Python 3.9+ 
 - Docker 20.10+ (with daemon running)
 
-## Quick Start
-
-After installation:
-```bash
-# Interactive mode
-dockerpilot
-
-# Or use CLI commands
-dockerpilot container list --all
-dockerpilot monitor --duration 300
-dockerpilot deploy config deployment.yml --type rolling
-```
-
 ## Manual Installation
 
 ```bash
@@ -550,26 +537,16 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 - Make your changes
 - Submit a pull request
 
-## License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
-
-## Support
-
-- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/DozeyUDK/DockerPilot/issues)
-- **Documentation**: Check the `docs/` directory
-- **Logs**: Review `docker_pilot.log` for detailed error messages
-
 ## Additional Guides
 
 Detailed documentation for specific features:
 
 - **[Quick Deploy Guide](docs/quick-deploy.md)** - Rapid deployment with automatic cleanup
 - **[Multiple Containers Operations](docs/multi-container.md)** - Managing multiple containers at once
+- **[Environment Promotion Guide](GRAFANA_PROMOTION_GUIDE.md)** - Promoting containers between environments
+- **[Blue-Green Deployment](BLUE_GREEN_FIX_SUMMARY.md)** - Data migration during deployments
+- **[Sudo Setup](SUDO_SETUP.md)** - Configuring permissions for backups
+- **[Health Checks Configuration](HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
 
 ## Best Practices
 
@@ -583,9 +560,28 @@ Detailed documentation for specific features:
 8. **Test rollback procedures** regularly
 9. **Start with Lite version** for learning, upgrade to Full version for production
 
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+- Fork the repository
+- Create a feature branch
+- Make your changes
+- Submit a pull request
+
 ## License
 
-This tool is provided as-is for container management and deployment automation.
+This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
+
+## Support
+
+- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/DozeyUDK/DockerPilot/issues)
+- **Documentation**: Check the `docs/` directory
+- **Logs**: Review `docker_pilot.log` for detailed error messages
 
 ---
 
