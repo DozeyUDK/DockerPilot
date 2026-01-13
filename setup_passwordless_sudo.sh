@@ -7,16 +7,16 @@ echo "============================================================"
 echo "DockerPilot - Passwordless Sudo Setup"
 echo "============================================================"
 echo ""
-echo "Ten skrypt skonfiguruje passwordless sudo dla operacji backup."
-echo "To pozwoli DockerPilot robić backup Docker volumes bez pytania o hasło."
+echo "This script will configure passwordless sudo for backup operations."
+echo "This will allow DockerPilot to backup Docker volumes without asking for a password."
 echo ""
-echo "UWAGA: Będziesz poproszony o hasło sudo TERAZ (jednorazowo)."
+echo "WARNING: You will be prompted for sudo password NOW (one time only)."
 echo ""
-read -p "Kontynuować? (y/n): " -n 1 -r
+read -p "Continue? (y/n): " -n 1 -r
 echo ""
 
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Anulowano."
+    echo "Cancelled."
     exit 0
 fi
 
@@ -26,24 +26,24 @@ SUDO_FILE="/etc/sudoers.d/dockerpilot"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo ""
-echo "📝 Tworzenie pliku sudoers dla użytkownika: $CURRENT_USER"
-echo "📁 Plik: $SUDO_FILE"
+echo "📝 Creating sudoers file for user: $CURRENT_USER"
+echo "📁 File: $SUDO_FILE"
 echo ""
 
 # Create sudoers file
 sudo tee "$SUDO_FILE" > /dev/null <<EOF
-# DockerPilot - Passwordless sudo dla Docker backup operacji
-# Utworzony: $(date)
-# Użytkownik: $CURRENT_USER
+# DockerPilot - Passwordless sudo for Docker backup operations
+# Created: $(date)
+# User: $CURRENT_USER
 
 # Backup Docker volumes - tar
 $CURRENT_USER ALL=(ALL) NOPASSWD: /bin/tar -czf $PROJECT_DIR/backup_* *
 $CURRENT_USER ALL=(ALL) NOPASSWD: /bin/tar -czf * -C /var/lib/docker/volumes/* *
 
-# Ownership fix dla backup files
+# Ownership fix for backup files
 $CURRENT_USER ALL=(ALL) NOPASSWD: /bin/chown $CURRENT_USER\\:$CURRENT_USER $PROJECT_DIR/backup_*/*
 
-# Docker operations (używane przez pilot.py dla backup volumes)
+# Docker operations (used by pilot.py for backup volumes)
 $CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/docker run --rm -v * alpine\\:latest *
 EOF
 
@@ -51,42 +51,42 @@ EOF
 sudo chmod 440 "$SUDO_FILE"
 sudo chown root:root "$SUDO_FILE"
 
-echo "✅ Plik sudoers utworzony"
+echo "✅ Sudoers file created"
 echo ""
 
 # Verify syntax
-echo "🔍 Weryfikacja syntax..."
+echo "🔍 Verifying syntax..."
 if sudo visudo -c -f "$SUDO_FILE" 2>&1 | grep -q "parsed OK"; then
-    echo "✅ Syntax prawidłowy"
+    echo "✅ Syntax is valid"
 else
-    echo "❌ Błąd syntax w pliku sudoers!"
+    echo "❌ Syntax error in sudoers file!"
     sudo rm "$SUDO_FILE"
     exit 1
 fi
 
 echo ""
-echo "🧪 Test passwordless sudo..."
+echo "🧪 Testing passwordless sudo..."
 if sudo -n tar --version > /dev/null 2>&1; then
-    echo "✅ Passwordless sudo działa!"
+    echo "✅ Passwordless sudo is working!"
 else
-    echo "⚠️  Może wymagać ponownego zalogowania"
+    echo "⚠️  May require re-login"
 fi
 
 echo ""
 echo "============================================================"
-echo "✅ SETUP ZAKOŃCZONY POMYŚLNIE!"
+echo "✅ SETUP COMPLETED SUCCESSFULLY!"
 echo "============================================================"
 echo ""
-echo "Passwordless sudo skonfigurowane dla:"
+echo "Passwordless sudo configured for:"
 echo "  • tar (backup Docker volumes)"
 echo "  • chown (fix ownership backup files)"
 echo "  • docker run (volume backup containers)"
 echo ""
-echo "Teraz DockerPilot może robić backup bez pytania o hasło! 🎉"
+echo "DockerPilot can now backup without asking for a password! 🎉"
 echo ""
-echo "📝 Aby zobaczyć konfigurację:"
+echo "📝 To view the configuration:"
 echo "   sudo cat $SUDO_FILE"
 echo ""
-echo "🔄 Jeśli nadal pyta o hasło, wyloguj się i zaloguj ponownie."
+echo "🔄 If it still asks for a password, log out and log back in."
 echo ""
 

@@ -12,11 +12,13 @@ import time
 import requests
 import logging
 import signal
+import subprocess
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn, TimeElapsedColumn
 from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
 from rich.live import Live
@@ -43,6 +45,8 @@ class DockerPilotEnhanced:
         self.deployment_history = []
         self._health_check_defaults = None  # Lazy-loaded health check defaults
         self._current_deployment_container = None  # Track current deployment for cancellation
+        self._sudo_password = None  # Sudo password from session (for web interface)
+        self._progress_callback = None  # Callback for progress updates (for web interface)
         
         # Setup logging
         self._setup_logging(log_level)
@@ -52,18 +56,27 @@ class DockerPilotEnhanced:
             self._load_config(config_file)
         
         # Initialize Docker client with retry logic
-        self._init_docker_client()
+        client_initialized = self._init_docker_client()
         
-        # Initialize managers
-        self.container_manager = ContainerManager(
-            self.client, self.console, self.logger, self._error_handler
-        )
-        self.image_manager = ImageManager(
-            self.client, self.console, self.logger, self._error_handler
-        )
-        self.monitoring_manager = MonitoringManager(
-            self.client, self.console, self.logger, self.metrics_file
-        )
+        # Initialize managers only if Docker client is available
+        if client_initialized and self.client:
+            self.container_manager = ContainerManager(
+                self.client, self.console, self.logger, self._error_handler
+            )
+            self.image_manager = ImageManager(
+                self.client, self.console, self.logger, self._error_handler
+            )
+            self.monitoring_manager = MonitoringManager(
+                self.client, self.console, self.logger, self.metrics_file
+            )
+        else:
+            # Set managers to None if Docker client is not available
+            # We'll check Docker availability in run_cli() and _run_interactive_menu()
+            # for CLI context, and handle gracefully in web interface
+            self.container_manager = None
+            self.image_manager = None
+            self.monitoring_manager = None
+            self.logger.warning("Docker client not initialized - managers not available")
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -270,21 +283,103 @@ class DockerPilotEnhanced:
         return len(db_config) > 0
     
     def _init_docker_client(self, max_retries: int = 3):
-        """Initialize Docker client with retry logic"""
+        """Initialize Docker client with retry logic
+        
+        Returns True if client initialized successfully, False otherwise.
+        In web interface context, does not exit on failure.
+        """
         for attempt in range(max_retries):
             try:
                 self.client = docker.from_env()
                 # Test connection
                 self.client.ping()
-                self.logger.info("Docker client connected successfully")
-                return
+                if hasattr(self, 'logger') and self.logger:
+                    self.logger.info("Docker client connected successfully")
+                return True
             except Exception as e:
-                self.logger.warning(f"Docker connection attempt {attempt + 1} failed: {e}")
+                # Log the actual error for debugging
+                error_msg = str(e)
+                error_type = type(e).__name__
+                if hasattr(self, 'logger') and self.logger:
+                    self.logger.warning(f"Docker connection attempt {attempt + 1} failed ({error_type}): {error_msg}")
+                else:
+                    # Fallback to print if logger not available
+                    print(f"WARNING: Docker connection attempt {attempt + 1} failed ({error_type}): {error_msg}")
+                
                 if attempt == max_retries - 1:
-                    self.logger.error("Failed to connect to Docker daemon")
-                    self.console.print("[bold red]❌ Cannot connect to Docker daemon![/bold red]")
-                    sys.exit(1)
+                    if hasattr(self, 'logger') and self.logger:
+                        self.logger.error(f"Failed to connect to Docker daemon after {max_retries} attempts ({error_type}): {error_msg}")
+                    else:
+                        print(f"ERROR: Failed to connect to Docker daemon after {max_retries} attempts ({error_type}): {error_msg}")
+                    
+                    if hasattr(self, 'console') and self.console:
+                        self.console.print(f"[bold red]❌ Cannot connect to Docker daemon![/bold red]")
+                    self.client = None
+                    # Don't exit here - let the calling code decide (run_cli() or web interface)
+                    return False
                 time.sleep(2)
+        return False
+    
+    def _update_progress(self, stage: str, progress: int, message: str):
+        """Update progress if callback is available
+        
+        Args:
+            stage: Current stage name (e.g., 'backup', 'deploy', 'health_check')
+            progress: Progress percentage (0-100)
+            message: Human-readable message
+        """
+        if self._progress_callback:
+            try:
+                self._progress_callback(stage, progress, message)
+            except Exception as e:
+                if hasattr(self, 'logger') and self.logger:
+                    self.logger.debug(f"Progress callback error: {e}")
+    
+    def _show_loading(self, message: str = "Processing", stop_event: threading.Event = None):
+        """Show animated loading dots while operation is in progress
+        
+        Args:
+            message: Message to display before dots
+            stop_event: Threading event to stop the animation
+        """
+        dots = ['.', '..', '...', '....']
+        idx = 0
+        while stop_event is None or not stop_event.is_set():
+            # Print loading message with animated dots
+            sys.stdout.write(f'\r{message}{dots[idx % len(dots)]}')
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.5)  # Update every 0.5 seconds
+        
+        # Clear the line when done
+        sys.stdout.write('\r' + ' ' * (len(message) + 4) + '\r')
+        sys.stdout.flush()
+    
+    @contextmanager
+    def _with_loading(self, message: str = "Processing"):
+        """Context manager to show loading indicator during long operations
+        
+        Usage:
+            with self._with_loading("Backing up data"):
+                # Long operation here
+                pass
+        """
+        stop_event = threading.Event()
+        loading_thread = threading.Thread(
+            target=self._show_loading,
+            args=(message, stop_event),
+            daemon=True
+        )
+        loading_thread.start()
+        
+        try:
+            yield
+        finally:
+            stop_event.set()
+            loading_thread.join(timeout=1.0)  # Wait max 1 second for thread to finish
+            # Clear the loading line
+            sys.stdout.write('\r' + ' ' * (len(message) + 4) + '\r')
+            sys.stdout.flush()
 
     def _signal_handler(self, signum, frame):
         """Graceful shutdown handler"""
@@ -318,6 +413,9 @@ class DockerPilotEnhanced:
 
     def list_containers(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
         """Enhanced container listing with multiple output formats."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return []
         return self.container_manager.list_containers(show_all, format_output)
 
     def list_images(self, show_all: bool = True, format_output: str = "table", hide_untagged: bool = False) -> List[Any]:
@@ -328,10 +426,16 @@ class DockerPilotEnhanced:
             format_output: Output format ('table' or 'json')
             hide_untagged: Hide images without tags (dangling images)
         """
+        if not self.image_manager:
+            self.logger.error("Image manager not initialized - Docker client not available")
+            return []
         return self.image_manager.list_images(show_all, format_output, hide_untagged)
     
     def remove_image(self, image_name: str, force: bool = False) -> bool:
         """Remove Docker image."""
+        if not self.image_manager:
+            self.logger.error("Image manager not initialized - Docker client not available")
+            return False
         return self.image_manager.remove_image(image_name, force)
     
     def prune_dangling_images(self, dry_run: bool = False) -> dict:
@@ -343,7 +447,17 @@ class DockerPilotEnhanced:
         Returns:
             dict: Statistics about removed images (images_deleted, space_reclaimed)
         """
-        return self.image_manager.prune_dangling_images(dry_run)
+        if not self.image_manager:
+            self.logger.error("Image manager not initialized - Docker client not available")
+            return {'images_deleted': 0, 'space_reclaimed': 0}
+        
+        if dry_run:
+            # No loading for dry run as it's fast
+            return self.image_manager.prune_dangling_images(dry_run)
+        else:
+            # Show loading indicator for actual removal
+            with self._with_loading("Removing dangling images"):
+                return self.image_manager.prune_dangling_images(dry_run)
 
     def container_operation(self, operation: str, container_name: str, **kwargs) -> bool:
         """Unified container operation handler with progress tracking."""
@@ -364,10 +478,16 @@ class DockerPilotEnhanced:
                 kwargs.get('memory_limit')
             )
         else:
+            if not self.container_manager:
+                self.logger.error("Container manager not initialized - Docker client not available")
+                return False
             return self.container_manager.container_operation(operation, container_name, **kwargs)
     
     def update_restart_policy(self, container_name: str, policy: str = 'unless-stopped') -> bool:
         """Set restart policy on container."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
         return self.container_manager.update_restart_policy(container_name, policy)
     
     def run_new_container(self, image_name: str, name: str, ports: dict = None, 
@@ -390,6 +510,9 @@ class DockerPilotEnhanced:
             cpu_limit: CPU limit (e.g., '1.5' for 1.5 CPUs)
             memory_limit: Memory limit (e.g., '1g' for 1GB)
         """
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
         return self.container_manager.run_new_container(
             image_name, name, ports, command, environment, volumes,
             restart_policy, network, privileged, cpu_limit, memory_limit
@@ -439,10 +562,16 @@ class DockerPilotEnhanced:
 
     def get_container_stats(self, container_name: str) -> Optional[ContainerStats]:
         """Get comprehensive container statistics."""
+        if not self.monitoring_manager:
+            self.logger.error("Monitoring manager not initialized - Docker client not available")
+            return None
         return self.monitoring_manager.get_container_stats(container_name)
     
     def monitor_containers_dashboard(self, containers: List[str] = None, duration: int = 300):
         """Real-time monitoring dashboard for multiple containers."""
+        if not self.monitoring_manager:
+            self.logger.error("Monitoring manager not initialized - Docker client not available")
+            return
         return self.monitoring_manager.monitor_containers_dashboard(containers, duration)
     
     def get_container_stats_once(self, container_name: str) -> bool:
@@ -901,10 +1030,16 @@ class DockerPilotEnhanced:
 
     def view_container_logs(self, container_name: str = None, tail: int = 50):
         """View container logs."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return None
         return self.container_manager.view_container_logs(container_name, tail)
     
     def view_container_json(self, container_name: str):
         """Display container information in JSON format."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return None
         return self.container_manager.view_container_json(container_name)
 
 
@@ -976,17 +1111,41 @@ class DockerPilotEnhanced:
         if self._check_cancel_flag():
             self.console.print("[yellow]🛑 Deployment cancelled by user (before backup)[/yellow]")
             self._current_deployment_container = None
+            # Clean up any orphaned backup containers
+            self._cleanup_backup_containers()
             return False
         
         # Backup OUTSIDE Progress context to avoid "Only one live display" error
         backup_path = None
         if active_container and not skip_backup:
+            self._update_progress('backup', 5, '💾 Creating data backup...')
             self.console.print(f"[cyan]💾 Backing up container data...[/cyan]")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = f"backup_{config.container_name}_pre_deploy_{timestamp}"
             
-            if self.backup_container_data(active_container.name, backup_path):
-                self.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+            # Try to reuse existing backup first (reuse_existing=True by default, max age 24 hours)
+            if self.backup_container_data(active_container.name, backup_path, reuse_existing=True, max_backup_age_hours=24):
+                self._update_progress('backup', 20, '✅ Backup completed')
+                # Check if backup was reused or newly created
+                backup_dir = Path(backup_path)
+                if backup_dir.exists() and (backup_dir / 'backup_metadata.json').exists():
+                    try:
+                        with open(backup_dir / 'backup_metadata.json', 'r') as f:
+                            metadata = json.load(f)
+                        backup_time_str = metadata.get('backup_time', '')
+                        if backup_time_str:
+                            backup_time = datetime.fromisoformat(backup_time_str.replace('Z', '+00:00'))
+                            if backup_time.tzinfo is None:
+                                backup_time = backup_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                            age_seconds = (datetime.now(backup_time.tzinfo) - backup_time).total_seconds()
+                            if age_seconds > 60:  # More than 1 minute old, it was reused
+                                self.console.print(f"[green]💾 Using existing backup: {backup_path}[/green]")
+                            else:
+                                self.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+                    except:
+                        self.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+                else:
+                    self.console.print(f"[green]💾 Using existing backup[/green]")
             else:
                 self.console.print(f"[yellow]⚠️ Data backup failed, but continuing deployment...[/yellow]")
                 self.logger.warning("Data backup failed before deployment - this is risky for production!")
@@ -999,7 +1158,13 @@ class DockerPilotEnhanced:
         if self._check_cancel_flag():
             self.console.print("[yellow]🛑 Deployment cancelled by user (after backup)[/yellow]")
             self._current_deployment_container = None
+            # Clean up any orphaned backup containers
+            self._cleanup_backup_containers()
             return False
+        
+        # Clean up any orphaned backup containers from previous interrupted deployments
+        # This ensures we start with a clean state
+        self._cleanup_backup_containers()
         
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             
@@ -1033,6 +1198,7 @@ class DockerPilotEnhanced:
             progress.update(cleanup_task, description=f"✅ {target_name.title()} slot cleaned")
             
             # Deploy to target slot
+            self._update_progress('deploy', 50, f'🚀 Deploying to slot {target_name}...')
             deploy_task = progress.add_task(f"🚀 Deploying to {target_name} slot...", total=None)
             
             # Prepare container creation parameters
@@ -1082,7 +1248,31 @@ class DockerPilotEnhanced:
             container_kwargs.update(self._get_resource_limits(config))
             
             # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
+            # Also auto-detect for infrastructure containers (minikube, kubernetes, etc.)
+            requires_privileged = False
             if hasattr(config, 'privileged') and config.privileged:
+                requires_privileged = True
+            else:
+                # Auto-detect infrastructure containers that require privileged mode
+                image_lower = config.image_tag.lower()
+                infrastructure_containers = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
+                for infra_container in infrastructure_containers:
+                    if infra_container in image_lower:
+                        requires_privileged = True
+                        self.logger.info(f"Auto-detected infrastructure container requiring privileged mode: {infra_container}")
+                        break
+                
+                # Also check if active container has privileged mode enabled
+                if active_container:
+                    try:
+                        active_privileged = active_container.attrs.get('HostConfig', {}).get('Privileged', False)
+                        if active_privileged:
+                            requires_privileged = True
+                            self.logger.info(f"Active container has privileged mode enabled, copying to new container")
+                    except Exception as e:
+                        self.logger.debug(f"Could not check active container privileged mode: {e}")
+            
+            if requires_privileged:
                 container_kwargs['privileged'] = True
                 self.logger.info(f"Container {target_container_name} will run in privileged mode")
             
@@ -1097,6 +1287,7 @@ class DockerPilotEnhanced:
                 target_container = self.client.containers.run(**container_kwargs)
                 
                 progress.update(deploy_task, description=f"✅ {target_name.title()} container deployed")
+                self._update_progress('deploy', 60, f'✅ Kontener {target_name} wdrożony')
                 
                 # Longer startup grace period for databases and services with slow startup
                 startup_grace = 5
@@ -1118,6 +1309,8 @@ class DockerPilotEnhanced:
                     except:
                         pass
                     self._current_deployment_container = None
+                    # Clean up any orphaned backup containers
+                    self._cleanup_backup_containers()
                     return False
                 
                 # Migrate data from active container to new container
@@ -1145,6 +1338,7 @@ class DockerPilotEnhanced:
                 return False
             
             # Comprehensive validation of new deployment
+            self._update_progress('health_check', 70, f'🩺 Checking container health {target_name}...')
             health_task = progress.add_task(f"🔍 Comprehensive validation of {target_name} deployment...", total=None)
             
             # Determine port for validation
@@ -1158,36 +1352,42 @@ class DockerPilotEnhanced:
                 validation_port = list(config.port_mapping.values())[0] if config.port_mapping else None
             
             if validation_port:
-                # First, do basic health check to ensure service is responding
-                progress.update(health_task, description=f"🩺 Basic health check ({target_name})...")
-                
-                # Increase retries for slow-starting services (databases, etc.)
-                health_retries = config.health_check_retries
-                db_config = self._get_database_config(config.image_tag)
-                if db_config:
-                    health_retries = max(health_retries, db_config.get('health_check_retries', 20))
-                    db_name = self._get_database_name(config.image_tag) or 'database'
-                    self.logger.info(f"Extended health check retries: {health_retries} for {db_name} service")
+                # Check if this is a non-HTTP service (endpoint is None)
+                if config.health_check_endpoint is None:
+                    # Skip HTTP health check for non-HTTP services (SSH, Redis, infrastructure, etc.)
+                    progress.update(health_task, description=f"ℹ️ Skipping HTTP health check (non-HTTP service)")
+                    self.logger.info(f"Skipping HTTP health check for {target_name} (non-HTTP service)")
+                else:
+                    # First, do basic health check to ensure service is responding
+                    progress.update(health_task, description=f"🩺 Basic health check ({target_name})...")
                     
-                    # Add extra wait time before validation if configured
-                    additional_wait = db_config.get('additional_wait_before_validation', 0)
-                    if additional_wait > 0:
-                        self.logger.info(f"Waiting additional {additional_wait}s for {db_name} to finish initialization...")
-                        time.sleep(additional_wait)
-                
-                if not self._advanced_health_check(
-                    validation_port,
-                    config.health_check_endpoint,
-                    config.health_check_timeout,
-                    health_retries
-                ):
-                    progress.update(health_task, description=f"❌ {target_name.title()} basic health check failed")
-                    try:
-                        target_container.stop()
-                        target_container.remove()
-                    except:
-                        pass
-                    return False
+                    # Increase retries for slow-starting services (databases, etc.)
+                    health_retries = config.health_check_retries
+                    db_config = self._get_database_config(config.image_tag)
+                    if db_config:
+                        health_retries = max(health_retries, db_config.get('health_check_retries', 20))
+                        db_name = self._get_database_name(config.image_tag) or 'database'
+                        self.logger.info(f"Extended health check retries: {health_retries} for {db_name} service")
+                        
+                        # Add extra wait time before validation if configured
+                        additional_wait = db_config.get('additional_wait_before_validation', 0)
+                        if additional_wait > 0:
+                            self.logger.info(f"Waiting additional {additional_wait}s for {db_name} to finish initialization...")
+                            time.sleep(additional_wait)
+                    
+                    if not self._advanced_health_check(
+                        validation_port,
+                        config.health_check_endpoint,
+                        config.health_check_timeout,
+                        health_retries
+                    ):
+                        progress.update(health_task, description=f"❌ {target_name.title()} basic health check failed")
+                        try:
+                            target_container.stop()
+                            target_container.remove()
+                        except:
+                            pass
+                        return False
                 
                 # Then, comprehensive validation
                 progress.update(health_task, description=f"🔍 Comprehensive validation ({target_name})...")
@@ -1216,6 +1416,7 @@ class DockerPilotEnhanced:
                     return False
                 
                 progress.update(health_task, description=f"✅ {target_name.title()} validation passed")
+                self._update_progress('health_check', 80, f'✅ Validation of {target_name} completed successfully')
             else:
                 self.logger.warning("No ports mapped for validation, skipping comprehensive check")
                 progress.update(health_task, description=f"⚠️ {target_name.title()} no ports to validate")
@@ -1276,6 +1477,7 @@ class DockerPilotEnhanced:
                 return False
             
             # Traffic switch with zero-downtime
+            self._update_progress('traffic_switch', 90, '🔄 Switching traffic (zero-downtime)...')
             switch_task = progress.add_task("🔄 Zero-downtime traffic switch...", total=None)
             
             try:
@@ -1322,7 +1524,31 @@ class DockerPilotEnhanced:
                 final_container_kwargs.update(self._get_resource_limits(config))
                 
                 # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
+                # Also auto-detect for infrastructure containers (minikube, kubernetes, etc.)
+                requires_privileged = False
                 if hasattr(config, 'privileged') and config.privileged:
+                    requires_privileged = True
+                else:
+                    # Auto-detect infrastructure containers that require privileged mode
+                    image_lower = config.image_tag.lower()
+                    infrastructure_containers = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
+                    for infra_container in infrastructure_containers:
+                        if infra_container in image_lower:
+                            requires_privileged = True
+                            self.logger.info(f"Auto-detected infrastructure container requiring privileged mode: {infra_container}")
+                            break
+                    
+                    # Also check if active container has privileged mode enabled
+                    if active_container:
+                        try:
+                            active_privileged = active_container.attrs.get('HostConfig', {}).get('Privileged', False)
+                            if active_privileged:
+                                requires_privileged = True
+                                self.logger.info(f"Active container has privileged mode enabled, copying to final container")
+                        except Exception as e:
+                            self.logger.debug(f"Could not check active container privileged mode: {e}")
+                
+                if requires_privileged:
                     final_container_kwargs['privileged'] = True
                     self.logger.info(f"Final container {target_container_name} will run in privileged mode")
                 
@@ -1440,9 +1666,11 @@ class DockerPilotEnhanced:
                         self.logger.warning(f"Failed to remove old container: {e}")
                 
                 progress.update(switch_task, description="✅ Traffic switched successfully")
+                self._update_progress('traffic_switch', 95, '✅ Traffic switch completed')
                 
             except Exception as e:
                 progress.update(switch_task, description="❌ Traffic switch failed")
+                self._update_progress('traffic_switch', 0, f'❌ Traffic switch failed: {e}')
                 self.logger.error(f"Traffic switch failed: {e}")
                 return False
         
@@ -1454,6 +1682,7 @@ class DockerPilotEnhanced:
         # Clear deployment tracking
         self._current_deployment_container = None
         
+        self._update_progress('completed', 100, '🎉 Deployment completed successfully!')
         self.console.print(f"\n[bold green]🎉 BLUE-GREEN DEPLOYMENT COMPLETED![/bold green]")
         self.console.print(f"[green]Active slot: {target_name}[/green]")
         self.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
@@ -1863,7 +2092,9 @@ class DockerPilotEnhanced:
                 'buildargs': build_args
             }
             
-            image, build_logs = self.client.images.build(**build_kwargs)
+            # Show loading indicator during build
+            with self._with_loading("Building image"):
+                image, build_logs = self.client.images.build(**build_kwargs)
             
             # Process build logs
             for log in build_logs:
@@ -1945,6 +2176,13 @@ class DockerPilotEnhanced:
         for service in non_http_services:
             if service in image_lower:
                 self.logger.info(f"Detected non-HTTP service ({service}) - skipping HTTP health check")
+                return None
+        
+        # Additional hardcoded non-HTTP services (infrastructure containers)
+        infrastructure_services = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
+        for infra_service in infrastructure_services:
+            if infra_service in image_lower:
+                self.logger.info(f"Detected infrastructure service ({infra_service}) - skipping HTTP health check")
                 return None
         
         # Try to find matching endpoint mapping
@@ -2108,14 +2346,35 @@ class DockerPilotEnhanced:
             # Common error patterns
             error_patterns = [
                 'FATAL', 'CRITICAL', 'panic', 'segmentation fault',
-                'out of memory', 'OOM', 'cannot bind', 'address already in use',
+                'out of memory', 'cannot bind', 'address already in use',
                 'permission denied', 'access denied', 'failed to start'
             ]
             
+            # Special handling for OOM - only treat as error if it's actual OOM, not OOM detection warnings
+            # cadvisor and similar tools may log "OOM detection" warnings which are safe to ignore
+            oom_safe_patterns = [
+                'oom detection', 'configure.*oom', 'disabling oom', 'no oom',
+                'could not configure.*oom', 'unable to configure.*oom'
+            ]
+            
             found_errors = []
+            logs_lower = logs.lower()
+            
             for pattern in error_patterns:
-                if pattern.lower() in logs.lower():
+                if pattern.lower() in logs_lower:
                     found_errors.append(pattern)
+            
+            # Check for OOM separately - only flag if it's not a safe OOM detection warning
+            if 'oom' in logs_lower:
+                is_safe_oom = any(safe_pattern in logs_lower for safe_pattern in oom_safe_patterns)
+                if not is_safe_oom:
+                    # Check if it's actually an OOM error (not just detection-related)
+                    oom_error_patterns = ['killed.*oom', 'out of memory', 'oom killer', 'memory limit exceeded']
+                    if any(oom_err in logs_lower for oom_err in oom_error_patterns):
+                        found_errors.append('OOM')
+                else:
+                    # It's a safe OOM detection warning, log but don't treat as error
+                    self.logger.info("Found safe OOM detection warning (not a critical error)")
             
             if found_errors:
                 validation_errors.append(f"Found critical errors in logs: {', '.join(found_errors)}")
@@ -2548,7 +2807,7 @@ class DockerPilotEnhanced:
         quick_deploy_parser.add_argument('--yaml-config', '-y', help='YAML config file with container settings')
         quick_deploy_parser.add_argument('--no-cleanup', action='store_true', help='Do not remove old image')
         
-        # Nowe parsery dodane # 
+        # New parsers added # 
         # System validation
         validate_parser = subparsers.add_parser('validate', help='Validate system requirements')
 
@@ -2623,6 +2882,12 @@ class DockerPilotEnhanced:
 
     def run_cli(self):
         """Run CLI interface"""
+        # Check if Docker is available before running CLI
+        if not self.client or not self.container_manager:
+            self.console.print("[bold red]❌ Docker is not available![/bold red]")
+            self.console.print("[yellow]Please ensure Docker is running and accessible.[/yellow]")
+            sys.exit(1)
+        
         parser = self.create_cli_parser()
         args = parser.parse_args()
         
@@ -4384,48 +4649,266 @@ class DockerPilotEnhanced:
             self.logger.error(f"Failed to generate documentation: {e}")
             return False
 
-    def _check_sudo_required_for_backup(self, container_name: str) -> tuple[bool, list[str]]:
-        """Check if backup will require sudo access
+    def _check_sudo_required_for_backup(self, container_name: str) -> tuple[bool, list[str], dict]:
+        """Check if backup will require sudo access and get mount information
         
         Returns:
-            tuple: (requires_sudo: bool, privileged_paths: list[str])
+            tuple: (requires_sudo: bool, privileged_paths: list[str], mount_info: dict)
+                   mount_info contains: {'large_mounts': list, 'total_size_gb': float, 'mounts': list}
         """
         try:
+            import shutil
+            
             container = self.client.containers.get(container_name)
             mounts = container.attrs.get('Mounts', [])
             
             privileged_paths = []
+            large_mounts = []  # Mounts > 1TB
+            mount_info_list = []  # List of all mounts with size info
+            total_size_bytes = 0
             
             for mount in mounts:
                 source = mount.get('Source')
                 if source:
-                    # Check if path requires sudo
-                    if (str(source).startswith('/var/lib/docker/volumes/') or
+                    source_path = Path(source)
+                    requires_sudo = (
+                        str(source).startswith('/var/lib/docker/volumes/') or
                         str(source).startswith('/var/lib/docker/') or
                         str(source).startswith('/root/') or
-                        not os.access(source, os.R_OK)):
+                        not os.access(source, os.R_OK)
+                    )
+                    
+                    if requires_sudo:
                         privileged_paths.append(source)
+                    
+                    # Check mount size (if it's a directory)
+                    mount_size_bytes = 0
+                    mount_size_gb = 0
+                    mount_total_capacity_gb = 0  # Total disk capacity
+                    is_large = False
+                    
+                    try:
+                        if source_path.exists() and source_path.is_dir():
+                            # First, check total disk capacity using df (faster than du for large dirs)
+                            try:
+                                df_result = subprocess.run(
+                                    ['df', '-B1', str(source_path)],  # -B1 = block size 1 byte
+                                    capture_output=True,
+                                    timeout=5,
+                                    text=True
+                                )
+                                if df_result.returncode == 0:
+                                    # Parse df output: Filesystem Size Used Avail Use% Mounted
+                                    lines = df_result.stdout.strip().split('\n')
+                                    if len(lines) > 1:
+                                        parts = lines[1].split()
+                                        if len(parts) >= 2:
+                                            mount_total_capacity_gb = int(parts[1]) / (1024 ** 3)
+                            except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
+                                # df failed, continue with du
+                                pass
+                            
+                            # Use du command for actual used size (faster than Python for large dirs)
+                            try:
+                                result = subprocess.run(
+                                    ['du', '-sb', str(source_path)],
+                                    capture_output=True,
+                                    timeout=30,  # Increased timeout for large directories
+                                    text=True
+                                )
+                                if result.returncode == 0:
+                                    mount_size_bytes = int(result.stdout.split()[0])
+                                    mount_size_gb = mount_size_bytes / (1024 ** 3)
+                                    total_size_bytes += mount_size_bytes
+                                    
+                                    # Consider large if:
+                                    # - Used space > 500GB (more reasonable threshold)
+                                    # - OR total disk capacity > 1TB (even if not fully used)
+                                    is_large = mount_size_gb > 500 or mount_total_capacity_gb > 1024
+                                    
+                                    if is_large:
+                                        large_mounts.append({
+                                            'path': source,
+                                            'size_gb': mount_size_gb,
+                                            'size_tb': mount_size_gb / 1024,
+                                            'total_capacity_gb': mount_total_capacity_gb,
+                                            'total_capacity_tb': mount_total_capacity_gb / 1024
+                                        })
+                            except (subprocess.TimeoutExpired, ValueError, IndexError):
+                                # If du fails or times out, check if we have capacity info from df
+                                if mount_total_capacity_gb > 1024:
+                                    is_large = True
+                                    large_mounts.append({
+                                        'path': source,
+                                        'size_gb': 0,  # Unknown actual size
+                                        'size_tb': 0,
+                                        'total_capacity_gb': mount_total_capacity_gb,
+                                        'total_capacity_tb': mount_total_capacity_gb / 1024,
+                                        'note': 'Size check timed out, but disk capacity is large'
+                                    })
+                                # Don't try shutil fallback for large dirs - it's too slow
+                    except Exception as e:
+                        self.logger.debug(f"Could not check size for {source}: {e}")
+                    
+                    mount_info_list.append({
+                        'path': source,
+                        'mount_point': mount.get('Destination'),
+                        'requires_sudo': requires_sudo,
+                        'size_gb': mount_size_gb,
+                        'total_capacity_gb': mount_total_capacity_gb,
+                        'is_large': is_large
+                    })
             
-            return len(privileged_paths) > 0, privileged_paths
+            total_size_gb = total_size_bytes / (1024 ** 3)
+            
+            mount_info = {
+                'large_mounts': large_mounts,
+                'total_size_gb': total_size_gb,
+                'total_size_tb': total_size_gb / 1024,
+                'mounts': mount_info_list
+            }
+            
+            return len(privileged_paths) > 0, privileged_paths, mount_info
             
         except Exception as e:
             self.logger.warning(f"Could not check sudo requirements: {e}")
-            return False, []
+            return False, [], {'large_mounts': [], 'total_size_gb': 0, 'total_size_tb': 0, 'mounts': []}
     
-    def backup_container_data(self, container_name: str, backup_path: str = None) -> bool:
+    def find_existing_backup(self, container_name: str, max_age_hours: int = 24) -> Optional[Path]:
+        """
+        Find existing backup for container that is recent enough.
+        
+        Args:
+            container_name: Name of the container to find backup for
+            max_age_hours: Maximum age of backup in hours (default: 24)
+        
+        Returns:
+            Path to backup directory if found, None otherwise
+        """
+        try:
+            # Search in current directory and common backup locations
+            search_paths = [
+                Path('.'),
+                Path.home() / '.dockerpilot_extras' / 'backups',
+                Path('/tmp'),
+            ]
+            
+            # Also search in parent directories for backups
+            current_dir = Path.cwd()
+            for parent in [current_dir] + list(current_dir.parents)[:3]:  # Check up to 3 levels up
+                search_paths.append(parent)
+            
+            best_backup = None
+            best_backup_time = None
+            
+            for search_path in search_paths:
+                if not search_path.exists():
+                    continue
+                
+                # Look for backup directories matching pattern
+                pattern = f"backup_{container_name}_*"
+                for backup_dir in search_path.glob(pattern):
+                    if not backup_dir.is_dir():
+                        continue
+                    
+                    # Check if backup metadata exists
+                    metadata_file = backup_dir / 'backup_metadata.json'
+                    if not metadata_file.exists():
+                        continue
+                    
+                    try:
+                        with open(metadata_file, 'r') as f:
+                            metadata = json.load(f)
+                        
+                        # Verify it's for the right container
+                        if metadata.get('container_name') != container_name:
+                            continue
+                        
+                        # Check backup age
+                        backup_time_str = metadata.get('backup_time')
+                        if backup_time_str:
+                            backup_time = datetime.fromisoformat(backup_time_str.replace('Z', '+00:00'))
+                            if backup_time.tzinfo is None:
+                                # Assume local time if no timezone
+                                backup_time = backup_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                            
+                            age_hours = (datetime.now(backup_time.tzinfo) - backup_time).total_seconds() / 3600
+                            
+                            if age_hours <= max_age_hours:
+                                # Check if all backup files exist
+                                volumes = metadata.get('volumes', [])
+                                all_files_exist = True
+                                for vol in volumes:
+                                    backup_file = Path(vol.get('backup_file', ''))
+                                    if not backup_file.is_absolute():
+                                        backup_file = backup_dir / backup_file.name
+                                    if not backup_file.exists():
+                                        all_files_exist = False
+                                        break
+                                
+                                if all_files_exist:
+                                    # This is a valid backup, check if it's newer than current best
+                                    if best_backup is None or (backup_time > best_backup_time):
+                                        best_backup = backup_dir
+                                        best_backup_time = backup_time
+                    except Exception as e:
+                        self.logger.debug(f"Error reading backup metadata {metadata_file}: {e}")
+                        continue
+            
+            return best_backup
+            
+        except Exception as e:
+            self.logger.warning(f"Error searching for existing backup: {e}")
+            return None
+    
+    def backup_container_data(self, container_name: str, backup_path: str = None, reuse_existing: bool = True, max_backup_age_hours: int = 24) -> bool:
         """
         Backup ALL data from container volumes (actual data, not just metadata).
         Creates a complete backup of all volumes mounted to the container.
+        If reuse_existing is True, will check for existing recent backup first.
         
         Args:
             container_name: Name of the container to backup
             backup_path: Optional path for backup (auto-generated if not provided)
+            reuse_existing: If True, reuse existing backup if found (default: True)
+            max_backup_age_hours: Maximum age of backup to reuse in hours (default: 24)
         
         Returns:
-            bool: True if backup successful
+            bool: True if backup successful or existing backup reused
         """
         try:
             container = self.client.containers.get(container_name)
+            
+            # Check for existing backup first if reuse_existing is True
+            # Even if backup_path is provided, we check for existing backup first
+            if reuse_existing:
+                existing_backup = self.find_existing_backup(container_name, max_backup_age_hours)
+                if existing_backup:
+                    self.logger.info(f"Found existing backup for {container_name}: {existing_backup}")
+                    self.console.print(f"[green]✅ Found existing backup: {existing_backup}[/green]")
+                    
+                    # Verify backup is complete
+                    metadata_file = existing_backup / 'backup_metadata.json'
+                    if metadata_file.exists():
+                        try:
+                            with open(metadata_file, 'r') as f:
+                                metadata = json.load(f)
+                            
+                            volumes = metadata.get('volumes', [])
+                            total_size_mb = metadata.get('total_size', 0) / (1024 * 1024)
+                            backup_time = metadata.get('backup_time', 'unknown')
+                            
+                            self.console.print(f"[green]Backup created: {backup_time}[/green]")
+                            self.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
+                            self.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
+                            self.console.print(f"[cyan]ℹ️ Reusing existing backup instead of creating new one[/cyan]")
+                            
+                            # Set backup_path to the existing backup path for consistency
+                            backup_path = str(existing_backup)
+                            return True
+                        except Exception as e:
+                            self.logger.warning(f"Error reading existing backup metadata: {e}")
+                            # Continue to create new backup
             
             if not backup_path:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -4435,7 +4918,7 @@ class DockerPilotEnhanced:
             backup_dir.mkdir(exist_ok=True, parents=True)
             
             # Pre-check: will we need sudo?
-            requires_sudo, privileged_paths = self._check_sudo_required_for_backup(container_name)
+            requires_sudo, privileged_paths, mount_info = self._check_sudo_required_for_backup(container_name)
             
             if requires_sudo:
                 self.console.print(f"[yellow]⚠️  BACKUP REQUIRES SUDO ACCESS[/yellow]")
@@ -4466,6 +4949,7 @@ class DockerPilotEnhanced:
             
             # System paths that should be skipped during backup (they can hang or are too large)
             system_paths_to_skip = [
+                '/',  # Root filesystem - NEVER backup this!
                 '/lib/modules',
                 '/proc',
                 '/sys',
@@ -4474,81 +4958,132 @@ class DockerPilotEnhanced:
                 '/tmp',
                 '/var/run',
                 '/boot',
+                '/usr',
+                '/bin',
+                '/sbin',
+                '/etc',
+                '/var/lib',
+                '/var/log',
             ]
             
-            # Backup each volume
-            backed_up_volumes = []
-            for mount in mounts:
-                # Check for cancellation before each mount backup
-                if self._check_cancel_flag(container_name):
-                    self.logger.warning(f"Backup cancelled by user for {container_name}")
-                    self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
-                    return False
+            # Show loading indicator during backup
+            with self._with_loading("Backing up container data"):
+                # Backup each volume
+                backed_up_volumes = []
+                total_mounts = len([m for m in mounts if m.get('Source') or m.get('Name')])
+                processed_mounts = 0
                 
-                volume_name = mount.get('Name')
-                mount_point = mount.get('Destination')  # Path inside container
-                source = mount.get('Source')  # Path on host (for bind mounts)
-                
-                # Skip system paths
-                if source:
-                    source_path = Path(source)
-                    # Check if source is a system path to skip
-                    skip_mount = False
-                    for system_path in system_paths_to_skip:
-                        if str(source_path) == system_path or str(source_path).startswith(system_path + '/'):
-                            self.logger.warning(f"Skipping system bind mount: {source} -> {mount_point}")
-                            self.console.print(f"[yellow]⚠️ Skipping system bind mount '{source}' (system path)[/yellow]")
-                            skip_mount = True
-                            break
+                for mount in mounts:
+                    # Check for cancellation before each mount backup
+                    if self._check_cancel_flag(container_name):
+                        self.logger.warning(f"Backup cancelled by user for {container_name}")
+                        self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                        return False
                     
-                    if skip_mount:
-                        continue
-                
-                if volume_name:
-                    # Named volume - backup using Docker container (no sudo needed!)
-                    self.console.print(f"[cyan]Backing up named volume: {volume_name} -> {mount_point}[/cyan]")
-                    try:
-                        backup_file = backup_dir / f"{volume_name}.tar.gz"
+                    volume_name = mount.get('Name')
+                    mount_point = mount.get('Destination')  # Path inside container
+                    source = mount.get('Source')  # Path on host (for bind mounts)
+                    
+                    # Skip system paths and root filesystem FIRST
+                    if source:
+                        source_path = Path(source)
                         
-                        # Use Docker to backup volume (runs as root inside container)
-                        # This avoids permission issues without requiring sudo
-                        success = self._backup_volume_using_docker(volume_name, backup_file, container_name)
+                        # ALWAYS skip root filesystem - this is critical!
+                        if str(source_path) == '/' or str(source_path).resolve() == Path('/'):
+                            self.logger.warning(f"Skipping root filesystem bind mount: {source} -> {mount_point} (CRITICAL: root filesystem should never be backed up)")
+                            self.console.print(f"[red]⚠️ SKIPPING root filesystem bind mount '{source}' (root filesystem should never be backed up!)[/red]")
+                            continue
+                    
+                    # For migration: Skip external data mounts (not container-specific data)
+                    # Named volumes are always backed up (they're container-specific)
+                    # Bind mounts to external storage (/mnt/*, /media/*) should be skipped
+                    # Bind mounts to application directories (/opt/*, /var/www/*) should be backed up
+                    if source and not volume_name:
+                        # This is a bind mount (not a named volume)
+                        source_path = Path(source)
                         
-                        # Check for cancellation after backup
-                        if self._check_cancel_flag(container_name):
-                            self.logger.warning(f"Backup cancelled by user for {container_name}")
-                            self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
-                            return False
+                        # Skip external storage mounts (these are not container data, just mounted storage)
+                        external_storage_patterns = [
+                            '/mnt/',  # External mounts like /mnt/sdc_share, /mnt/sda3, etc.
+                            '/media/',  # Removable media
+                        ]
                         
-                        if success:
-                            backed_up_volumes.append({
-                                'type': 'named_volume',
-                                'name': volume_name,
-                                'mount_point': mount_point,
-                                'backup_file': str(backup_file),
-                                'size': backup_file.stat().st_size if backup_file.exists() else 0
-                            })
-                            self.console.print(f"[green]✅ Backed up volume '{volume_name}' to {backup_file}[/green]")
-                        else:
-                            self.logger.warning(f"Failed to backup volume {volume_name}, continuing...")
-                            self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}', continuing...[/yellow]")
-                            # Don't return False - continue with other volumes
-                    except Exception as e:
-                        self.logger.error(f"Failed to backup volume {volume_name}: {e}")
-                        self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
-                
-                elif source:
-                    # Bind mount - backup using Docker container (faster and no sudo needed for many paths)
-                    self.console.print(f"[cyan]Backing up bind mount: {source} -> {mount_point}[/cyan]")
-                    try:
-                        if Path(source).exists():
-                            # Create safe filename from path
-                            safe_name = source.replace('/', '_').replace('\\', '_').strip('_')
-                            backup_file = backup_dir / f"bind_{safe_name}.tar.gz"
+                        # Check if this is an external storage mount
+                        is_external_storage = any(
+                            str(source_path).startswith(pattern) 
+                            for pattern in external_storage_patterns
+                        )
+                        
+                        # Exception: application directories in /opt, /var/www, etc. should be backed up
+                        application_patterns = [
+                            '/opt/',  # Application installations
+                            '/var/www/',  # Web applications
+                            '/var/lib/',  # Application data (but not /var/lib/docker)
+                            '/srv/',  # Service data
+                        ]
+                        
+                        is_application_data = any(
+                            str(source_path).startswith(pattern) 
+                            for pattern in application_patterns
+                        ) and not str(source_path).startswith('/var/lib/docker')
+                        
+                        if is_external_storage and not is_application_data:
+                            self.logger.info(f"Skipping external storage bind mount: {source} -> {mount_point} (external storage, not container data)")
+                            self.console.print(f"[cyan]ℹ️ Skipping external disk '{source}' (this is not container data, just a mounted disk)[/cyan]")
+                            continue
+                    
+                    # Skip system paths
+                    if source:
+                        source_path = Path(source)
+                        
+                        # Check if source is a system path to skip
+                        skip_mount = False
+                        for system_path in system_paths_to_skip:
+                            if str(source_path) == system_path or str(source_path).startswith(system_path + '/'):
+                                self.logger.warning(f"Skipping system bind mount: {source} -> {mount_point}")
+                                self.console.print(f"[yellow]⚠️ Skipping system bind mount '{source}' (system path)[/yellow]")
+                                skip_mount = True
+                                break
+                        
+                        if skip_mount:
+                            continue
+                        
+                        # Check if mount is very large (> 1TB) - warn but don't skip automatically
+                        # User should have been warned in the modal, but double-check here
+                        try:
+                            # Quick size check using du (with timeout to avoid hanging)
+                            result = subprocess.run(
+                                ['du', '-sb', str(source_path)],
+                                capture_output=True,
+                                timeout=5,  # 5 second timeout for size check
+                                text=True
+                            )
+                            if result.returncode == 0:
+                                size_bytes = int(result.stdout.split()[0])
+                                size_tb = size_bytes / (1024 ** 4)
+                                if size_tb > 1:
+                                    self.logger.warning(f"Large mount detected: {source} ({size_tb:.2f} TB) - this will take a very long time to backup")
+                                    self.console.print(f"[yellow]⚠️ Large mount detected: {source} ({size_tb:.2f} TB)[/yellow]")
+                                    self.console.print(f"[yellow]   This backup may take many hours. Consider skipping this mount.[/yellow]")
+                        except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
+                            # If size check fails or times out, continue anyway
+                            # (might be a network mount or permission issue)
+                            pass
+                    
+                    if volume_name:
+                        # Named volume - backup using Docker container (no sudo needed!)
+                        self.console.print(f"[cyan]Backing up named volume: {volume_name} -> {mount_point}[/cyan]")
+                        try:
+                            backup_file = backup_dir / f"{volume_name}.tar.gz"
                             
-                            # Use Docker container for backup (faster, no sudo needed, better for large directories)
-                            success = self._backup_bind_mount_using_docker(source, backup_file, container_name)
+                            # Update progress for volume backup
+                            if container_name:
+                                progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
+                                self._update_progress('backup', progress_pct, f'📦 Creating backup of volume: {volume_name}...')
+                            
+                            # Use Docker to backup volume (runs as root inside container)
+                            # This avoids permission issues without requiring sudo
+                            success = self._backup_volume_using_docker(volume_name, backup_file, container_name)
                             
                             # Check for cancellation after backup
                             if self._check_cancel_flag(container_name):
@@ -4557,40 +5092,101 @@ class DockerPilotEnhanced:
                                 return False
                             
                             if success:
+                                processed_mounts += 1
                                 backed_up_volumes.append({
-                                    'type': 'bind_mount',
-                                    'source': source,
+                                    'type': 'named_volume',
+                                    'name': volume_name,
                                     'mount_point': mount_point,
                                     'backup_file': str(backup_file),
                                     'size': backup_file.stat().st_size if backup_file.exists() else 0
                                 })
-                                self.console.print(f"[green]✅ Backed up bind mount '{source}' to {backup_file}[/green]")
+                                self.console.print(f"[green]✅ Backed up volume '{volume_name}' to {backup_file}[/green]")
+                                
+                                # Update progress after successful backup
+                                if container_name:
+                                    progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
+                                    self._update_progress('backup', progress_pct, f'✅ Zbackupowano volume: {volume_name} ({processed_mounts}/{total_mounts})')
                             else:
-                                self.logger.warning(f"Failed to backup bind mount {source}, continuing...")
-                                self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
+                                self.logger.warning(f"Failed to backup volume {volume_name}, continuing...")
+                                self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}', continuing...[/yellow]")
                                 # Don't return False - continue with other volumes
-                        else:
-                            self.logger.warning(f"Bind mount source does not exist: {source}")
-                            self.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
-                    except Exception as e:
-                        self.logger.error(f"Failed to backup bind mount {source}: {e}")
-                        self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
+                        except Exception as e:
+                            self.logger.error(f"Failed to backup volume {volume_name}: {e}")
+                            self.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}': {e}, continuing...[/yellow]")
+                            # Don't return False - continue with other volumes
+                
+                    elif source:
+                        # Bind mount - backup using Docker container (faster and no sudo needed for many paths)
+                        self.console.print(f"[cyan]Backing up bind mount: {source} -> {mount_point}[/cyan]")
+                        # Update progress for bind mount backup
+                        if container_name:
+                            source_name = Path(source).name
+                            progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
+                            self._update_progress('backup', progress_pct, f'📦 Creating backup of bind mount: {source_name}...')
+                        try:
+                            if Path(source).exists():
+                                # Create safe filename from path
+                                safe_name = source.replace('/', '_').replace('\\', '_').strip('_')
+                                backup_file = backup_dir / f"bind_{safe_name}.tar.gz"
+                                
+                                # Use Docker container for backup (faster, no sudo needed, better for large directories)
+                                success = self._backup_bind_mount_using_docker(source, backup_file, container_name)
+                                
+                                # Check for cancellation after backup
+                                if self._check_cancel_flag(container_name):
+                                    self.logger.warning(f"Backup cancelled by user for {container_name}")
+                                    self.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                                    return False
+                                
+                                if success:
+                                    processed_mounts += 1
+                                    backed_up_volumes.append({
+                                        'type': 'bind_mount',
+                                        'source': source,
+                                        'mount_point': mount_point,
+                                        'backup_file': str(backup_file),
+                                        'size': backup_file.stat().st_size if backup_file.exists() else 0
+                                    })
+                                    self.console.print(f"[green]✅ Backed up bind mount '{source}' to {backup_file}[/green]")
+                                    
+                                    # Update progress after successful backup
+                                    if container_name:
+                                        progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
+                                        self._update_progress('backup', progress_pct, f'✅ Zbackupowano bind mount: {source_name} ({processed_mounts}/{total_mounts})')
+                                else:
+                                    self.logger.warning(f"Failed to backup bind mount {source}, continuing...")
+                                    self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
+                                    # Don't return False - continue with other volumes
+                            else:
+                                self.logger.warning(f"Bind mount source does not exist: {source}")
+                                self.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
+                        except Exception as e:
+                            self.logger.error(f"Failed to backup bind mount {source}: {e}")
+                            self.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
+                            # Don't return False - continue with other volumes
+                
+                # Save backup metadata (inside loading context)
+                if container_name:
+                    self._update_progress('backup', 18, '💾 Saving backup metadata...')
+                
+                backup_metadata = {
+                    'container_name': container_name,
+                    'backup_time': datetime.now().isoformat(),
+                    'container_image': container.image.tags[0] if container.image.tags else container.image.id,
+                    'volumes': backed_up_volumes,
+                    'total_size': sum(v.get('size', 0) for v in backed_up_volumes)
+                }
+                
+                metadata_file = backup_dir / 'backup_metadata.json'
+                with open(metadata_file, 'w') as f:
+                    json.dump(backup_metadata, f, indent=2)
+                
+                # Final progress update
+                if container_name:
+                    self._update_progress('backup', 20, '✅ Backup completed')
             
-            # Save backup metadata
-            backup_metadata = {
-                'container_name': container_name,
-                'backup_time': datetime.now().isoformat(),
-                'container_image': container.image.tags[0] if container.image.tags else container.image.id,
-                'volumes': backed_up_volumes,
-                'total_size': sum(v.get('size', 0) for v in backed_up_volumes)
-            }
-            
-            metadata_file = backup_dir / 'backup_metadata.json'
-            with open(metadata_file, 'w') as f:
-                json.dump(backup_metadata, f, indent=2)
-            
-            total_size_mb = backup_metadata['total_size'] / (1024 * 1024)
+            # Show results after loading completes
+            total_size_mb = sum(v.get('size', 0) for v in backed_up_volumes) / (1024 * 1024)
             self.console.print(f"[bold green]✅ Data backup completed![/bold green]")
             self.console.print(f"[green]Backup location: {backup_path}[/green]")
             self.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
@@ -4642,10 +5238,18 @@ class DockerPilotEnhanced:
                 text=True
             )
             
-            # Wait with periodic cancel checks
+            # Wait with periodic cancel checks and progress updates
             timeout = 600  # 10 minutes timeout (large volumes like influxdb2)
             start_time = time.time()
             check_interval = 2  # Check cancel flag every 2 seconds
+            last_size = 0
+            last_log_time = start_time
+            log_interval = 10  # Log progress every 10 seconds
+            
+            self.logger.info(f"Starting backup of volume '{volume_name}' (timeout: {timeout}s)")
+            
+            last_progress_update = 0
+            progress_update_interval = 5  # Update progress every 5 seconds
             
             while True:
                 elapsed = time.time() - start_time
@@ -4655,7 +5259,11 @@ class DockerPilotEnhanced:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                    self.logger.error(f"Volume backup timed out for {volume_name}")
+                    self.logger.error(f"Volume backup timed out for {volume_name} after {elapsed:.1f}s")
+                    if container_name:
+                        self._update_progress('backup', 95, f'❌ Backup timeout for volume: {volume_name}')
+                    # Clean up any orphaned backup containers
+                    self._cleanup_backup_containers()
                     return False
                 
                 # Check for cancellation
@@ -4666,11 +5274,38 @@ class DockerPilotEnhanced:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
+                    if container_name:
+                        progress_pct = min(90, int((elapsed / timeout) * 100))
+                        self._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {volume_name}')
+                    # Clean up any orphaned backup containers
+                    self._cleanup_backup_containers()
                     return False
                 
                 # Check if process finished
                 if process.poll() is not None:
+                    self.logger.info(f"Volume backup completed for '{volume_name}' in {elapsed:.1f}s")
                     break
+                
+                # Update progress periodically (for web interface)
+                if container_name and elapsed - last_progress_update >= progress_update_interval:
+                    current_size = backup_file.stat().st_size if backup_file.exists() else 0
+                    size_mb = current_size / (1024 * 1024) if current_size > 0 else 0
+                    progress_pct = min(90, int((elapsed / timeout) * 100))
+                    self._update_progress('backup', progress_pct, f'📦 Creating backup of volume: {volume_name}... ({int(elapsed)}s, {size_mb:.1f} MB)')
+                    last_progress_update = elapsed
+                
+                # Log progress periodically (for console)
+                if time.time() - last_log_time >= log_interval:
+                    current_size = backup_file.stat().st_size if backup_file.exists() else 0
+                    size_mb = current_size / (1024 * 1024) if current_size > 0 else 0
+                    progress_pct = min(95, int((elapsed / timeout) * 100))
+                    
+                    if current_size > last_size:
+                        self.logger.info(f"Backup progress: {progress_pct}% | Elapsed: {elapsed:.1f}s | Size: {size_mb:.1f} MB | Volume: {volume_name}")
+                        last_size = current_size
+                    else:
+                        self.logger.info(f"Backup progress: {progress_pct}% | Elapsed: {elapsed:.1f}s | Volume: {volume_name}")
+                    last_log_time = time.time()
                 
                 # Wait a bit before next check
                 time.sleep(check_interval)
@@ -4683,13 +5318,28 @@ class DockerPilotEnhanced:
             if returncode == 0:
                 if backup_file.exists():
                     try:
-                        # Use sudo to fix ownership if file is owned by root
-                        subprocess.run(['sudo', 'chown', f'{uid}:{gid}', str(backup_file)], 
-                                     capture_output=True, timeout=10, check=False)
-                    except:
-                        self.logger.warning(f"Could not fix ownership of {backup_file} - may require manual chown")
+                        # Try to fix ownership - first try without sudo, then with sudo if needed
+                        try:
+                            # Try direct chown first (might work if file is already accessible)
+                            os.chown(backup_file, uid, gid)
+                            self.logger.debug(f"Fixed ownership of {backup_file} without sudo")
+                        except (PermissionError, OSError):
+                            # If direct chown fails, try with sudo if password is available
+                            if hasattr(self, '_sudo_password') and self._sudo_password:
+                                self._run_sudo_command(['chown', f'{uid}:{gid}', str(backup_file)], timeout=10)
+                                self.logger.debug(f"Fixed ownership of {backup_file} with sudo")
+                            else:
+                                # No sudo password available - log warning but don't fail
+                                # Backup was successful, ownership is just a convenience
+                                self.logger.warning(f"Could not fix ownership of {backup_file} - no sudo password available")
+                                self.logger.warning("Backup file may be owned by root - this is not critical, backup was successful")
+                    except Exception as e:
+                        # Any other error - log but don't fail (backup was successful)
+                        self.logger.warning(f"Could not fix ownership of {backup_file}: {e} - may require manual chown")
                 
                 self.logger.info(f"Volume {volume_name} backed up successfully using Docker")
+                if container_name:
+                    self._update_progress('backup', 90, f'✅ Zbackupowano volume: {volume_name}')
                 return True
             else:
                 # Log stderr but don't fail on socket warnings
@@ -4700,6 +5350,77 @@ class DockerPilotEnhanced:
         except Exception as e:
             self.logger.error(f"Docker volume backup failed: {e}")
             return False
+    
+    def _cleanup_backup_containers(self):
+        """Clean up any leftover backup containers (alpine:latest) that may have been orphaned
+        
+        This method finds and removes containers using alpine:latest image that are in exited state
+        or have been running for too long. These are typically backup containers that weren't
+        properly cleaned up due to process interruption.
+        """
+        try:
+            if not self.client:
+                return
+            
+            # Find all containers using alpine:latest image
+            # These are likely backup containers that weren't cleaned up
+            all_containers = self.client.containers.list(all=True, filters={'ancestor': 'alpine:latest'})
+            
+            cleaned = 0
+            for container in all_containers:
+                try:
+                    container.reload()  # Refresh container state
+                    
+                    # Remove exited containers (these are definitely orphaned)
+                    if container.status == 'exited':
+                        container.remove()
+                        cleaned += 1
+                        self.logger.debug(f"Cleaned up exited backup container: {container.id[:12]}")
+                    elif container.status == 'running':
+                        # Check how long it's been running
+                        # Normal backup containers should finish in seconds/minutes
+                        try:
+                            created_str = container.attrs.get('Created', '')
+                            if created_str:
+                                # Docker timestamps are in ISO format: "2025-12-21T23:22:24.123456789Z"
+                                # Remove microseconds and timezone for simpler parsing
+                                created_str_clean = created_str.split('.')[0].replace('Z', '')
+                                created_time = datetime.strptime(created_str_clean, '%Y-%m-%dT%H:%M:%S')
+                                running_time = (datetime.now() - created_time).total_seconds()
+                                
+                                # If running for more than 10 minutes, it's likely orphaned
+                                if running_time > 600:
+                                    container.stop(timeout=5)
+                                    container.remove()
+                                    cleaned += 1
+                                    self.logger.debug(f"Cleaned up orphaned backup container (running {running_time:.0f}s): {container.id[:12]}")
+                        except (ValueError, TypeError, KeyError) as e:
+                            # If we can't parse the timestamp, check if container has been running too long
+                            # by checking its uptime attribute if available
+                            try:
+                                uptime_str = container.attrs.get('State', {}).get('StartedAt', '')
+                                if uptime_str:
+                                    uptime_clean = uptime_str.split('.')[0].replace('Z', '')
+                                    started_time = datetime.strptime(uptime_clean, '%Y-%m-%dT%H:%M:%S')
+                                    running_time = (datetime.now() - started_time).total_seconds()
+                                    if running_time > 600:
+                                        container.stop(timeout=5)
+                                        container.remove()
+                                        cleaned += 1
+                                        self.logger.debug(f"Cleaned up orphaned backup container (running {running_time:.0f}s): {container.id[:12]}")
+                            except (ValueError, TypeError, KeyError):
+                                # If we still can't determine, just log and skip
+                                self.logger.debug(f"Could not determine container age, skipping: {container.id[:12]}")
+                except docker.errors.NotFound:
+                    # Container was already removed, skip
+                    pass
+                except Exception as e:
+                    self.logger.debug(f"Could not clean up container {container.id[:12]}: {e}")
+            
+            if cleaned > 0:
+                self.logger.info(f"Cleaned up {cleaned} orphaned backup container(s)")
+        except Exception as e:
+            self.logger.debug(f"Error cleaning up backup containers: {e}")
     
     def _backup_bind_mount_using_docker(self, source_path: str, backup_file: Path, container_name: str = None) -> bool:
         """Backup bind mount directory using a temporary Docker container (no sudo needed!)
@@ -4744,10 +5465,12 @@ class DockerPilotEnhanced:
                 text=True
             )
             
-            # Wait with periodic cancel checks
+            # Wait with periodic cancel checks and progress updates
             timeout = 600  # 10 minutes timeout (large directories like influxdb)
             start_time = time.time()
             check_interval = 2  # Check cancel flag every 2 seconds
+            last_progress_update = 0
+            progress_update_interval = 5  # Update progress every 5 seconds
             
             while True:
                 elapsed = time.time() - start_time
@@ -4758,6 +5481,10 @@ class DockerPilotEnhanced:
                     except subprocess.TimeoutExpired:
                         process.kill()
                     self.logger.error(f"Bind mount backup timed out for {source_path}")
+                    # Clean up any orphaned backup containers
+                    self._cleanup_backup_containers()
+                    if container_name:
+                        self._update_progress('backup', 95, f'❌ Backup timeout for {source.name}')
                     return False
                 
                 # Check for cancellation
@@ -4768,7 +5495,18 @@ class DockerPilotEnhanced:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
+                    # Clean up any orphaned backup containers
+                    self._cleanup_backup_containers()
+                    if container_name:
+                        progress_pct = min(90, int((elapsed / timeout) * 100))
+                        self._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {source.name}')
                     return False
+                
+                # Update progress periodically during backup
+                if container_name and elapsed - last_progress_update >= progress_update_interval:
+                    progress_pct = min(90, int((elapsed / timeout) * 100))
+                    self._update_progress('backup', progress_pct, f'📦 Creating backup of {source.name}... ({int(elapsed)}s)')
+                    last_progress_update = elapsed
                 
                 # Check if process finished
                 if process.poll() is not None:
@@ -4784,11 +5522,24 @@ class DockerPilotEnhanced:
             # Fix ownership of backup file after container finishes
             if returncode == 0 and backup_file.exists():
                 try:
-                    # Use sudo to fix ownership if file is owned by root
-                    subprocess.run(['sudo', 'chown', f'{uid}:{gid}', str(backup_file)], 
-                                 capture_output=True, timeout=10, check=False)
-                except:
-                    self.logger.warning(f"Could not fix ownership of {backup_file} - may require manual chown")
+                    # Try to fix ownership - first try without sudo, then with sudo if needed
+                    try:
+                        # Try direct chown first (might work if file is already accessible)
+                        os.chown(backup_file, uid, gid)
+                        self.logger.debug(f"Fixed ownership of {backup_file} without sudo")
+                    except (PermissionError, OSError):
+                        # If direct chown fails, try with sudo if password is available
+                        if hasattr(self, '_sudo_password') and self._sudo_password:
+                            self._run_sudo_command(['chown', f'{uid}:{gid}', str(backup_file)], timeout=10)
+                            self.logger.debug(f"Fixed ownership of {backup_file} with sudo")
+                        else:
+                            # No sudo password available - log warning but don't fail
+                            # Backup was successful, ownership is just a convenience
+                            self.logger.warning(f"Could not fix ownership of {backup_file} - no sudo password available")
+                            self.logger.warning("Backup file may be owned by root - this is not critical, backup was successful")
+                except Exception as e:
+                    # Any other error - log but don't fail (backup was successful)
+                    self.logger.warning(f"Could not fix ownership of {backup_file}: {e} - may require manual chown")
                 
                 self.logger.info(f"Bind mount {source_path} backed up successfully using Docker")
                 return True
@@ -4828,69 +5579,268 @@ class DockerPilotEnhanced:
             tar_cmd = ['tar', '-czf', str(backup_file), '-C', str(source.parent), source.name]
             
             if requires_sudo:
-                tar_cmd = ['sudo'] + tar_cmd
                 self.logger.info(f"Using sudo for backup of privileged path: {source_path}")
+                # Use _run_sudo_command to pass password if available
+                if hasattr(self, '_sudo_password') and self._sudo_password:
+                    # For long-running operations like tar, use Popen with password passing
+                    # instead of communicate() which may not work well for long operations
+                    password_bytes = (self._sudo_password + '\n').encode('utf-8')
+                    sudo_cmd = ['sudo', '-S'] + tar_cmd  # -S reads password from stdin
+                    
+                    try:
+                        process = subprocess.Popen(
+                            sudo_cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=False  # Use binary mode for better performance
+                        )
+                        # Send password immediately
+                        process.stdin.write(password_bytes)
+                        process.stdin.close()
+                        
+                        # Wait with periodic cancel checks and progress updates
+                        start_time = time.time()
+                        check_interval = 2
+                        last_progress_update = 0
+                        progress_update_interval = 5  # Update progress every 5 seconds
+                        
+                        while True:
+                            elapsed = time.time() - start_time
+                            if elapsed > timeout:
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                self.logger.error(f"Backup timed out for {source_path}")
+                                if container_name:
+                                    self._update_progress('backup', 95, f'❌ Backup timeout for {Path(source_path).name}')
+                                return False
+                            
+                            # Check for cancellation
+                            if container_name and self._check_cancel_flag(container_name):
+                                self.logger.warning(f"Backup cancelled during directory backup: {source_path}")
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                if container_name:
+                                    self._update_progress('backup', int((elapsed / timeout) * 100), f'⚠️ Backup cancelled: {Path(source_path).name}')
+                                return False
+                            
+                            # Update progress periodically during backup
+                            if container_name and elapsed - last_progress_update >= progress_update_interval:
+                                progress_pct = min(90, int((elapsed / timeout) * 100))
+                                self._update_progress('backup', progress_pct, f'📦 Creating backup of {Path(source_path).name}... ({int(elapsed)}s)')
+                                last_progress_update = elapsed
+                            
+                            # Check if process finished
+                            if process.poll() is not None:
+                                break
+                            
+                            # Wait a bit before next check
+                            time.sleep(check_interval)
+                        
+                        # Get result
+                        stdout, stderr = process.communicate()
+                        returncode = process.returncode
+                        
+                        if returncode == 0:
+                            # Fix ownership of created backup file
+                            if backup_file.exists():
+                                try:
+                                    self._run_sudo_command(['chown', f"{os.getuid()}:{os.getgid()}", str(backup_file)], timeout=10)
+                                except:
+                                    pass  # Ignore chown errors
+                            return True
+                        else:
+                            error_msg = stderr.decode('utf-8', errors='ignore').strip() if stderr else "Unknown error"
+                            # Check if sudo prompted for password (this shouldn't happen with -S)
+                            if 'password' in error_msg.lower() or '[sudo] password' in error_msg.lower():
+                                self.logger.error(f"Sudo password prompt appeared during backup - password may be incorrect or not passed correctly")
+                                self.logger.error(f"Command: {' '.join(sudo_cmd)}")
+                                self.logger.error(f"Error: {error_msg}")
+                                self.logger.error("This should not happen - password should be passed via stdin with -S flag")
+                            self.logger.error(f"Tar backup failed for {source_path}: {error_msg}")
+                            return False
+                    except Exception as e:
+                        self.logger.error(f"Failed to run sudo tar backup: {e}")
+                        self.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
+                        return False
+                else:
+                    # No password available - but we need sudo
+                    # This should not happen in web interface, but if it does, log warning and fail
+                    self.logger.error(f"Sudo password required for backup of {source_path} but password not available")
+                    self.logger.error("This should not happen in web interface - password should be set from session")
+                    self.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
+                    self.console.print(f"[red]❌ Sudo password required but not available. Cannot backup {source_path}[/red]")
+                    self.console.print(f"[red]Please provide sudo password via the web interface modal[/red]")
+                    return False
             else:
                 self.logger.info(f"Using direct tar for backup of: {source_path}")
             
-            # Use Popen for better cancellation support
-            process = subprocess.Popen(
-                tar_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            # Show progress bar for non-sudo backup as well
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                console=self.console
+            ) as progress:
+                backup_task = progress.add_task(
+                    f"📦 Backing up {source.name}...",
+                    total=100
+                )
+                
+                # Use Popen for better cancellation support (for non-sudo or when password not available)
+                process = subprocess.Popen(
+                    tar_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                # Wait with periodic cancel checks and progress updates
+                start_time = time.time()
+                check_interval = 2  # Check cancel flag every 2 seconds
+                last_size = 0
+                last_progress_update = 0
+                progress_update_interval = 5  # Update progress every 5 seconds
+                
+                while True:
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                        progress.update(backup_task, description="❌ Backup timed out")
+                        self.logger.error(f"Backup timed out for {source_path}")
+                        if container_name:
+                            self._update_progress('backup', 95, f'❌ Backup timeout for {source.name}')
+                        return False
+                    
+                    # Check for cancellation
+                    if container_name and self._check_cancel_flag(container_name):
+                        self.logger.warning(f"Backup cancelled during directory backup: {source_path}")
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                        progress.update(backup_task, description="⚠️ Backup cancelled")
+                        if container_name:
+                            progress_pct = min(90, int((elapsed / timeout) * 100))
+                            self._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {source.name}')
+                        return False
+                    
+                    # Update progress periodically during backup (for web interface)
+                    if container_name and elapsed - last_progress_update >= progress_update_interval:
+                        progress_pct = min(90, int((elapsed / timeout) * 100))
+                        self._update_progress('backup', progress_pct, f'📦 Creating backup of {source.name}... ({int(elapsed)}s)')
+                        last_progress_update = elapsed
+                    
+                    # Check if process finished
+                    if process.poll() is not None:
+                        progress.update(backup_task, completed=100, description="✅ Backup completed")
+                        break
+                    
+                    # Update progress based on file size growth (for console)
+                    if backup_file.exists():
+                        current_size = backup_file.stat().st_size
+                        if current_size > last_size:
+                            # Estimate progress based on time elapsed vs timeout
+                            # This is a rough estimate since we don't know total size
+                            progress_pct = min(95, int((elapsed / timeout) * 100))
+                            progress.update(backup_task, completed=progress_pct)
+                            last_size = current_size
+                    
+                    # Wait a bit before next check
+                    time.sleep(check_interval)
             
-            # Wait with periodic cancel checks
-            start_time = time.time()
-            check_interval = 2  # Check cancel flag every 2 seconds
-            
-            while True:
-                elapsed = time.time() - start_time
-                if elapsed > timeout:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                    self.logger.error(f"Backup timed out for {source_path}")
+                # Get result
+                stdout, stderr = process.communicate()
+                returncode = process.returncode
+                
+                if returncode == 0:
+                    if requires_sudo and backup_file.exists():
+                        # Fix ownership of created backup file
+                        try:
+                            self._run_sudo_command(['chown', f"{os.getuid()}:{os.getgid()}", str(backup_file)], timeout=10)
+                        except:
+                            pass  # Ignore chown errors
+                    return True
+                else:
+                    error_msg = stderr.strip() if stderr else "Unknown error"
+                    self.logger.error(f"Tar backup failed for {source_path}: {error_msg}")
                     return False
-                
-                # Check for cancellation
-                if container_name and self._check_cancel_flag(container_name):
-                    self.logger.warning(f"Backup cancelled during directory backup: {source_path}")
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                    return False
-                
-                # Check if process finished
-                if process.poll() is not None:
-                    break
-                
-                # Wait a bit before next check
-                time.sleep(check_interval)
-            
-            # Get result
-            stdout, stderr = process.communicate()
-            returncode = process.returncode
-            
-            if returncode == 0:
-                if requires_sudo and backup_file.exists():
-                    # Fix ownership of created backup file
-                    subprocess.run(['sudo', 'chown', f"{os.getuid()}:{os.getgid()}", str(backup_file)], 
-                                 capture_output=True, timeout=10, check=False)
-                return True
-            else:
-                error_msg = stderr.strip() if stderr else "Unknown error"
-                self.logger.error(f"Tar backup failed for {source_path}: {error_msg}")
-                return False
-                
+                    
         except Exception as e:
             self.logger.error(f"Failed to create tar backup: {e}")
             return False
+    
+    def _run_sudo_command(self, command_args, timeout=10, check=False):
+        """Run sudo command with password if available
+        
+        Args:
+            command_args: List of command arguments (without 'sudo')
+            timeout: Command timeout in seconds
+            check: If True, raise exception on non-zero return code
+        
+        Raises:
+            RuntimeError: If sudo password is required but not available
+            subprocess.TimeoutExpired: If command times out and check=True
+            subprocess.CalledProcessError: If command fails and check=True
+        """
+        sudo_cmd = ['sudo'] + command_args
+        
+        # If password is available (from web session), use it
+        if hasattr(self, '_sudo_password') and self._sudo_password:
+            # Use subprocess with stdin to pass password to sudo -S (read from stdin)
+            # -S makes sudo read password from stdin
+            # We pass password + newline to stdin
+            password_bytes = (self._sudo_password + '\n').encode('utf-8')
+            
+            try:
+                sudo_process = subprocess.Popen(
+                    sudo_cmd + ['-S'],  # -S reads password from stdin
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout, stderr = sudo_process.communicate(input=password_bytes, timeout=timeout)
+                returncode = sudo_process.returncode
+                
+                # Check if sudo prompted for password (this shouldn't happen with -S)
+                if stderr and b'password' in stderr.lower() and returncode != 0:
+                    error_msg = stderr.decode('utf-8', errors='ignore').strip()
+                    self.logger.error(f"Sudo command failed - password may be incorrect or sudo prompt appeared: {error_msg}")
+                    if check:
+                        raise RuntimeError(f"Sudo command failed: {error_msg}")
+            except subprocess.TimeoutExpired:
+                sudo_process.kill()
+                stdout, stderr = sudo_process.communicate()
+                returncode = -1
+                if check:
+                    raise subprocess.TimeoutExpired(sudo_cmd, timeout)
+        else:
+            # No password available - this should not happen in web interface
+            # Log warning and return error instead of prompting
+            self.logger.error(f"Sudo password required for command {command_args} but password not available")
+            self.logger.error("This should not happen in web interface - password should be set from session")
+            self.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
+            raise RuntimeError(f"Sudo password required but not available. Cannot execute: {' '.join(command_args)}")
+        
+        if check and returncode != 0:
+            error_msg = stderr.decode('utf-8', errors='ignore').strip() if stderr else "Unknown error"
+            raise subprocess.CalledProcessError(returncode, sudo_cmd, stdout, stderr)
+        
+        return subprocess.CompletedProcess(sudo_cmd, returncode, stdout, stderr)
     
     def restore_container_data(self, container_name: str, backup_path: str) -> bool:
         """
@@ -4923,55 +5873,57 @@ class DockerPilotEnhanced:
             container = self.client.containers.get(container_name)
             mounts = container.attrs.get('Mounts', [])
             
-            # Restore each volume
-            for volume_info in backup_metadata.get('volumes', []):
-                backup_file = Path(volume_info['backup_file'])
-                if not backup_file.exists():
-                    # Try relative to backup_dir
-                    backup_file = backup_dir / backup_file.name
-                
-                if not backup_file.exists():
-                    self.console.print(f"[yellow]⚠️ Backup file not found: {volume_info['backup_file']}[/yellow]")
-                    continue
-                
-                if volume_info['type'] == 'named_volume':
-                    volume_name = volume_info['name']
-                    self.console.print(f"[cyan]Restoring named volume: {volume_name}[/cyan]")
+            # Show loading indicator during restore
+            with self._with_loading("Restoring container data"):
+                # Restore each volume
+                for volume_info in backup_metadata.get('volumes', []):
+                    backup_file = Path(volume_info['backup_file'])
+                    if not backup_file.exists():
+                        # Try relative to backup_dir
+                        backup_file = backup_dir / backup_file.name
                     
-                    try:
-                        volume = self.client.volumes.get(volume_name)
-                        volume_path = volume.attrs['Mountpoint']
+                    if not backup_file.exists():
+                        self.console.print(f"[yellow]⚠️ Backup file not found: {volume_info['backup_file']}[/yellow]")
+                        continue
+                    
+                    if volume_info['type'] == 'named_volume':
+                        volume_name = volume_info['name']
+                        self.console.print(f"[cyan]Restoring named volume: {volume_name}[/cyan]")
                         
-                        # Extract backup to volume
-                        self._restore_from_tar(backup_file, volume_path)
-                        self.console.print(f"[green]✅ Restored volume '{volume_name}'[/green]")
-                    except Exception as e:
-                        self.logger.error(f"Failed to restore volume {volume_name}: {e}")
-                        self.console.print(f"[red]❌ Failed to restore volume '{volume_name}': {e}[/red]")
-                        return False
-                
-                elif volume_info['type'] == 'bind_mount':
-                    source_path = volume_info['source']
-                    self.console.print(f"[cyan]Restoring bind mount: {source_path}[/cyan]")
-                    
-                    try:
-                        if Path(source_path).exists():
-                            # Backup existing data first
-                            existing_backup = Path(source_path).parent / f"{Path(source_path).name}.backup_{int(time.time())}"
-                            if Path(source_path).is_dir():
-                                import shutil
-                                shutil.move(str(source_path), str(existing_backup))
-                                Path(source_path).mkdir(parents=True, exist_ok=True)
+                        try:
+                            volume = self.client.volumes.get(volume_name)
+                            volume_path = volume.attrs['Mountpoint']
                             
-                            # Extract backup
-                            self._restore_from_tar(backup_file, source_path)
-                            self.console.print(f"[green]✅ Restored bind mount '{source_path}'[/green]")
-                        else:
-                            self.console.print(f"[yellow]⚠️ Bind mount path does not exist: {source_path}[/yellow]")
-                    except Exception as e:
-                        self.logger.error(f"Failed to restore bind mount {source_path}: {e}")
-                        self.console.print(f"[red]❌ Failed to restore bind mount '{source_path}': {e}[/red]")
-                        return False
+                            # Extract backup to volume
+                            self._restore_from_tar(backup_file, volume_path)
+                            self.console.print(f"[green]✅ Restored volume '{volume_name}'[/green]")
+                        except Exception as e:
+                            self.logger.error(f"Failed to restore volume {volume_name}: {e}")
+                            self.console.print(f"[red]❌ Failed to restore volume '{volume_name}': {e}[/red]")
+                            return False
+                    
+                    elif volume_info['type'] == 'bind_mount':
+                        source_path = volume_info['source']
+                        self.console.print(f"[cyan]Restoring bind mount: {source_path}[/cyan]")
+                        
+                        try:
+                            if Path(source_path).exists():
+                                # Backup existing data first
+                                existing_backup = Path(source_path).parent / f"{Path(source_path).name}.backup_{int(time.time())}"
+                                if Path(source_path).is_dir():
+                                    import shutil
+                                    shutil.move(str(source_path), str(existing_backup))
+                                    Path(source_path).mkdir(parents=True, exist_ok=True)
+                                
+                                # Extract backup
+                                self._restore_from_tar(backup_file, source_path)
+                                self.console.print(f"[green]✅ Restored bind mount '{source_path}'[/green]")
+                            else:
+                                self.console.print(f"[yellow]⚠️ Bind mount path does not exist: {source_path}[/yellow]")
+                        except Exception as e:
+                            self.logger.error(f"Failed to restore bind mount {source_path}: {e}")
+                            self.console.print(f"[red]❌ Failed to restore bind mount '{source_path}': {e}[/red]")
+                            return False
             
             self.console.print(f"[bold green]✅ Data restore completed![/bold green]")
             return True
