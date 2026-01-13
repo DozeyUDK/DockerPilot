@@ -1,0 +1,231 @@
+# DockerPilot Extras - CI/CD Manager (Web)
+
+Web application complementing [DockerPilot](https://github.com/DozeyUDK/DockerPilot) - graphical interface for managing CI/CD workflows for GitLab and Jenkins.
+
+## 🎯 Features
+
+- **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
+- **Deployment Management** - Visual management and execution of deployments
+- **Environment Promotion** - Workflow dev → staging → prod
+- **Status and Monitoring** - Check Docker and DockerPilot status
+
+## 🏗️ Architecture
+
+- **Backend**: Flask (Python) - REST API
+- **Frontend**: React + Vite - Single Page Application
+- **Integration**: DockerPilot CLI
+
+## 📋 Requirements
+
+- Python 3.8+
+- Node.js 16+ and npm
+- Docker 20.10+
+- DockerPilot installed and available in PATH
+
+## 🚀 Installation
+
+### 1. Backend (Flask)
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Configure environment variables (optional)
+cp .env.example .env
+# Edit .env if you need to change configuration
+```
+
+### 2. Frontend (React)
+
+```bash
+cd frontend
+
+# Install Node.js dependencies
+npm install
+
+# Or if you use yarn
+yarn install
+```
+
+### 3. DockerPilot Verification
+
+```bash
+# Check if DockerPilot is installed
+dockerpilot --version
+
+# If not, install from: https://github.com/DozeyUDK/DockerPilot
+```
+
+## 💻 Running
+
+### Development Mode
+
+**Terminal 1 - Backend:**
+```bash
+python run_dev.py
+# Backend will be available at http://localhost:5000
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm run dev
+# Frontend will be available at http://localhost:3000
+```
+
+### Production Mode
+
+**1. Build frontend:**
+```bash
+cd frontend
+npm run build
+```
+
+**2. Run backend (also serves frontend):**
+```bash
+# Backend automatically serves the built frontend
+python run_dev.py
+
+# Or use gunicorn/uWSGI for production
+gunicorn -w 4 -b 0.0.0.0:5000 "backend.app:app"
+```
+
+Application will be available at: `http://localhost:5000`
+
+## 🌐 Hosting on the Same Host as DockerPilot
+
+### Configuration with Reverse Proxy (Nginx)
+
+```nginx
+# /etc/nginx/sites-available/dockerpilot-extras
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location /extras/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Configuration with DockerPilot
+
+If DockerPilot runs on port 8080, you can configure DockerPilot Extras on port 5000:
+
+```bash
+# Set environment variable
+export PORT=5000
+
+# Run application
+python run_dev.py
+```
+
+## 📁 Project Structure
+
+```
+DockerPilotExtras/
+├── backend/
+│   ├── app.py              # Flask main application
+│   ├── config.py           # Configuration
+│   └── __init__.py
+├── frontend/
+│   ├── src/
+│   │   ├── pages/          # Page components
+│   │   ├── services/       # API services
+│   │   ├── App.jsx         # Main component
+│   │   └── main.jsx
+│   ├── package.json
+│   └── vite.config.js
+├── utils/
+│   └── pipeline_generator.py
+├── requirements.txt
+├── run_dev.py
+└── README.md
+```
+
+## 🔧 API Endpoints
+
+### Pipeline
+- `POST /api/pipeline/generate` - Generate pipeline
+- `POST /api/pipeline/save` - Save pipeline
+
+### Deployment
+- `GET /api/deployment/config` - Get configuration
+- `POST /api/deployment/config` - Save configuration
+- `POST /api/deployment/execute` - Execute deployment
+- `GET /api/deployment/history` - Deployment history
+
+### Environment
+- `POST /api/environment/promote` - Promote environment
+
+### Status
+- `GET /api/status` - Docker and DockerPilot status
+- `GET /api/containers` - Container list
+- `GET /api/health` - Health check
+
+## 🐛 Troubleshooting
+
+### Backend won't start
+
+```bash
+# Check if all dependencies are installed
+pip install -r requirements.txt
+
+# Check if port 5000 is free
+netstat -an | grep 5000
+```
+
+### Frontend doesn't connect to backend
+
+- Check if backend is running on port 5000
+- Check proxy configuration in `frontend/vite.config.js`
+- In production mode, make sure frontend is built
+
+### DockerPilot not found
+
+```bash
+# Check if DockerPilot is in PATH
+which dockerpilot  # Linux/Mac
+where dockerpilot  # Windows
+
+# Check if it works
+dockerpilot --version
+```
+
+### CORS Errors
+
+Backend has CORS enabled by default for all sources. In production, configure `CORS_ORIGINS` in `.env`.
+
+## 🔒 Security
+
+- Change `SECRET_KEY` in production
+- Configure `CORS_ORIGINS` to limit access
+- Use HTTPS in production
+- Consider authentication for API
+
+## 📚 API Documentation
+
+API documentation is available via `/api/health` endpoint and source code in `backend/app.py`.
+
+## 🤝 Support
+
+If you encounter issues:
+1. Check backend and frontend logs
+2. Verify Docker and DockerPilot status
+3. Report an issue in the repository
+
+## 📝 License
+
+MIT License - see [LICENSE](LICENSE)
+
+## 🔗 Related Projects
+
+- [DockerPilot](https://github.com/DozeyUDK/DockerPilot) - Main Docker management tool
+
+---
+
+**DockerPilot Extras** - Web-based CI/CD Manager for DockerPilot
