@@ -2,7 +2,7 @@
 
 Web application complementing [DockerPilot](https://github.com/DozeyUDK/DockerPilot) - graphical interface for managing CI/CD workflows for GitLab and Jenkins.
 
-## 🚀 Quick Start
+## Quick Start
 
 > **Stability notice:** DockerPilotExtras is not yet stable and is under active development.
 
@@ -64,27 +64,27 @@ This will automatically:
 - Handle port conflicts
 - Stop both servers on Ctrl+C
 
-## 🎯 Features
+## Features
 
 - **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
 - **Deployment Management** - Visual management and execution of deployments
 - **Environment Promotion** - Workflow dev → staging → prod
 - **Status and Monitoring** - Check Docker and DockerPilot status
 
-## 🏗️ Architecture
+## Architecture
 
 - **Backend**: Flask (Python) - REST API
 - **Frontend**: React + Vite - Single Page Application
 - **Integration**: DockerPilot CLI
 
-## 📋 Requirements
+## Requirements
 
 - Python 3.8+
 - Node.js 16+ and npm
 - Docker 20.10+
 - DockerPilot installed and available in PATH
 
-## 🚀 Installation
+## Installation
 
 ### 1. Backend (Flask)
 
@@ -118,7 +118,7 @@ dockerpilot --version
 # If not, install from: https://github.com/DozeyUDK/DockerPilot
 ```
 
-## 📖 Basic Usage
+## Basic Usage
 
 ### Pipeline Generator
 
@@ -151,7 +151,7 @@ dockerpilot --version
 2. Check Docker and DockerPilot status
 3. View container list
 
-## 🌐 Hosting
+## Hosting
 
 ### On the Same Host as DockerPilot
 
@@ -192,7 +192,7 @@ export PORT=5000
 python run_dev.py
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 DockerPilotExtras/
@@ -215,7 +215,7 @@ DockerPilotExtras/
 └── README.md
 ```
 
-## 🔧 API Endpoints
+## API Endpoints
 
 ### Pipeline
 - `POST /api/pipeline/generate` - Generate pipeline
@@ -235,7 +235,7 @@ DockerPilotExtras/
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Backend won't start
 
@@ -268,7 +268,7 @@ dockerpilot --version
 
 Backend has CORS enabled by default for all sources. In production, configure `CORS_ORIGINS` in `.env`.
 
-## 🔒 Security
+## Security
 
 - **SECRET_KEY**: Change `SECRET_KEY` in production (set via `SECRET_KEY` environment variable)
 - **CORS**: Configure `CORS_ORIGINS` to limit access (set via `CORS_ORIGINS` environment variable)
@@ -286,22 +286,22 @@ SECRET_KEY=your-secret-key-here
 CORS_ORIGINS=http://localhost:3000,http://localhost:5000
 ```
 
-## 📚 API Documentation
+## API Documentation
 
 API documentation is available via `/api/health` endpoint and source code in `backend/app.py`.
 
-## 🤝 Support
+## Support
 
 If you encounter issues:
 1. Check backend and frontend logs
 2. Verify Docker and DockerPilot status
 3. Report an issue in the repository
 
-## 📝 License
+## License
 
 MIT License - see [LICENSE](LICENSE)
 
-## 🔗 Related Projects
+## Related Projects
 
 - [DockerPilot](https://github.com/DozeyUDK/DockerPilot) - Main Docker management tool
 
