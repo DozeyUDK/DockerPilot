@@ -1,0 +1,43 @@
+# Przykładowa konfiguracja deployment dla DockerPilot
+# Używana w zakładce "Deploymenty"
+
+deployment:
+  # Tag obrazu Docker
+  image_tag: 'myapp:latest'
+  
+  # Nazwa kontenera
+  container_name: 'myapp'
+  
+  # Mapowanie portów (host:container)
+  port_mapping:
+    '8080': '8080'
+    '8443': '8443'
+  
+  # Zmienne środowiskowe
+  environment:
+    ENV: 'production'
+    NODE_ENV: 'production'
+    LOG_LEVEL: 'info'
+  
+  # Polityka restartu kontenera
+  restart_policy: 'unless-stopped'
+  
+  # Endpoint health check
+  health_check_endpoint: '/health'
+  
+  # Limity zasobów
+  resources:
+    memory_limit: '512m'
+    cpu_limit: '0.5'
+  
+  # Dodatkowe opcje
+  volumes:
+    - './logs:/app/logs'
+    - './config:/app/config'
+  
+  # Network mode (opcjonalne)
+  network_mode: 'bridge'
+  
+  # Dodatkowe argumenty Docker (opcjonalne)
+  docker_args: '--privileged'
+

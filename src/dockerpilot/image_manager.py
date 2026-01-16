@@ -201,12 +201,29 @@ class ImageManager:
                 self.console.print(f"[cyan]🧹 Removing {len(dangling_images)} dangling images...[/cyan]")
                 self.console.print(f"[cyan]Estimated space to reclaim: {total_size_formatted}[/cyan]")
                 
+                # Note: Loading indicator is handled by pilot.py's _with_loading context manager
                 # Use Docker's prune_images API which is more efficient
                 # This removes all dangling images at once
                 prune_result = self.client.images.prune(filters={'dangling': True})
                 
-                images_deleted = len(prune_result.get('ImagesDeleted', []))
-                space_reclaimed = prune_result.get('SpaceReclaimed', 0)
+                # Handle case where prune_result might be None or ImagesDeleted might be None
+                if prune_result is None:
+                    self.logger.warning("Prune result is None, assuming no images were deleted")
+                    images_deleted = 0
+                    space_reclaimed = 0
+                else:
+                    images_deleted_list = prune_result.get('ImagesDeleted')
+                    if images_deleted_list is None:
+                        images_deleted = 0
+                    elif isinstance(images_deleted_list, list):
+                        images_deleted = len(images_deleted_list)
+                    else:
+                        # If it's not a list, try to convert or default to 0
+                        self.logger.warning(f"Unexpected type for ImagesDeleted: {type(images_deleted_list)}, defaulting to 0")
+                        images_deleted = 0
+                    
+                    space_reclaimed = prune_result.get('SpaceReclaimed', 0) or 0
+                
                 space_formatted = format_image_size(space_reclaimed)
                 
                 if images_deleted > 0:

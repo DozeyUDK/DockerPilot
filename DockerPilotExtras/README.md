@@ -2,6 +2,68 @@
 
 Web application complementing [DockerPilot](https://github.com/DozeyUDK/DockerPilot) - graphical interface for managing CI/CD workflows for GitLab and Jenkins.
 
+## 🚀 Quick Start
+
+> **Stability notice:** DockerPilotExtras is not yet stable and is under active development.
+
+### 1. Install Dependencies
+
+**Backend:**
+```bash
+pip install -r requirements.txt
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm install
+```
+
+### 2. Development Mode
+
+**Terminal 1 - Backend Flask:**
+```bash
+python run_dev.py
+```
+Backend will be available at `http://localhost:5000`
+
+**Terminal 2 - Frontend React:**
+```bash
+cd frontend
+npm run dev
+```
+Frontend will be available at `http://localhost:3000`
+
+### 3. Production Mode
+
+**1. Build frontend:**
+```bash
+cd frontend
+npm run build
+```
+
+**2. Run backend (also serves frontend):**
+```bash
+python run_dev.py
+```
+
+Application will be available at `http://localhost:5000`
+
+### 4. Using Loader Script (Recommended)
+
+For easier startup, use the loader script that starts both backend and frontend:
+
+```bash
+python loader.py
+```
+
+This will automatically:
+- Check dependencies
+- Start Flask backend
+- Start React frontend
+- Handle port conflicts
+- Stop both servers on Ctrl+C
+
 ## 🎯 Features
 
 - **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
@@ -56,43 +118,49 @@ dockerpilot --version
 # If not, install from: https://github.com/DozeyUDK/DockerPilot
 ```
 
-## 💻 Running
+## 📖 Basic Usage
 
-### Development Mode
+### Pipeline Generator
 
-**Terminal 1 - Backend:**
+1. Open `http://localhost:3000` (dev) or `http://localhost:5000` (prod)
+2. Select **"CI/CD Pipelines"** tab
+3. Fill in the form:
+   - Type: GitLab CI or Jenkins
+   - Project name
+   - Docker Image
+   - Stages (build, test, deploy)
+4. Click **"Generate Pipeline"**
+5. View preview and save/download
+
+### Deployment
+
+1. Go to **"Deployments"** tab
+2. Edit YAML configuration
+3. Select deployment strategy
+4. Click **"Execute Deployment"**
+
+### Environment Promotion
+
+1. Go to **"Environments"** tab
+2. Use promotion buttons: DEV → STAGING → PROD
+3. Confirm promotion
+
+### Status
+
+1. Go to **"Status"** tab
+2. Check Docker and DockerPilot status
+3. View container list
+
+## 🌐 Hosting
+
+### On the Same Host as DockerPilot
+
+If DockerPilot runs on `your-host:8080`, you can run DockerPilot Extras on `your-host:5000`:
+
 ```bash
+export PORT=5000
 python run_dev.py
-# Backend will be available at http://localhost:5000
 ```
-
-**Terminal 2 - Frontend:**
-```bash
-cd frontend
-npm run dev
-# Frontend will be available at http://localhost:3000
-```
-
-### Production Mode
-
-**1. Build frontend:**
-```bash
-cd frontend
-npm run build
-```
-
-**2. Run backend (also serves frontend):**
-```bash
-# Backend automatically serves the built frontend
-python run_dev.py
-
-# Or use gunicorn/uWSGI for production
-gunicorn -w 4 -b 0.0.0.0:5000 "backend.app:app"
-```
-
-Application will be available at: `http://localhost:5000`
-
-## 🌐 Hosting on the Same Host as DockerPilot
 
 ### Configuration with Reverse Proxy (Nginx)
 
@@ -202,10 +270,21 @@ Backend has CORS enabled by default for all sources. In production, configure `C
 
 ## 🔒 Security
 
-- Change `SECRET_KEY` in production
-- Configure `CORS_ORIGINS` to limit access
-- Use HTTPS in production
-- Consider authentication for API
+- **SECRET_KEY**: Change `SECRET_KEY` in production (set via `SECRET_KEY` environment variable)
+- **CORS**: Configure `CORS_ORIGINS` to limit access (set via `CORS_ORIGINS` environment variable)
+- **HTTPS**: Use HTTPS in production
+- **Authentication**: Consider adding authentication for API endpoints
+- **Credentials**: All passwords and SSH keys are stored in user's home directory (`~/.dockerpilot_extras/`) and never hardcoded in the application
+
+### Environment Variables
+
+Create `.env` file (optional):
+```bash
+PORT=5000
+FLASK_ENV=development
+SECRET_KEY=your-secret-key-here
+CORS_ORIGINS=http://localhost:3000,http://localhost:5000
+```
 
 ## 📚 API Documentation
 

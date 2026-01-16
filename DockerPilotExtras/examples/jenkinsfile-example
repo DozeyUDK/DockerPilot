@@ -1,0 +1,49 @@
+// Przykładowy Jenkinsfile wygenerowany przez DockerPilot Extras
+// Przykład konfiguracji z wszystkimi etapami
+
+pipeline {
+    agent { label 'any' }
+    
+    environment {
+        DOCKER_IMAGE = 'myapp:latest'
+        DOCKERFILE = './Dockerfile'
+        ENV = 'production'
+    }
+    
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    def image = docker.build("${DOCKER_IMAGE}", "-f ${DOCKERFILE} .")
+                    docker.withRegistry('', 'docker-credentials') {
+                        image.push()
+                    }
+                }
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'docker run --rm ${DOCKER_IMAGE} npm test'
+                sh 'docker run --rm ${DOCKER_IMAGE} npm run lint'
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                sh 'docker pull ${DOCKER_IMAGE}'
+                sh 'dockerpilot deploy config deployment.yml --type rolling'
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo 'Pipeline succeeded!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
+

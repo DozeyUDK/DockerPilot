@@ -1,0 +1,68 @@
+# Przykładowy pipeline GitLab CI wygenerowany przez DockerPilot Extras
+# Przykład konfiguracji z wszystkimi etapami
+
+image: docker:latest
+services:
+  - docker:dind
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+
+stages:
+  - build
+  - test
+  - deploy
+
+cache:
+  paths:
+    - ~/.docker/
+
+before_script:
+  - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+build:
+  stage: build
+  tags:
+    - docker
+    - linux
+  script:
+    - docker build -t myapp:latest -f ./Dockerfile .
+    - docker tag myapp:latest $CI_REGISTRY_IMAGE:myapp:latest
+    - docker push $CI_REGISTRY_IMAGE:myapp:latest
+  only:
+    - main
+    - master
+    - develop
+
+test:
+  stage: test
+  tags:
+    - docker
+    - linux
+  script:
+    - docker run --rm myapp:latest npm test
+    - docker run --rm myapp:latest npm run lint
+  needs:
+    - build
+  only:
+    - main
+    - master
+    - develop
+
+deploy:
+  stage: deploy
+  tags:
+    - docker
+    - linux
+  script:
+    - docker pull $CI_REGISTRY_IMAGE:myapp:latest
+    - docker tag $CI_REGISTRY_IMAGE:myapp:latest myapp:latest
+    - dockerpilot deploy config deployment.yml --type rolling
+  environment:
+    name: production
+    url: https://$CI_PROJECT_NAME.example.com
+  only:
+    - main
+    - master
+

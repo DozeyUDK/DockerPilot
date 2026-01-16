@@ -92,7 +92,7 @@ function Deployments() {
 
   return (
     <div>
-      <h2>Zarządzanie Deploymentami</h2>
+      <h2>Deployment Management</h2>
       
       {message && (
         <div className={`alert alert-${message.type}`}>
@@ -103,13 +103,13 @@ function Deployments() {
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div className="btn-group">
           <button className="btn btn-secondary" onClick={loadConfig}>
-            Załaduj Konfigurację
+            Load Configuration
           </button>
           <button className="btn btn-secondary" onClick={handleSaveConfig}>
-            Zapisz Konfigurację
+            Save Configuration
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <label>Strategia:</label>
+            <label>Strategy:</label>
             <select 
               value={strategy} 
               onChange={(e) => setStrategy(e.target.value)}
@@ -124,7 +124,7 @@ function Deployments() {
               onClick={handleExecute}
               disabled={loading}
             >
-              {loading ? 'Wykonywanie...' : 'Wykonaj Deployment'}
+              {loading ? 'Running...' : 'Run Deployment'}
             </button>
           </div>
         </div>
@@ -133,7 +133,7 @@ function Deployments() {
       <div className="two-column">
         {/* Left: Config Editor */}
         <div className="card">
-          <h3 className="card-title">Konfiguracja Deployment</h3>
+          <h3 className="card-title">Deployment Configuration</h3>
           <textarea
             value={configYaml}
             onChange={handleConfigChange}
@@ -154,10 +154,10 @@ function Deployments() {
 
         {/* Right: History */}
         <div className="card">
-          <h3 className="card-title">Historia Deploymentów</h3>
+          <h3 className="card-title">Deployment History</h3>
           {history.length === 0 ? (
             <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
-              Brak historii deploymentów
+              No deployment history
             </p>
           ) : (
             <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
@@ -173,10 +173,10 @@ function Deployments() {
                   }}
                 >
                   <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                    {new Date(item.timestamp).toLocaleString('pl-PL')}
+                    {new Date(item.timestamp).toLocaleString('en-US')}
                   </div>
                   <div style={{ marginBottom: '0.5rem' }}>
-                    Strategia: <strong>{item.strategy}</strong>
+                    Strategy: <strong>{item.strategy}</strong>
                   </div>
                   <div>
                     Status: <strong>{item.status}</strong>

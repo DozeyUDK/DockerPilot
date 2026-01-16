@@ -1,0 +1,11 @@
+# Backend Flask
+flask>=3.0.0
+flask-cors>=4.0.0
+flask-restful>=0.3.10
+python-dotenv>=1.0.0
+pyyaml>=6.0
+requests>=2.31.0
+docker>=6.0.0
+paramiko>=3.4.0
+pyotp>=2.9.0
+cryptography>=41.0.0

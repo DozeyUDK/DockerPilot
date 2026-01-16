@@ -358,7 +358,7 @@ function Status() {
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 className="card-title">Status Pipeline i Kontenery</h3>
+          <h3 className="card-title">Pipeline Status and Containers</h3>
           <button className="btn btn-secondary" onClick={loadContainers}>
             Refresh
           </button>
@@ -373,7 +373,7 @@ function Status() {
               borderRadius: '4px',
               border: '1px solid #f5c6cb'
             }}>
-              <strong>❌ Błąd:</strong> {containerSummary.error}
+              <strong>❌ Error:</strong> {containerSummary.error}
             </div>
           ) : containerSummary.summary ? (
             <div>
@@ -393,7 +393,7 @@ function Status() {
                   <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#007bff' }}>
                     {containerSummary.summary.total}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Wszystkich kontenerów</div>
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Total containers</div>
                 </div>
                 
                 <div style={{
@@ -406,7 +406,7 @@ function Status() {
                   <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>
                     {containerSummary.summary.running}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Działa</div>
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Running</div>
                 </div>
                 
                 <div style={{
@@ -419,7 +419,7 @@ function Status() {
                   <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#856404' }}>
                     {containerSummary.summary.stopped}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Zatrzymanych</div>
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Stopped</div>
                 </div>
               </div>
 
@@ -430,7 +430,7 @@ function Status() {
                   color: '#666',
                   fontStyle: 'italic'
                 }}>
-                  Brak kontenerów
+                  No containers
                 </div>
               ) : (
                 <div style={{
@@ -442,11 +442,11 @@ function Status() {
                 }}>
                   {containerSummary.summary.stopped === 0 ? (
                     <span style={{ color: '#155724', fontWeight: 'bold' }}>
-                      ✅ Wszystkie kontenery działają poprawnie
+                      ✅ All containers are running correctly
                     </span>
                   ) : (
                     <span style={{ color: '#856404' }}>
-                      ⚠️ {containerSummary.summary.stopped} kontener(ów) zatrzymanych
+                      ⚠️ {containerSummary.summary.stopped} container(s) stopped
                     </span>
                   )}
                 </div>
@@ -480,7 +480,7 @@ function Status() {
                           color: container.state === 'running' ? '#28a745' : '#6c757d',
                           fontWeight: container.state === 'running' ? 'bold' : 'normal'
                         }}>
-                          {container.state === 'running' ? '● Działa' : '○ Zatrzymany'}
+                          {container.state === 'running' ? '● Running' : '○ Stopped'}
                         </span>
                       </div>
                     ))}
@@ -490,7 +490,7 @@ function Status() {
             </div>
           ) : (
             <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
-              Brak danych o kontenerach
+              No container data
             </p>
           )
         ) : (
@@ -502,14 +502,14 @@ function Status() {
 
       <div className="card" style={{ width: '100%', maxWidth: '100%', overflow: 'visible' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 className="card-title">Interaktywny CLI</h3>
+          <h3 className="card-title">Interactive CLI</h3>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button 
               className="btn btn-secondary" 
               onClick={clearCliOutput}
               style={{ fontSize: '0.85rem', padding: '0.25rem 0.5rem' }}
             >
-              Wyczyść
+              Clear
             </button>
           </div>
         </div>
@@ -570,13 +570,13 @@ function Status() {
               }}
               title="Show available commands"
             >
-              {loadingHelp ? '⏳' : '❓'} Pomoc
+              {loadingHelp ? '⏳' : '❓'} Help
             </button>
           </div>
           
           {/* Working Directory Selector */}
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <label style={{ fontWeight: 'bold' }}>Katalog roboczy:</label>
+            <label style={{ fontWeight: 'bold' }}>Working directory:</label>
             <input
               type="text"
               value={workingDirectory}
@@ -602,9 +602,9 @@ function Status() {
                 cursor: 'pointer',
                 fontSize: '0.9rem'
               }}
-              title="Przeglądaj katalogi"
+              title="Browse directories"
             >
-              📁 Przeglądaj
+              📁 Browse
             </button>
             {workingDirectory && (
               <button
@@ -618,7 +618,7 @@ function Status() {
                   cursor: 'pointer',
                   fontSize: '0.9rem'
                 }}
-                title="Wyczyść katalog roboczy"
+                title="Clear working directory"
               >
                 ✕
               </button>
@@ -733,13 +733,13 @@ function Status() {
               letterSpacing: '0px'
             }}>
               {cliOutput.map((item, idx) => {
-                // Dla tabel ASCII, renderuj jako ciągły tekst bez kolorowania
+                // For ASCII tables, render as plain text without coloring
                 const isTableOutput = item.text.includes('┏') || item.text.includes('┡') || 
                                      item.text.includes('┃') ||
                                      (item.text.includes('│') && item.text.length > 50);
                 
                 if (isTableOutput) {
-                  // Dla tabel, renderuj jako element React z zachowaniem formatowania
+                // For tables, render with formatting preserved
                   return (
                     <span 
                       key={idx} 
@@ -755,7 +755,7 @@ function Status() {
                   );
                 }
                 
-                // Dla innych tekstów, użyj kolorowania
+                // For other text, apply coloring
                 const color = item.type === 'command' ? '#4ec9b0' : 
                              item.type === 'error' ? '#f48771' : 
                              item.type === 'info' ? '#ce9178' : '#d4d4d4';
@@ -766,7 +766,7 @@ function Status() {
           )}
           {cliLoading && (
             <div style={{ color: '#888' }}>
-              <span style={{ animation: 'blink 1s infinite' }}>▋</span> Wykonywanie...
+              <span style={{ animation: 'blink 1s infinite' }}>▋</span> Executing...
             </div>
           )}
         </div>
@@ -802,7 +802,7 @@ function Status() {
               border: '1px solid #ccc',
               borderRadius: '4px',
               backgroundColor: cliLoading ? '#f5f5f5' : 'white',
-              minWidth: 0  // Pozwala na kurczenie się
+              minWidth: 0  // Allows shrinking
             }}
           />
           <button
@@ -815,7 +815,7 @@ function Status() {
           </button>
         </div>
         <small style={{ color: '#666', fontSize: '0.85rem', marginTop: '0.5rem', display: 'block' }}>
-          Enter - wykonaj | ↑↓ - historia | Ctrl+L - wyczyść
+          Enter - run | ↑↓ - history | Ctrl+L - clear
         </small>
       </div>
 
@@ -846,7 +846,7 @@ function Status() {
             border: '1px solid var(--border-color)'
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Wybierz katalog roboczy</h3>
+              <h3 style={{ color: 'var(--text-primary)' }}>Select working directory</h3>
               <button 
                 onClick={() => setShowFileBrowser(false)}
                 style={{ 
@@ -877,7 +877,7 @@ function Status() {
                   disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
                   style={{ padding: '0.25rem 0.5rem' }}
                 >
-                  ↑ Wstecz
+                  ↑ Back
                 </button>
                 <input
                   type="text"
@@ -896,13 +896,13 @@ function Status() {
                     border: '1px solid var(--input-border)',
                     borderRadius: '4px'
                   }}
-                  placeholder="Wpisz ścieżkę..."
+                  placeholder="Enter path..."
                 />
                 <button 
                   onClick={() => loadFileBrowser(browserPath)}
                   style={{ padding: '0.5rem 1rem' }}
                 >
-                  Przejdź
+                  Go
                 </button>
               </div>
             </div>
@@ -919,7 +919,7 @@ function Status() {
               }}>
                 {browserItems.length === 0 ? (
                   <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    Katalog pusty
+                    Empty directory
                   </div>
                 ) : (
                   browserItems.map((item, idx) => (
@@ -982,7 +982,7 @@ function Status() {
                             cursor: 'pointer'
                           }}
                         >
-                          Wybierz
+                          Select
                         </button>
                       )}
                     </div>

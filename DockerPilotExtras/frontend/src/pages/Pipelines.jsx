@@ -105,7 +105,7 @@ function Pipelines() {
   }
 
   const selectFileFromBrowser = (filePath) => {
-    // Konwertuj pełną ścieżkę na relatywną jeśli możliwe
+    // Convert full path to relative if possible
     const currentDir = window.location.pathname.includes('/') ? './' : '.'
     setFormData(prev => ({ ...prev, dockerfile: filePath }))
     setShowFileBrowser(false)
@@ -148,7 +148,7 @@ function Pipelines() {
       if (response.data.success) {
         setGeneratedPipeline(response.data.content)
         setFilename(response.data.filename)
-        setMessage({ type: 'success', text: 'Pipeline wygenerowany pomyślnie!' })
+        setMessage({ type: 'success', text: 'Pipeline generated successfully!' })
       }
     } catch (error) {
       setMessage({ 
@@ -198,7 +198,7 @@ function Pipelines() {
 
   return (
     <div>
-      <h2>Generator Pipeline CI/CD</h2>
+      <h2>CI/CD Pipeline Generator</h2>
       
       {message && (
         <div className={`alert alert-${message.type}`}>
@@ -209,10 +209,10 @@ function Pipelines() {
       <div className="two-column">
         {/* Left: Configuration Form */}
         <div className="card">
-          <h3 className="card-title">Konfiguracja Pipeline</h3>
+          <h3 className="card-title">Pipeline Configuration</h3>
           
           <div className="form-group">
-            <label>Typ Pipeline:</label>
+            <label>Pipeline type:</label>
             <select name="type" value={formData.type} onChange={handleChange}>
               <option value="gitlab">GitLab CI</option>
               <option value="jenkins">Jenkins</option>
@@ -220,7 +220,7 @@ function Pipelines() {
           </div>
 
           <div className="form-group">
-            <label>Nazwa projektu:</label>
+            <label>Project name:</label>
             <input
               type="text"
               name="project_name"
@@ -243,7 +243,7 @@ function Pipelines() {
                   fontSize: '0.85rem',
                   cursor: loadingImages ? 'not-allowed' : 'pointer'
                 }}
-                title="Odśwież listę obrazów"
+                title="Refresh image list"
               >
                 {loadingImages ? '⏳' : '🔄'}
               </button>
@@ -256,7 +256,7 @@ function Pipelines() {
                   fontSize: '0.85rem',
                   cursor: 'pointer'
                 }}
-                title="Przeglądaj obrazy Docker"
+                title="Browse Docker images"
               >
                 🐳
               </button>
@@ -272,7 +272,7 @@ function Pipelines() {
                 }}
                 onFocus={() => setImageSearch(formData.docker_image)}
                 onBlur={() => setTimeout(() => setImageSearch(''), 200)}
-                placeholder="Wybierz lub wpisz obraz..."
+                placeholder="Select or enter an image..."
                 list="docker-images-list"
                 style={{ width: '100%' }}
               />
@@ -304,7 +304,7 @@ function Pipelines() {
                       }}
                       onMouseEnter={(e) => e.target.style.backgroundColor = '#f0f0f0'}
                       onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
-                      title={`ID: ${img.id || 'N/A'}, Rozmiar: ${img.size || 'N/A'}`}
+                      title={`ID: ${img.id || 'N/A'}, Size: ${img.size || 'N/A'}`}
                     >
                       <div style={{ fontWeight: 'bold' }}>{img.name}</div>
                       {img.size && (
@@ -319,14 +319,14 @@ function Pipelines() {
             </div>
             {dockerImages.length > 0 && (
               <small style={{ color: '#666', fontSize: '0.85rem' }}>
-                {dockerImages.length} obrazów dostępnych
+                {dockerImages.length} images available
               </small>
             )}
           </div>
 
           <div className="form-group">
             <label>
-              Ścieżka Dockerfile:
+              Dockerfile path:
               <button 
                 type="button"
                 onClick={loadDockerfiles}
@@ -337,7 +337,7 @@ function Pipelines() {
                   fontSize: '0.85rem',
                   cursor: loadingDockerfiles ? 'not-allowed' : 'pointer'
                 }}
-                title="Odśwież listę Dockerfile'ów"
+                title="Refresh Dockerfile list"
               >
                 {loadingDockerfiles ? '⏳' : '🔄'}
               </button>
@@ -350,7 +350,7 @@ function Pipelines() {
                   fontSize: '0.85rem',
                   cursor: 'pointer'
                 }}
-                title="Przeglądaj pliki"
+                title="Browse files"
               >
                 📁
               </button>
@@ -366,7 +366,7 @@ function Pipelines() {
                 }}
                 onFocus={() => setDockerfileSearch(formData.dockerfile)}
                 onBlur={() => setTimeout(() => setDockerfileSearch(''), 200)}
-                placeholder="Wybierz lub wpisz ścieżkę..."
+                placeholder="Select or enter a path..."
                 list="dockerfiles-list"
                 style={{ width: '100%' }}
               />
@@ -409,13 +409,13 @@ function Pipelines() {
             </div>
             {dockerfiles.length > 0 && (
               <small style={{ color: '#666', fontSize: '0.85rem' }}>
-                {dockerfiles.length} Dockerfile'ów znalezionych
+                {dockerfiles.length} Dockerfiles found
               </small>
             )}
           </div>
 
           <div className="form-group">
-            <label>Etapy build:</label>
+            <label>Build stages:</label>
             <div className="checkbox-group">
               {['build', 'test', 'deploy'].map(stage => (
                 <div key={stage} className="checkbox-item">
@@ -432,7 +432,7 @@ function Pipelines() {
           </div>
 
           <div className="form-group">
-            <label>Zmienne środowiskowe:</label>
+            <label>Environment variables:</label>
             <textarea
               name="env_vars"
               value={formData.env_vars}
@@ -442,7 +442,7 @@ function Pipelines() {
           </div>
 
           <div className="form-group">
-            <label>Strategia deployment:</label>
+            <label>Deployment strategy:</label>
             <select name="deploy_strategy" value={formData.deploy_strategy} onChange={handleChange}>
               <option value="rolling">Rolling</option>
               <option value="blue-green">Blue-Green</option>
@@ -470,7 +470,7 @@ function Pipelines() {
                     checked={formData.use_cache}
                     onChange={handleChange}
                   />
-                  <label htmlFor="use_cache">Użyj cache</label>
+                  <label htmlFor="use_cache">Use cache</label>
                 </div>
               </div>
             </>
@@ -501,28 +501,28 @@ function Pipelines() {
 
           <div className="btn-group">
             <button className="btn btn-primary" onClick={handleGenerate} disabled={loading}>
-              {loading ? 'Generowanie...' : 'Generuj Pipeline'}
+              {loading ? 'Generating...' : 'Generate Pipeline'}
             </button>
           </div>
         </div>
 
         {/* Right: Preview */}
         <div className="card">
-          <h3 className="card-title">Podgląd Pipeline</h3>
+          <h3 className="card-title">Pipeline Preview</h3>
           <div className="btn-group" style={{ marginBottom: '1rem' }}>
             <button 
               className="btn btn-secondary" 
               onClick={handleSave}
               disabled={!generatedPipeline}
             >
-              Zapisz
+              Save
             </button>
             <button 
               className="btn btn-success" 
               onClick={handleDownload}
               disabled={!generatedPipeline}
             >
-              Pobierz
+              Download
             </button>
           </div>
           
@@ -540,7 +540,7 @@ function Pipelines() {
           
           {!generatedPipeline && !loading && (
             <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
-              Wygeneruj pipeline, aby zobaczyć podgląd
+              Generate a pipeline to see the preview
             </p>
           )}
         </div>
@@ -573,7 +573,7 @@ function Pipelines() {
             border: '1px solid var(--border-color)'
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Przeglądaj pliki</h3>
+              <h3 style={{ color: 'var(--text-primary)' }}>Browse files</h3>
               <button 
                 onClick={() => setShowFileBrowser(false)}
                 style={{ 
@@ -604,7 +604,7 @@ function Pipelines() {
                   disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
                   style={{ padding: '0.25rem 0.5rem' }}
                 >
-                  ↑ Wstecz
+                  ↑ Back
                 </button>
                 <input
                   type="text"
@@ -623,19 +623,19 @@ function Pipelines() {
                     border: '1px solid var(--input-border)',
                     borderRadius: '4px'
                   }}
-                  placeholder="Wpisz ścieżkę..."
+                  placeholder="Enter path..."
                 />
                 <button 
                   onClick={() => loadFileBrowser(browserPath)}
                   style={{ padding: '0.5rem 1rem' }}
                 >
-                  Przejdź
+                  Go
                 </button>
               </div>
             </div>
 
             {loadingBrowser ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie...</div>
+              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
             ) : (
               <div style={{ 
                 border: '1px solid var(--border-color)', 
@@ -646,7 +646,7 @@ function Pipelines() {
               }}>
                 {browserItems.length === 0 ? (
                   <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    Katalog pusty
+                    Empty directory
                   </div>
                 ) : (
                   browserItems.map((item, idx) => (
@@ -710,7 +710,7 @@ function Pipelines() {
                             cursor: 'pointer'
                           }}
                         >
-                          Wybierz
+                          Select
                         </button>
                       )}
                     </div>
@@ -749,7 +749,7 @@ function Pipelines() {
             border: '1px solid var(--border-color)'
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Przeglądaj obrazy Docker</h3>
+              <h3 style={{ color: 'var(--text-primary)' }}>Browse Docker images</h3>
               <button 
                 onClick={() => setShowImageBrowser(false)}
                 style={{ 
@@ -768,7 +768,7 @@ function Pipelines() {
             <div style={{ marginBottom: '1rem' }}>
               <input
                 type="text"
-                placeholder="Szukaj obrazu..."
+                placeholder="Search images..."
                 value={imageSearch}
                 onChange={(e) => setImageSearch(e.target.value)}
                 style={{ 
@@ -783,7 +783,7 @@ function Pipelines() {
             </div>
 
             {loadingImages ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie obrazów...</div>
+              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading images...</div>
             ) : (
               <div style={{ 
                 border: '1px solid var(--border-color)', 
@@ -794,7 +794,7 @@ function Pipelines() {
               }}>
                 {filteredImages.length === 0 ? (
                   <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    {imageSearch ? 'Nie znaleziono obrazów pasujących do wyszukiwania' : 'Brak obrazów Docker'}
+                    {imageSearch ? 'No images found matching the search' : 'No Docker images'}
                   </div>
                 ) : (
                   filteredImages.map((img, idx) => (
@@ -821,12 +821,12 @@ function Pipelines() {
                         </div>
                         <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                           {img.id && <span>ID: <code style={{ backgroundColor: 'var(--bg-tertiary)', padding: '0.2rem 0.4rem', borderRadius: '3px' }}>{img.id}</code></span>}
-                          {img.size && <span>Rozmiar: <strong>{img.size}</strong></span>}
-                          {img.created && <span>Utworzono: {img.created.split(' ')[0]}</span>}
+                          {img.size && <span>Size: <strong>{img.size}</strong></span>}
+                          {img.created && <span>Created: {img.created.split(' ')[0]}</span>}
                         </div>
                         {img.repository !== '<none>' && img.tag !== '<none>' && (
                           <div style={{ fontSize: '0.85rem', color: '#999', marginTop: '0.25rem' }}>
-                            Repozytorium: {img.repository} • Tag: {img.tag}
+                            Repository: {img.repository} • Tag: {img.tag}
                           </div>
                         )}
                       </div>
@@ -845,7 +845,7 @@ function Pipelines() {
                           fontWeight: 'bold'
                         }}
                       >
-                        Wybierz
+                        Select
                       </button>
                     </div>
                   ))

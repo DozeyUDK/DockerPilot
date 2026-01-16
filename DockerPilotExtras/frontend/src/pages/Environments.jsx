@@ -58,6 +58,17 @@ function Environments() {
   const [migrationIncludeData, setMigrationIncludeData] = useState(false) // Include volumes/data
   const [migrationStopSource, setMigrationStopSource] = useState(false) // Stop source container
   const [migrationProgress, setMigrationProgress] = useState(null) // Migration progress tracking
+  const [migrationStarted, setMigrationStarted] = useState(false) // Migration polling guard
+  const migrationProgressRef = useRef(null)
+  const migratingContainerRef = useRef(null)
+
+  useEffect(() => {
+    migrationProgressRef.current = migrationProgress
+  }, [migrationProgress])
+
+  useEffect(() => {
+    migratingContainerRef.current = migratingContainer
+  }, [migratingContainer])
 
   const environments = [
     { name: 'dev', label: 'DEV', color: '#28a745' },
@@ -201,7 +212,7 @@ function Environments() {
                 setDeploymentProgress(null)
                 setPromotingContainer(null)
               }
-            }, 5000) // 5 seconds to show final message
+            }, 3000) // 3 seconds to show final message (reduced from 5)
             return
           }
         } else {
@@ -229,7 +240,7 @@ function Environments() {
                   }
                 })
               }
-            }, 3000) // Wait 3 seconds before clearing
+            }, 2000) // Wait 2 seconds before clearing (reduced from 3)
           }
         }
       } catch (error) {
@@ -255,17 +266,23 @@ function Environments() {
   }, [promotingContainer])
   
   // Poll migration progress when migrating container
+  // Only start polling when migration is actually in progress (has progress or loading flag)
   useEffect(() => {
     if (!migratingContainer) {
       return
     }
     
+    // Don't start polling until migration actually starts
+    if (!migrationStarted) {
+      return
+    }
+    
     let intervalId = null
     let consecutiveNoProgress = 0
-    const MAX_CONSECUTIVE_NO_PROGRESS = 3
+    const MAX_CONSECUTIVE_NO_PROGRESS = 10 // Increased from 3 to allow more time for migration to start
     
     const pollMigrationProgress = async () => {
-      if (!migratingContainer) {
+      if (!migratingContainerRef.current) {
         if (intervalId) {
           clearInterval(intervalId)
         }
@@ -273,13 +290,13 @@ function Environments() {
       }
       
       // Capture current container name to avoid stale closure
-      const containerName = migratingContainer
+      const containerName = migratingContainerRef.current
       
       try {
         const response = await statusAPI.getMigrationProgress(containerName)
         
         // Check if container changed (might have been cleared during async call)
-        if (migratingContainer !== containerName) {
+        if (migratingContainerRef.current !== containerName) {
           if (intervalId) {
             clearInterval(intervalId)
           }
@@ -306,61 +323,75 @@ function Environments() {
             // Wait a bit before clearing to show final message
             setTimeout(() => {
               // Double-check that this is still the same container (might have started new migration)
-              if (migratingContainer === containerName) {
+              if (migratingContainerRef.current === containerName) {
                 setMigrationProgress(null)
                 setMigratingContainer(null)
                 setShowMigrateModal(false)
+                setMigrationStarted(false)
                 loadEnvironmentsStatus()
               }
-            }, 5000) // 5 seconds to show final message
+            }, 3000) // 3 seconds to show final message (reduced from 5)
             return
           }
         } else {
-          // No progress found - migration might have completed and been cleaned up
+          // No progress found - but only close modal if migration was actually started
+          // (i.e., we had progress before but now it's gone, meaning it completed and was cleaned up)
+          if (migrationProgressRef.current !== null) {
+            // We had progress before, so migration was running - might have completed
+            consecutiveNoProgress++
+            if (consecutiveNoProgress >= MAX_CONSECUTIVE_NO_PROGRESS) {
+              // Stop polling if no progress found after several attempts
+              if (intervalId) {
+                clearInterval(intervalId)
+                intervalId = null
+              }
+              // Migration likely completed and was cleaned up - close modal
+              setMigrationProgress(null)
+              setMigratingContainer(null)
+              setShowMigrateModal(false)
+              setMigrationStarted(false)
+              loadEnvironmentsStatus()
+              return
+            }
+          }
+          // If no progress and migration hasn't started yet, don't close modal
+          // Just reset counter to allow more time
+          consecutiveNoProgress = 0
+        }
+      } catch (error) {
+        console.error('Error polling migration progress:', error)
+        // Only count errors if migration was actually started
+        if (migrationProgressRef.current !== null) {
           consecutiveNoProgress++
+          // Stop polling after too many consecutive errors
           if (consecutiveNoProgress >= MAX_CONSECUTIVE_NO_PROGRESS) {
-            // Stop polling if no progress found after several attempts
             if (intervalId) {
               clearInterval(intervalId)
               intervalId = null
             }
-            // Clear migration state
+            setMessage({ 
+              type: 'error', 
+              text: 'Error checking migration progress. Check backend logs.' 
+            })
             setMigrationProgress(null)
             setMigratingContainer(null)
             setShowMigrateModal(false)
-            return
+            setMigrationStarted(false)
           }
-        }
-      } catch (error) {
-        console.error('Error polling migration progress:', error)
-        consecutiveNoProgress++
-        // Stop polling after too many consecutive errors
-        if (consecutiveNoProgress >= MAX_CONSECUTIVE_NO_PROGRESS) {
-          if (intervalId) {
-            clearInterval(intervalId)
-            intervalId = null
-          }
-          setMessage({ 
-            type: 'error', 
-            text: 'Błąd podczas sprawdzania postępu migracji. Sprawdź logi backendu.' 
-          })
-          setMigrationProgress(null)
-          setMigratingContainer(null)
-          setShowMigrateModal(false)
         }
       }
     }
     
-    // Poll immediately and then every 2 seconds (reduced frequency to reduce server load)
+    // Poll immediately and then every 2 seconds
     pollMigrationProgress()
-    intervalId = setInterval(pollMigrationProgress, 2000) // Changed from 1000ms to 2000ms
+    intervalId = setInterval(pollMigrationProgress, 2000)
     
     return () => {
       if (intervalId) {
         clearInterval(intervalId)
       }
     }
-  }, [migratingContainer])
+  }, [migratingContainer, migrationStarted])
   
   // Debug: Monitor showSudoModal changes
   useEffect(() => {
@@ -439,7 +470,7 @@ function Environments() {
         setMessage({ type: 'error', text: response.data.error || 'Error creating server' })
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error.response?.data?.error || 'Błąd podczas tworzenia serwera' })
+      setMessage({ type: 'error', text: error.response?.data?.error || 'Error creating server' })
     }
   }
 
@@ -458,7 +489,7 @@ function Environments() {
         setMessage({ type: 'error', text: response.data.error || 'Error updating server' })
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error.response?.data?.error || 'Błąd podczas aktualizacji serwera' })
+      setMessage({ type: 'error', text: error.response?.data?.error || 'Error updating server' })
     }
   }
 
@@ -479,7 +510,7 @@ function Environments() {
         setMessage({ type: 'error', text: response.data.error || 'Error deleting server' })
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error.response?.data?.error || 'Błąd podczas usuwania serwera' })
+      setMessage({ type: 'error', text: error.response?.data?.error || 'Error deleting server' })
     }
   }
 
@@ -491,13 +522,13 @@ function Environments() {
       const response = await serversAPI.test(serverId, testData || serverForm)
       setTestingServerResult(response.data)
       if (response.data.success) {
-        setMessage({ type: 'success', text: response.data.message || 'Połączenie z serwerem udane' })
+        setMessage({ type: 'success', text: response.data.message || 'Server connection successful' })
       } else {
-        setMessage({ type: 'error', text: response.data.error || 'Błąd połączenia z serwerem' })
+        setMessage({ type: 'error', text: response.data.error || 'Server connection error' })
       }
     } catch (error) {
-      setTestingServerResult({ success: false, error: error.response?.data?.error || 'Błąd podczas testowania połączenia' })
-      setMessage({ type: 'error', text: error.response?.data?.error || 'Błąd podczas testowania połączenia' })
+      setTestingServerResult({ success: false, error: error.response?.data?.error || 'Error testing connection' })
+      setMessage({ type: 'error', text: error.response?.data?.error || 'Error testing connection' })
     } finally {
       setTestingServer(false)
     }
@@ -554,7 +585,7 @@ function Environments() {
   }
 
   const handlePromote = async (fromEnv, toEnv) => {
-    if (!window.confirm(`Czy na pewno chcesz promować z ${fromEnv.toUpperCase()} do ${toEnv.toUpperCase()}?`)) {
+    if (!window.confirm(`Are you sure you want to promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?`)) {
       return
     }
 
@@ -671,7 +702,7 @@ function Environments() {
     const targetContainerName = containerName || selectedContainerForFile
     
     if (!targetContainerName) {
-      setMessage({ type: 'error', text: 'Wybierz kontener przed importem pliku' })
+      setMessage({ type: 'error', text: 'Select a container before importing a file' })
       return
     }
     
@@ -681,7 +712,7 @@ function Environments() {
       if (response.data.success) {
         setMessage({ 
           type: 'success', 
-          text: `Konfiguracja z ${filePath.split('/').pop()} zaimportowana dla kontenera ${targetContainerName} w środowisku ${selectedEnv.toUpperCase()}` 
+          text: `Configuration from ${filePath.split('/').pop()} imported for container ${targetContainerName} in ${selectedEnv.toUpperCase()}` 
         })
         setShowContainerModal(false)
         setShowFileBrowser(false)
@@ -693,7 +724,7 @@ function Environments() {
     } catch (error) {
       setMessage({ 
         type: 'error', 
-        text: error.response?.data?.error || 'Błąd podczas importowania konfiguracji' 
+        text: error.response?.data?.error || 'Error importing configuration' 
       })
     } finally {
       setImportingConfig(false)
@@ -716,7 +747,7 @@ function Environments() {
       if (response.data.success) {
         setMessage({ 
           type: 'success', 
-          text: `Konfiguracja dla ${containerName} przygotowana dla środowiska ${selectedEnv.toUpperCase()}` 
+          text: `Configuration for ${containerName} prepared for ${selectedEnv.toUpperCase()}` 
         })
         setShowContainerModal(false)
         await loadEnvironmentsStatus()
@@ -726,7 +757,7 @@ function Environments() {
     } catch (error) {
       setMessage({ 
         type: 'error', 
-        text: error.response?.data?.error || 'Błąd podczas przygotowywania konfiguracji' 
+        text: error.response?.data?.error || 'Error preparing configuration' 
       })
     } finally {
       setPreparingConfig(false)
@@ -739,16 +770,17 @@ function Environments() {
     setMigrationTargetServer('')
     setMigrationIncludeData(false)
     setMigrationStopSource(false)
+    setMigrationStarted(false)
   }
 
   const executeMigration = async () => {
     if (!migratingContainer || !migrationTargetServer) {
-      setMessage({ type: 'error', text: 'Wybierz kontener i serwer docelowy' })
+      setMessage({ type: 'error', text: 'Select a container and target server' })
       return
     }
 
     if (migrationTargetServer === selectedServer) {
-      setMessage({ type: 'error', text: 'Serwer docelowy musi być inny niż źródłowy' })
+      setMessage({ type: 'error', text: 'Target server must be different than the source' })
       return
     }
 
@@ -769,9 +801,15 @@ function Environments() {
 
       if (!response.data.success) {
         setMessage({ type: 'error', text: response.data.error || 'Error during migration' })
-        setLoading({ ...loading, [`migrate_${migratingContainer}`]: false })
+        setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: false }))
         setMigrationProgress(null)
-        setMigratingContainer(null)
+        setMigrationStarted(false)
+        // Don't close modal on error - let user see the error message
+        // setMigratingContainer(null)
+      } else {
+        // Migration started successfully - polling will pick up progress
+        // Keep loading flag set so polling knows migration has started
+        setMigrationStarted(true)
       }
       // Progress will be updated via polling - don't clear loading here, let polling handle it
     } catch (error) {
@@ -782,13 +820,14 @@ function Environments() {
       setLoading({ ...loading, [`migrate_${migratingContainer}`]: false })
       setMigrationProgress(null)
       setMigratingContainer(null)
+      setMigrationStarted(false)
     }
   }
 
   const handleCancelMigration = async () => {
     if (!migratingContainer) return
     
-    if (!window.confirm(`Czy na pewno chcesz anulować migrację kontenera ${migratingContainer}?`)) {
+    if (!window.confirm(`Are you sure you want to cancel migration of container ${migratingContainer}?`)) {
       return
     }
     
@@ -803,13 +842,13 @@ function Environments() {
     } catch (error) {
       setMessage({ 
         type: 'error', 
-        text: error.response?.data?.error || 'Błąd podczas anulowania migracji' 
+        text: error.response?.data?.error || 'Error cancelling migration' 
       })
     }
   }
 
   const handleStopPromotion = async (containerName) => {
-    if (!window.confirm(`Czy na pewno chcesz ZATRZYMAĆ promocję kontenera ${containerName}?\n\nDeployment zostanie anulowany.`)) {
+    if (!window.confirm(`Are you sure you want to STOP promotion of container ${containerName}?\n\nDeployment will be cancelled.`)) {
       return
     }
     
@@ -867,7 +906,7 @@ function Environments() {
     
     const targetEnv = envFlow[selectedEnv]
     if (!targetEnv) {
-      setMessage({ type: 'error', text: 'Nie można promować z PROD (to najwyższe środowisko)' })
+      setMessage({ type: 'error', text: 'Cannot promote from PROD (highest environment)' })
       return
     }
     
@@ -997,9 +1036,9 @@ function Environments() {
             
             if (shouldSkip) {
               const confirmSkip = window.confirm(
-                `⚠️ Czy na pewno chcesz POMINĄĆ backup?\n\n` +
-                `To oznacza, że dane kontenera NIE ZOSTANĄ zabezpieczone przed promocją!\n\n` +
-                `Promuj ${capturedContainerName} z ${capturedSourceLabel} do ${capturedTargetLabel} BEZ backupu?`
+                `⚠️ Are you sure you want to SKIP the backup?\n\n` +
+                `This means the container data WILL NOT be protected before promotion!\n\n` +
+                `Promote ${capturedContainerName} from ${capturedSourceLabel} to ${capturedTargetLabel} WITHOUT backup?`
               )
               if (!confirmSkip) {
                 console.log(`[handleStageSingleContainer] User cancelled skip backup`)
@@ -1042,7 +1081,7 @@ function Environments() {
             await continuePromotion(capturedContainerName, capturedSelectedEnv, capturedTargetEnv, capturedSourceLabel, capturedTargetLabel, actualSkipBackup)
           } catch (error) {
             console.error(`[handleStageSingleContainer] Error in callback:`, error)
-            setMessage({ type: 'error', text: 'Błąd podczas przetwarzania: ' + (error.message || 'Nieznany błąd') })
+            setMessage({ type: 'error', text: 'Processing error: ' + (error.message || 'Unknown error') })
             setSudoModalCallback(null)
           }
         }
@@ -1076,7 +1115,7 @@ function Environments() {
     
     // Final confirmation
     if (!skipBackup) {
-      const confirmed = window.confirm(`Czy na pewno chcesz promować kontener ${containerName} z ${sourceLabel} do ${targetLabel}?`)
+      const confirmed = window.confirm(`Are you sure you want to promote container ${containerName} from ${sourceLabel} to ${targetLabel}?`)
       console.log(`[continuePromotion] User confirmed: ${confirmed}`)
       if (!confirmed) {
         console.log(`[continuePromotion] User cancelled, returning`)
@@ -1159,7 +1198,7 @@ function Environments() {
         `}
       </style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{ margin: 0 }}>Promocja Środowisk</h2>
+        <h2 style={{ margin: 0 }}>Environment Promotion</h2>
         <button
           onClick={() => loadEnvironmentsStatus()}
           disabled={loadingStatus}
@@ -1175,9 +1214,9 @@ function Environments() {
             alignItems: 'center',
             gap: '0.5rem'
           }}
-          title="Odśwież dane środowisk"
+          title="Refresh environment data"
         >
-          {loadingStatus ? '⏳ Odświeżanie...' : '🔄 Odśwież'}
+          {loadingStatus ? '⏳ Refreshing...' : '🔄 Refresh'}
         </button>
       </div>
       
@@ -1190,7 +1229,7 @@ function Environments() {
       {/* Server Management Card */}
       <div className="card" style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 className="card-title" style={{ margin: 0 }}>Zarządzanie Serwerami</h3>
+          <h3 className="card-title" style={{ margin: 0 }}>Server Management</h3>
           <button
             onClick={() => openServerModal()}
             style={{
@@ -1203,7 +1242,7 @@ function Environments() {
               fontWeight: '600'
             }}
           >
-            + Dodaj Serwer
+            + Add Server
           </button>
         </div>
         
@@ -1264,7 +1303,7 @@ function Environments() {
                         fontSize: '0.85rem'
                       }}
                     >
-                      {testingServer ? 'Testowanie...' : 'Test'}
+                      {testingServer ? 'Testing...' : 'Test'}
                     </button>
                     <button
                       onClick={() => openServerModal(server)}
@@ -1278,7 +1317,7 @@ function Environments() {
                         fontSize: '0.85rem'
                       }}
                     >
-                      Edytuj
+                      Edit
                     </button>
                     <button
                       onClick={() => handleServerDelete(server.id)}
@@ -1292,7 +1331,7 @@ function Environments() {
                         fontSize: '0.85rem'
                       }}
                     >
-                      Usuń
+                      Delete
                     </button>
                   </div>
                 </div>
@@ -1311,7 +1350,7 @@ function Environments() {
             color: testingServerResult.success ? '#28a745' : '#dc3545'
           }}>
             {testingServerResult.success ? '✓ ' : '✗ '}
-            {testingServerResult.message || testingServerResult.error || 'Wynik testu'}
+            {testingServerResult.message || testingServerResult.error || 'Test result'}
           </div>
         )}
       </div>
@@ -1323,7 +1362,7 @@ function Environments() {
           color: 'var(--text-primary)'
         }}>
           <h4 style={{ marginTop: 0, color: 'var(--text-primary)' }}>
-            🚀 Postęp Deploymentu {promotingContainer && `- ${promotingContainer}`}
+            🚀 Deployment Progress {promotingContainer && `- ${promotingContainer}`}
           </h4>
           <div style={{ marginBottom: '10px' }}>
             <div style={{ 
@@ -1370,7 +1409,7 @@ function Environments() {
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <span>Etap: {deploymentProgress.stage}</span>
+              <span>Stage: {deploymentProgress.stage}</span>
               {promotingContainer && 
                deploymentProgress.stage !== 'completed' && 
                deploymentProgress.stage !== 'failed' && 
@@ -1391,7 +1430,7 @@ function Environments() {
                     opacity: cancellingContainer === promotingContainer ? 0.6 : 1
                   }}
                 >
-                  {cancellingContainer === promotingContainer ? 'Anulowanie...' : '⏹️ Zatrzymaj Deployment'}
+                  {cancellingContainer === promotingContainer ? 'Cancelling...' : '⏹️ Stop Deployment'}
                 </button>
               )}
             </div>
@@ -1400,7 +1439,7 @@ function Environments() {
       )}
 
       <div className="card">
-        <h3 className="card-title">Workflow Promocji Środowisk</h3>
+        <h3 className="card-title">Environment Promotion Workflow</h3>
         
         <div style={{ 
           display: 'flex', 
@@ -1464,10 +1503,10 @@ function Environments() {
                 }}>
                   Image: {(() => {
                     const envData = getEnvironmentData(env.name)
-                    if (loadingStatus) return 'Ładowanie...'
+                    if (loadingStatus) return 'Loading...'
                     if (envData?.primary_image) return envData.primary_image
                     if (envData?.images?.length > 0) return envData.images[0]
-                    return 'Brak obrazu'
+                    return 'No image'
                   })()}
                 </p>
                 <p style={{ 
@@ -1478,7 +1517,7 @@ function Environments() {
                 }}>
                   Status: {(() => {
                     const envData = getEnvironmentData(env.name)
-                    if (loadingStatus) return 'Ładowanie...'
+                    if (loadingStatus) return 'Loading...'
                     const status = envData?.status || 'empty'
                     return getStatusLabel(status)
                   })()}
@@ -1494,7 +1533,7 @@ function Environments() {
                       zIndex: 1,
                       marginTop: '0.5rem'
                     }}>
-                      Kontenery: {envData.containers?.running || 0} uruchomione / {envData.containers?.total || 0} łącznie
+                      Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
                     </p>
                   )
                 })()}
@@ -1523,14 +1562,14 @@ function Environments() {
           {environments.slice(0, -1).map((env, index) => {
             const nextEnv = environments[index + 1]
             const key = `${env.name}-${nextEnv.name}`
-            // Kolory zależne od ważności operacji
-            // DEV → Pre-Prod: żółty/pomarańczowy (średnia ważność)
-            // Pre-Prod → PROD: czerwony (wysoka ważność)
+            // Colors based on operation importance
+            // DEV → Pre-Prod: yellow/orange (medium importance)
+            // Pre-Prod → PROD: red (high importance)
             const buttonColor = index === 0 
-              ? '#f59e0b' // Pomarańczowy dla DEV → Pre-Prod
+              ? '#f59e0b' // Orange for DEV → Pre-Prod
               : '#dc2626' // Czerwony dla Pre-Prod → PROD
             const buttonHoverColor = index === 0
-              ? '#d97706' // Ciemniejszy pomarańczowy
+              ? '#d97706' // Darker orange
               : '#b91c1c' // Ciemniejszy czerwony
             
             return (
@@ -1558,7 +1597,7 @@ function Environments() {
                 }}
               >
                 {loading[key] 
-                  ? 'Promowanie...' 
+                  ? 'Promoting...' 
                   : `${env.label} → ${nextEnv.label}`
                 }
               </button>
@@ -1568,7 +1607,7 @@ function Environments() {
       </div>
 
       <div className="card">
-        <h3 className="card-title">Konfiguracja Środowisk</h3>
+        <h3 className="card-title">Environment Configuration</h3>
         <div style={{ 
           padding: '1rem',
           backgroundColor: '#f5f5f5',
@@ -1579,10 +1618,10 @@ function Environments() {
           <p>Environment configuration is managed by DockerPilot.</p>
           <p>Use the buttons above to promote between environments.</p>
           <p style={{ marginTop: '1rem', color: '#666' }}>
-            Promocja używa komendy: <code>dockerpilot promote &lt;from_env&gt; &lt;to_env&gt;</code>
+            Promotion uses command: <code>dockerpilot promote &lt;from_env&gt; &lt;to_env&gt;</code>
           </p>
           <p style={{ marginTop: '1rem', color: '#666' }}>
-            <strong>💡 Wskazówka:</strong> Kliknij na div środowiska (DEV/Pre-Prod/PROD), aby przygotować konfigurację dla kontenerów.
+            <strong>💡 Tip:</strong> Click an environment tile (DEV/Pre-Prod/PROD) to prepare container configs.
           </p>
         </div>
       </div>
@@ -1656,7 +1695,7 @@ function Environments() {
                   fontWeight: configMode === 'generate' ? '600' : 'normal'
                 }}
               >
-                📦 Wygeneruj z kontenera
+                📦 Generate from container
               </button>
               <button
                 onClick={() => {
@@ -1677,7 +1716,7 @@ function Environments() {
                   fontWeight: configMode === 'select' ? '600' : 'normal'
                 }}
               >
-                📁 Wybierz z pliku
+                📁 Select from file
               </button>
               
               <button
@@ -1698,23 +1737,23 @@ function Environments() {
                   fontWeight: configMode === 'stage-single' ? '600' : 'normal'
                 }}
               >
-                🚀 Promuj pojedyńczy
+                🚀 Promote single
               </button>
             </div>
 
             {configMode === 'stage-single' ? (
               <>
                 <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontWeight: 'bold' }}>
-                  🚀 Promuj pojedyńczy: Wybierz kontener z {selectedEnv === 'dev' ? 'DEV' : selectedEnv === 'staging' ? 'Pre-Prod' : 'PROD'}, aby promować go do {selectedEnv === 'dev' ? 'Pre-Prod' : selectedEnv === 'staging' ? 'PROD' : '(brak)'}
+                  🚀 Promote single: Select a container from {selectedEnv === 'dev' ? 'DEV' : selectedEnv === 'staging' ? 'Pre-Prod' : 'PROD'} to promote it to {selectedEnv === 'dev' ? 'Pre-Prod' : selectedEnv === 'staging' ? 'PROD' : '(none)'}
                 </p>
                 <p style={{ color: 'var(--text-tertiary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                  Kontener zostanie automatycznie przygotowany i promowany ({selectedEnv === 'dev' ? 'DEV → Pre-Prod' : selectedEnv === 'staging' ? 'Pre-Prod → PROD' : 'brak akcji'})
+                  The container will be prepared and promoted automatically ({selectedEnv === 'dev' ? 'DEV → Pre-Prod' : selectedEnv === 'staging' ? 'Pre-Prod → PROD' : 'no action'})
                 </p>
 
                 <div style={{ marginBottom: '1rem' }}>
                   <input
                     type="text"
-                    placeholder="Szukaj kontenera..."
+                    placeholder="Search containers..."
                     value={containerSearch}
                     onChange={(e) => setContainerSearch(e.target.value)}
                     style={{ 
@@ -1729,7 +1768,7 @@ function Environments() {
                 </div>
 
                 {loadingContainers ? (
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie kontenerów...</div>
+                  <div style={{ textAlign: 'center', padding: '2rem' }}>Loading containers...</div>
                 ) : (
                   <div style={{ 
                     border: '1px solid var(--border-color)', 
@@ -1764,7 +1803,7 @@ function Environments() {
                               {container.name}
                             </div>
                             <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                              {container.image || 'Brak obrazu'}
+                              {container.image || 'No image'}
                             </div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
                               Status: {container.status || container.state || 'unknown'}
@@ -1784,9 +1823,9 @@ function Environments() {
                                 fontWeight: '600',
                                 fontSize: '0.85rem'
                               }}
-                              title="Migruj kontener na inny serwer"
+                              title="Migrate container to another server"
                             >
-                              {loading[`migrate_${container.name}`] ? '⏳ Migracja...' : '📦 Migruj'}
+                              {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
                             </button>
                             <button
                               onClick={() => handleStageSingleContainer(container.name)}
@@ -1801,7 +1840,7 @@ function Environments() {
                                 fontWeight: '600'
                               }}
                             >
-                              {promotingContainer === container.name ? 'Promowanie...' : `🚀 ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
+                              {promotingContainer === container.name ? 'Promoting...' : `🚀 ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
                             </button>
                             
                             {promotingContainer === container.name && (
@@ -1818,9 +1857,9 @@ function Environments() {
                                   fontWeight: '600',
                                   animation: 'pulse 2s infinite'
                                 }}
-                                title="Zatrzymaj deployment"
+                                title="Stop deployment"
                               >
-                                {cancellingContainer === container.name ? '⏳ Anulowanie...' : '🛑 STOP'}
+                                {cancellingContainer === container.name ? '⏳ Cancelling...' : '🛑 STOP'}
                               </button>
                             )}
                           </div>
@@ -1833,13 +1872,13 @@ function Environments() {
             ) : configMode === 'generate' ? (
               <>
                 <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                  Wybierz kontener, aby automatycznie przygotować plik konfiguracyjny deployment-{selectedEnv}.yml
+                  Select a container to automatically prepare the deployment-{selectedEnv}.yml config file
                 </p>
 
                 <div style={{ marginBottom: '1rem' }}>
                   <input
                     type="text"
-                    placeholder="Szukaj kontenera..."
+                    placeholder="Search containers..."
                     value={containerSearch}
                     onChange={(e) => setContainerSearch(e.target.value)}
                     style={{ 
@@ -1854,7 +1893,7 @@ function Environments() {
                 </div>
 
                 {loadingContainers ? (
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie kontenerów...</div>
+                  <div style={{ textAlign: 'center', padding: '2rem' }}>Loading containers...</div>
                 ) : (
                   <div style={{ 
                     border: '1px solid var(--border-color)', 
@@ -1889,7 +1928,7 @@ function Environments() {
                               {container.name}
                             </div>
                             <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                              {container.image || 'Brak obrazu'}
+                              {container.image || 'No image'}
                             </div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
                               Status: {container.status || container.state || 'unknown'}
@@ -1911,7 +1950,7 @@ function Environments() {
                               }}
                               title="Migruj kontener na inny serwer"
                             >
-                              {loading[`migrate_${container.name}`] ? '⏳ Migracja...' : '📦 Migruj'}
+                              {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
                             </button>
                             <button
                               onClick={() => handlePrepareConfig(container.name)}
@@ -1926,7 +1965,7 @@ function Environments() {
                                 fontWeight: '600'
                               }}
                             >
-                              {preparingConfig ? 'Przygotowywanie...' : 'Przygotuj'}
+                              {preparingConfig ? 'Preparing...' : 'Prepare'}
                             </button>
                           </div>
                         </div>
@@ -1940,13 +1979,13 @@ function Environments() {
                 {!selectedContainerForFile ? (
                   <>
                     <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                      Wybierz kontener z tego środowiska, dla którego chcesz zaimportować plik konfiguracyjny
+                      Select a container in this environment to import a configuration file
                     </p>
                     
                     <div style={{ marginBottom: '1rem' }}>
                       <input
                         type="text"
-                        placeholder="Szukaj kontenera..."
+                        placeholder="Search containers..."
                         value={containerSearch}
                         onChange={(e) => setContainerSearch(e.target.value)}
                         style={{ 
@@ -1961,7 +2000,7 @@ function Environments() {
                     </div>
 
                     {loadingContainers ? (
-                      <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie kontenerów...</div>
+                      <div style={{ textAlign: 'center', padding: '2rem' }}>Loading containers...</div>
                     ) : (
                       <div style={{ 
                         border: '1px solid var(--border-color)', 
@@ -1996,7 +2035,7 @@ function Environments() {
                                   {container.name}
                                 </div>
                                 <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                                  {container.image || 'Brak obrazu'}
+                                  {container.image || 'No image'}
                                 </div>
                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
                                   Status: {container.status || container.state || 'unknown'}
@@ -2016,9 +2055,9 @@ function Environments() {
                                     fontWeight: '600',
                                     fontSize: '0.85rem'
                                   }}
-                                  title="Migruj kontener na inny serwer"
+                                  title="Migrate container to another server"
                                 >
-                                  {loading[`migrate_${container.name}`] ? '⏳ Migracja...' : '📦 Migruj'}
+                                  {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
                                 </button>
                                 <button
                                   onClick={() => handleSelectContainerForFile(container.name)}
@@ -2032,7 +2071,7 @@ function Environments() {
                                     fontWeight: '600'
                                   }}
                                 >
-                                  📁 Wybierz plik
+                                  📁 Select file
                                 </button>
                               </div>
                             </div>
@@ -2053,7 +2092,7 @@ function Environments() {
                       alignItems: 'center'
                     }}>
                       <div>
-                        <strong style={{ color: 'var(--text-primary)' }}>Kontener:</strong>{' '}
+                        <strong style={{ color: 'var(--text-primary)' }}>Container:</strong>{' '}
                         <span style={{ color: 'var(--text-secondary)' }}>{selectedContainerForFile}</span>
                       </div>
                       <button
@@ -2070,11 +2109,11 @@ function Environments() {
                           color: 'var(--text-primary)'
                         }}
                       >
-                        ← Powrót
+                        ← Back
                       </button>
                     </div>
                     <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                      Wybierz plik konfiguracyjny deployment-*.yml dla kontenera {selectedContainerForFile}
+                      Select the deployment-*.yml config file for container {selectedContainerForFile}
                     </p>
 
                 {/* File browser navigation */}
@@ -2100,7 +2139,7 @@ function Environments() {
                         color: 'var(--text-primary)'
                       }}
                     >
-                      ↑ Wstecz
+                      ↑ Back
                     </button>
                     <input
                       type="text"
@@ -2119,7 +2158,7 @@ function Environments() {
                         border: '1px solid var(--input-border)',
                         borderRadius: '4px'
                       }}
-                      placeholder="Ścieżka..."
+                      placeholder="Path..."
                     />
                     <button 
                       onClick={() => loadFileBrowser(browserPath)}
@@ -2132,12 +2171,12 @@ function Environments() {
                         cursor: 'pointer'
                       }}
                     >
-                      Przejdź
+                      Go
                     </button>
                   </div>
                   <input
                     type="text"
-                    placeholder="Szukaj plików deployment-*.yml..."
+                    placeholder="Search deployment-*.yml files..."
                     value={fileSearch}
                     onChange={(e) => setFileSearch(e.target.value)}
                     style={{ 
@@ -2152,7 +2191,7 @@ function Environments() {
                 </div>
 
                 {loadingBrowser ? (
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>Ładowanie...</div>
+                  <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
                 ) : (
                   <div style={{ 
                     border: '1px solid var(--border-color)', 
@@ -2163,7 +2202,7 @@ function Environments() {
                   }}>
                     {filteredFiles.length === 0 ? (
                       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                        {fileSearch ? 'Nie znaleziono plików pasujących do wyszukiwania' : 'Brak plików deployment-*.yml w tym katalogu'}
+                        {fileSearch ? 'No matching files found' : 'No deployment-*.yml files in this directory'}
                       </div>
                     ) : (
                       filteredFiles.map((item, idx) => (
@@ -2274,7 +2313,7 @@ function Environments() {
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>
-                {editingServer ? 'Edytuj Serwer' : 'Dodaj Nowy Serwer'}
+                {editingServer ? 'Edit Server' : 'Add New Server'}
               </h3>
               <button
                 onClick={() => {
@@ -2407,13 +2446,13 @@ function Environments() {
               {serverForm.auth_type === 'password' && (
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
-                    Hasło *
+                    Password *
                   </label>
                   <input
                     type="password"
                     value={serverForm.password}
                     onChange={(e) => setServerForm({ ...serverForm, password: e.target.value })}
-                    placeholder="Wprowadź hasło"
+                    placeholder="Enter password"
                     style={{
                       width: '100%',
                       padding: '0.5rem',
@@ -2450,7 +2489,7 @@ function Environments() {
                     <textarea
                       value={serverForm.private_key}
                       onChange={(e) => setServerForm({ ...serverForm, private_key: e.target.value })}
-                      placeholder="Wklej zawartość klucza prywatnego (OpenSSH format) lub wybierz plik"
+                      placeholder="Paste the private key contents (OpenSSH format) or choose a file"
                       rows={6}
                       style={{
                         width: '100%',
@@ -2466,7 +2505,7 @@ function Environments() {
                       }}
                     />
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
-                      Obsługiwane formaty: OpenSSH (.key, .pem). Dla PuTTY (.ppk) przekonwertuj najpierw w PuTTYgen.
+                      Supported formats: OpenSSH (.key, .pem). For PuTTY (.ppk), convert first in PuTTYgen.
                     </div>
                   </div>
                   <div>
@@ -2496,7 +2535,7 @@ function Environments() {
                 <>
                   <div>
                     <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
-                      Hasło *
+                      Password *
                     </label>
                     <input
                       type="password"
@@ -2548,7 +2587,7 @@ function Environments() {
                   type="text"
                   value={serverForm.description}
                   onChange={(e) => setServerForm({ ...serverForm, description: e.target.value })}
-                  placeholder="Krótki opis serwera"
+                  placeholder="Short server description"
                   style={{
                     width: '100%',
                     padding: '0.5rem',
@@ -2570,7 +2609,7 @@ function Environments() {
                   color: testingServerResult.success ? '#28a745' : '#dc3545'
                 }}>
                   {testingServerResult.success ? '✓ ' : '✗ '}
-                  {testingServerResult.message || testingServerResult.error || 'Wynik testu'}
+                  {testingServerResult.message || testingServerResult.error || 'Test result'}
                 </div>
               )}
 
@@ -2589,7 +2628,7 @@ function Environments() {
                     opacity: (testingServer || !serverForm.hostname || !serverForm.username) ? 0.6 : 1
                   }}
                 >
-                  {testingServer ? 'Testowanie...' : 'Test Połączenia'}
+                  {testingServer ? 'Testing...' : 'Test Connection'}
                 </button>
                 <button
                   onClick={() => {
@@ -2606,7 +2645,7 @@ function Environments() {
                     fontWeight: '600'
                   }}
                 >
-                  Anuluj
+                  Cancel
                 </button>
                 <button
                   onClick={editingServer ? handleServerUpdate : handleServerCreate}
@@ -2621,7 +2660,7 @@ function Environments() {
                     fontWeight: '600'
                   }}
                 >
-                  {editingServer ? 'Zapisz' : 'Utwórz'}
+                  {editingServer ? 'Save' : 'Create'}
                 </button>
               </div>
             </div>
@@ -2712,7 +2751,7 @@ function Environments() {
                         color: theme === 'dark' ? '#ff9800' : '#856404',
                         border: `1px solid ${theme === 'dark' ? '#ff9800' : '#ffc107'}`
                       }}>
-                        <strong>⚠️ Duże dyski wykryte (łącznie {totalSizeTB.toFixed(2)} TB):</strong>
+                        <strong>⚠️ Large disks detected (total {totalSizeTB.toFixed(2)} TB):</strong>
                         <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem' }}>
                           {mountInfo.large_mounts.slice(0, 3).map((mount, idx) => (
                             <li key={idx}>
@@ -2721,7 +2760,7 @@ function Environments() {
                           ))}
                         </ul>
                         <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', marginBottom: 0 }}>
-                          Backup tak dużych dysków może trwać wiele godzin. Rozważ pominięcie backupu.
+                          Backing up such large disks can take many hours. Consider skipping the backup.
                         </p>
                       </div>
                     )}
@@ -2742,7 +2781,7 @@ function Environments() {
                           {privilegedPaths.slice(0, 5).map((path, idx) => (
                             <li key={idx}>{path}</li>
                           ))}
-                          {privilegedPaths.length > 5 && <li>... i {privilegedPaths.length - 5} więcej</li>}
+                          {privilegedPaths.length > 5 && <li>... and {privilegedPaths.length - 5} more</li>}
                         </ul>
                       </div>
                     )}
@@ -2770,7 +2809,7 @@ function Environments() {
                           {privilegedPaths.slice(0, 5).map((path, idx) => (
                             <li key={idx}>{path}</li>
                           ))}
-                          {privilegedPaths.length > 5 && <li>... i {privilegedPaths.length - 5} więcej</li>}
+                          {privilegedPaths.length > 5 && <li>... and {privilegedPaths.length - 5} more</li>}
                         </ul>
                       </div>
                     )}
@@ -2874,7 +2913,7 @@ function Environments() {
                   fontWeight: '600'
                 }}
               >
-                Pomiń backup
+                Skip backup
               </button>
               <button
                 onClick={() => {
@@ -2894,7 +2933,7 @@ function Environments() {
                   fontWeight: '600'
                 }}
               >
-                Anuluj
+                Cancel
               </button>
               <button
                 onClick={async () => {
@@ -2917,7 +2956,7 @@ function Environments() {
                     console.log('[Modal] Callback completed successfully')
                   } catch (error) {
                     console.error('[Modal] Error in callback:', error)
-                    setMessage({ type: 'error', text: 'Błąd: ' + (error.message || 'Nieznany błąd') })
+                    setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
                   }
                 }}
                 disabled={!sudoPassword}
@@ -2967,7 +3006,7 @@ function Environments() {
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>
-                📦 Migracja Kontenera
+                📦 Container Migration
               </h3>
               <button
                 onClick={() => {
@@ -2992,14 +3031,14 @@ function Environments() {
                 Migruj kontener <strong>{migratingContainer}</strong> na inny serwer.
               </p>
               <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-                Serwer źródłowy: <strong>{selectedServer === 'local' ? '🏠 Lokalny' : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
+                Source server: <strong>{selectedServer === 'local' ? '🏠 Local' : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
               </p>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
-                  Serwer docelowy *
+                  Target server *
                 </label>
                 <select
                   value={migrationTargetServer}
@@ -3015,8 +3054,8 @@ function Environments() {
                     boxSizing: 'border-box'
                   }}
                 >
-                  <option value="">-- Wybierz serwer --</option>
-                  <option value="local">🏠 Lokalny</option>
+                  <option value="">-- Select server --</option>
+                  <option value="local">🏠 Local</option>
                   {servers.map((server) => (
                     server.id !== selectedServer && (
                       <option key={server.id} value={server.id}>
@@ -3036,7 +3075,7 @@ function Environments() {
                     style={{ cursor: 'pointer' }}
                   />
                   <span style={{ color: 'var(--text-primary)' }}>
-                    Uwzględnij dane kontenera (volumes) - może być wolne dla dużych wolumenów
+                    Include container data (volumes) - may be slow for large volumes
                   </span>
                 </label>
               </div>
@@ -3050,7 +3089,7 @@ function Environments() {
                     style={{ cursor: 'pointer' }}
                   />
                   <span style={{ color: 'var(--text-primary)' }}>
-                    Zatrzymaj kontener źródłowy po migracji
+                    Stop source container after migration
                   </span>
                 </label>
               </div>
@@ -3138,7 +3177,7 @@ function Environments() {
                       fontWeight: '600'
                     }}
                   >
-                    🛑 Anuluj migrację
+                    🛑 Cancel migration
                   </button>
                 )}
                 <button
@@ -3176,7 +3215,7 @@ function Environments() {
                       fontWeight: '600'
                     }}
                   >
-                    {loading[`migrate_${migratingContainer}`] ? 'Migracja...' : 'Rozpocznij migrację'}
+                    {loading[`migrate_${migratingContainer}`] ? 'Migrating...' : 'Start migration'}
                   </button>
                 )}
               </div>

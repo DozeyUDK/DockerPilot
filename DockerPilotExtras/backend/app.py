@@ -64,10 +64,104 @@ def generate_deployment_id(container_name: str, image_tag: str = None) -> str:
     unique_id = f"{hash_value[:4]}!{hash_value[4:8]}{hash_value[8:12]}"
     return f"{safe_name}_{unique_id}"
 
+def _detect_health_check_endpoint_from_containers(image_tag: str) -> str:
+    """Dynamically detect health check endpoint from running containers
+    
+    Uses docker ps to get list of running containers and their images,
+    then builds a dynamic mapping of services to health check endpoints.
+    
+    Args:
+        image_tag: Docker image tag (e.g., 'qdrant/qdrant:latest', 'ollama/ollama:latest')
+        
+    Returns:
+        Health check endpoint path, or None for non-HTTP services
+    """
+    image_lower = image_tag.lower()
+    
+    # Try to get running containers to build dynamic service list
+    try:
+        pilot = get_dockerpilot()
+        if pilot and pilot.client:
+            # Get all running containers
+            running_containers = pilot.client.containers.list(filters={'status': 'running'})
+            
+            # Extract unique service names from running containers
+            running_services = set()
+            for container in running_containers:
+                # Get image name (without tag)
+                container_image = container.image.tags[0] if container.image.tags else container.image.id
+                # Extract service name (part before first slash or colon)
+                service_name = container_image.split('/')[-1].split(':')[0].lower()
+                running_services.add(service_name)
+            
+            app.logger.debug(f"Detected running services from containers: {sorted(running_services)}")
+            
+            # Build dynamic non-HTTP services list from running containers
+            # Check if any running container matches known non-HTTP patterns
+            non_http_keywords = ['ssh', 'redis', 'mariadb', 'mysql', 'postgres', 'postgresql', 
+                                'mongo', 'mongodb', 'db2', 'memcached', 'rabbitmq', 'kafka', 
+                                'zookeeper', 'minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 
+                                'k3s', 'k3d']
+            
+            # Check if image matches any non-HTTP service pattern
+            for keyword in non_http_keywords:
+                if keyword in image_lower:
+                    # Also check if this service is actually running
+                    if any(keyword in service for service in running_services):
+                        app.logger.info(f"Detected non-HTTP service '{keyword}' from running containers")
+                        return None
+            
+            # Build dynamic endpoint mappings from running containers
+            # Common patterns based on service names found in running containers
+            endpoint_mappings = {
+                'homeassistant': '/',
+                'home-assistant': '/',
+                'glances': '/',
+                'grafana': '/api/health',
+                'qdrant': '/healthz',
+                'ollama': '/api/version',
+                'prometheus': '/-/healthy',
+                'influxdb': '/ready',
+                'nextcloud': '/status.php',
+                'elasticsearch': '/_cluster/health',
+                'nginx': '/',
+                'apache': '/',
+                'traefik': '/ping',
+                'portainer': '/api/status'
+            }
+            
+            # Check if any running service matches our image
+            for service_name in running_services:
+                if service_name in image_lower:
+                    # Try to find endpoint mapping for this service
+                    for pattern, endpoint in endpoint_mappings.items():
+                        if pattern in service_name or service_name in pattern:
+                            app.logger.info(f"Detected service '{service_name}' from running containers -> endpoint '{endpoint}'")
+                            return endpoint
+            
+            # If service is running but no specific mapping, check generic patterns
+            for pattern, endpoint in endpoint_mappings.items():
+                if pattern in image_lower:
+                    app.logger.info(f"Detected image pattern '{pattern}' -> endpoint '{endpoint}'")
+                    return endpoint
+            
+    except Exception as e:
+        app.logger.debug(f"Could not get running containers for dynamic detection: {e}")
+    
+    # Final fallback: check for non-HTTP services even if we couldn't get containers
+    non_http_keywords = ['ssh', 'redis', 'mariadb', 'mysql', 'postgres', 'mongo', 'db2']
+    if any(keyword in image_lower for keyword in non_http_keywords):
+        return None
+    
+    # Default endpoint for HTTP services
+    return '/health'
+
+
 def _detect_health_check_endpoint(image_tag: str) -> str:
     """Detect appropriate health check endpoint based on image name
     
     Uses DockerPilot's centralized health check detection with JSON config.
+    Falls back to dynamic detection from running containers.
     
     Args:
         image_tag: Docker image tag (e.g., 'qdrant/qdrant:latest', 'ollama/ollama:latest')
@@ -80,23 +174,9 @@ def _detect_health_check_endpoint(image_tag: str) -> str:
         pilot = get_dockerpilot()
         return pilot._detect_health_check_endpoint(image_tag)
     except Exception as e:
-        app.logger.warning(f"Could not use pilot health check detection: {e}, using fallback")
-        # Fallback to minimal defaults if pilot is not available
-        image_lower = image_tag.lower()
-        
-        # Non-HTTP services
-        if any(keyword in image_lower for keyword in ['ssh', 'redis', 'mariadb', 'mysql', 'postgres', 'mongo', 'db2']):
-            return None
-        
-        # Minimal fallback mappings
-        if 'homeassistant' in image_lower or 'home-assistant' in image_lower:
-            return '/'
-        if 'glances' in image_lower:
-            return '/'
-        if 'grafana' in image_lower:
-            return '/api/health'
-        
-        return '/health'
+        app.logger.warning(f"Could not use pilot health check detection: {e}, using dynamic fallback")
+        # Fallback: dynamically detect services from running containers
+        return _detect_health_check_endpoint_from_containers(image_tag)
 
 
 def get_or_create_deployment_dir(container_name: str, image_tag: str = None, deployment_id: str = None) -> Path:
@@ -504,7 +584,25 @@ def get_dockerpilot():
     return instance
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
-    """Execute any command on remote server via SSH"""
+    """Execute any command on remote server via SSH (or local if server_config is None or id == 'local')"""
+    # Handle local server
+    if server_config is None or server_config.get('id') == 'local':
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if check_exit_status and result.returncode != 0:
+                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            raise Exception(f"Command timeout: {command}")
+        except Exception as e:
+            raise Exception(f"Command failed: {str(e)}")
+    
     if not SSH_AVAILABLE:
         raise ImportError("SSH libraries not available")
     
@@ -568,9 +666,150 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
         app.logger.error(f"Failed to execute command via SSH: {e}")
         raise
 
-def execute_docker_command_via_ssh(server_config, docker_command, check_exit_status=True):
-    """Execute docker command on remote server via SSH"""
-    return execute_command_via_ssh(server_config, f"docker {docker_command}", check_exit_status=check_exit_status)
+# Cache for sudo requirements per server
+_docker_sudo_cache = {}
+
+def _check_docker_sudo_required(server_config):
+    """Check if docker commands require sudo on the server (with caching)"""
+    # Use server ID or hostname as cache key
+    cache_key = server_config.get('id') or server_config.get('hostname', 'unknown')
+    
+    # Check cache first
+    if cache_key in _docker_sudo_cache:
+        return _docker_sudo_cache[cache_key]
+    
+    # For local server, assume no sudo needed (user should have docker group access)
+    if server_config is None or server_config.get('id') == 'local':
+        _docker_sudo_cache[cache_key] = False
+        return False
+    
+    try:
+        # Try to run docker ps without sudo
+        result = execute_command_via_ssh(server_config, "docker ps", check_exit_status=False)
+        # If it works, no sudo needed
+        _docker_sudo_cache[cache_key] = False
+        return False
+    except Exception as e:
+        # If it fails with permission error, sudo is likely required
+        error_msg = str(e).lower()
+        if 'permission denied' in error_msg or 'cannot connect' in error_msg or 'permission' in error_msg:
+            _docker_sudo_cache[cache_key] = True
+            return True
+        # For other errors, assume no sudo needed (might be other issues like docker not running)
+        _docker_sudo_cache[cache_key] = False
+        return False
+
+def execute_docker_command_via_ssh(server_config, docker_command, check_exit_status=True, use_sudo=None, return_stderr=False):
+    """Execute docker command on remote server via SSH
+    
+    Args:
+        server_config: Server configuration
+        docker_command: Docker command to execute (without 'docker' prefix)
+        check_exit_status: Whether to raise exception on non-zero exit code
+        use_sudo: Whether to use sudo (None = auto-detect, True/False = force)
+        return_stderr: If True, return tuple (stdout, stderr), otherwise just stdout
+    
+    Returns:
+        stdout string, or (stdout, stderr) tuple if return_stderr=True
+    """
+    # Auto-detect sudo requirement if not specified
+    if use_sudo is None:
+        use_sudo = _check_docker_sudo_required(server_config)
+    
+    # Build command with or without sudo
+    if use_sudo:
+        # Use sudo docker - need to handle password if required
+        # For now, assume passwordless sudo is configured or user is in docker group
+        command = f"sudo docker {docker_command}"
+    else:
+        command = f"docker {docker_command}"
+    
+    # For docker load, we need to check stderr too (docker load outputs to stderr)
+    if return_stderr or 'load' in docker_command:
+        return _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=check_exit_status)
+    else:
+        return execute_command_via_ssh(server_config, command, check_exit_status=check_exit_status)
+
+def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=True):
+    """Execute command via SSH and return both stdout and stderr"""
+    # Handle local server
+    if server_config is None or server_config.get('id') == 'local':
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if check_exit_status and result.returncode != 0:
+                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+            return result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            raise Exception(f"Command timeout: {command}")
+        except Exception as e:
+            raise Exception(f"Command failed: {str(e)}")
+    
+    if not SSH_AVAILABLE:
+        raise ImportError("SSH libraries not available")
+    
+    try:
+        import paramiko
+        from io import StringIO
+        
+        hostname = server_config.get('hostname')
+        port = server_config.get('port', 22)
+        username = server_config.get('username')
+        auth_type = server_config.get('auth_type', 'password')
+        
+        # Create SSH client
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Prepare authentication (same as execute_command_via_ssh)
+        if auth_type == 'password':
+            ssh.connect(hostname, port=port, username=username, password=server_config.get('password'), timeout=10)
+        elif auth_type == 'key':
+            key_content = server_config.get('private_key')
+            key_passphrase = server_config.get('key_passphrase')
+            if not key_content:
+                raise ValueError('Private key required for key authentication')
+            
+            key_file = StringIO(key_content)
+            try:
+                key = paramiko.RSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
+            except:
+                try:
+                    key_file.seek(0)
+                    key = paramiko.DSSKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
+                except:
+                    key_file.seek(0)
+                    key = paramiko.ECDSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
+            
+            ssh.connect(hostname, port=port, username=username, pkey=key, timeout=10)
+        elif auth_type == '2fa':
+            password = server_config.get('password')
+            totp_code = server_config.get('totp_code', '')
+            ssh.connect(hostname, port=port, username=username, password=password + totp_code, timeout=10)
+        else:
+            raise ValueError(f'Unsupported auth type: {auth_type}')
+        
+        # Execute command
+        stdin, stdout, stderr = ssh.exec_command(command)
+        exit_status = stdout.channel.recv_exit_status()
+        output = stdout.read().decode('utf-8')
+        error_output = stderr.read().decode('utf-8')
+        
+        ssh.close()
+        
+        if check_exit_status and exit_status != 0:
+            raise Exception(f"Command failed (exit {exit_status}): {error_output}")
+        
+        return output, error_output
+        
+    except Exception as e:
+        app.logger.error(f"Failed to execute command via SSH: {e}")
+        raise
 
 def get_selected_server_config():
     """Get configuration for currently selected server"""
@@ -1368,7 +1607,7 @@ class DeploymentProgress(Resource):
                     if stage not in ['completed', 'failed', 'error', 'cancelled']:
                         active_deployments[name] = progress
                     else:
-                        # Mark completed/cancelled deployments for cleanup (older than 1 minute)
+                        # Mark completed/cancelled deployments for cleanup (older than 30 seconds)
                         timestamp_str = progress.get('timestamp')
                         if timestamp_str:
                             try:
@@ -1377,14 +1616,14 @@ class DeploymentProgress(Resource):
                                     timestamp = timestamp.replace(tzinfo=datetime.now().astimezone().tzinfo)
                                 
                                 age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-                                # Clean up completed deployments older than 1 minute
-                                if age_seconds > 60:
+                                # Clean up completed deployments older than 30 seconds
+                                if age_seconds > 30:
                                     completed_deployments.append(name)
                             except (ValueError, TypeError):
                                 # If timestamp parsing fails, mark for cleanup anyway
                                 completed_deployments.append(name)
                         else:
-                            # No timestamp, mark for cleanup
+                            # No timestamp, mark for cleanup immediately
                             completed_deployments.append(name)
                 
                 # Clean up old completed deployments
@@ -1487,13 +1726,23 @@ class EnvironmentPromoteSingle(Resource):
             try:
                 success = pilot.environment_promotion(from_env, to_env, config_path_str, skip_backup)
                 
+                # Wait a moment for final progress callback from pilot
+                import time
+                time.sleep(0.5)
+                
+                # Check if pilot already set 'completed' via callback
+                current_progress = _deployment_progress.get(container_name, {})
+                current_stage = current_progress.get('stage', '')
+                
                 if success:
-                    _deployment_progress[container_name] = {
-                        'stage': 'completed',
-                        'progress': 100,
-                        'message': f'Promotion completed successfully!',
-                        'timestamp': datetime.now().isoformat()
-                    }
+                    # Only set 'completed' if pilot didn't already do it via callback
+                    if current_stage != 'completed':
+                        _deployment_progress[container_name] = {
+                            'stage': 'completed',
+                            'progress': 100,
+                            'message': f'Promotion completed successfully!',
+                            'timestamp': datetime.now().isoformat()
+                        }
                     app.logger.info(f"Successfully promoted {container_name}")
                     return {
                         'success': True,
@@ -1501,12 +1750,14 @@ class EnvironmentPromoteSingle(Resource):
                         'container_name': container_name
                     }
                 else:
-                    _deployment_progress[container_name] = {
-                        'stage': 'failed',
-                        'progress': 0,
-                        'message': f'Promotion failed',
-                        'timestamp': datetime.now().isoformat()
-                    }
+                    # Only set 'failed' if not already set by pilot callback
+                    if current_stage not in ['failed', 'error', 'completed']:
+                        _deployment_progress[container_name] = {
+                            'stage': 'failed',
+                            'progress': 0,
+                            'message': f'Promotion failed',
+                            'timestamp': datetime.now().isoformat()
+                        }
                     app.logger.error(f"Failed to promote {container_name}")
                     return {
                         'success': False,
@@ -1514,22 +1765,29 @@ class EnvironmentPromoteSingle(Resource):
                     }, 500
                     
             except Exception as e:
-                _deployment_progress[container_name] = {
-                    'stage': 'error',
-                    'progress': 0,
-                    'message': f'Error: {str(e)}',
-                    'timestamp': datetime.now().isoformat()
-                }
+                # Only set 'error' if not already set by pilot callback
+                current_progress = _deployment_progress.get(container_name, {})
+                current_stage = current_progress.get('stage', '')
+                if current_stage not in ['failed', 'error', 'completed']:
+                    _deployment_progress[container_name] = {
+                        'stage': 'error',
+                        'progress': 0,
+                        'message': f'Error: {str(e)}',
+                        'timestamp': datetime.now().isoformat()
+                    }
                 app.logger.error(f"Error promoting {container_name}: {e}")
                 return {'error': str(e)}, 500
             finally:
-                # Clean up progress after 5 minutes
+                # Clean up progress after 2 minutes (reduced from 5)
                 import threading
                 def cleanup_progress():
                     import time
-                    time.sleep(300)  # 5 minutes
+                    time.sleep(120)  # 2 minutes
                     if container_name in _deployment_progress:
-                        del _deployment_progress[container_name]
+                        progress = _deployment_progress.get(container_name, {})
+                        # Only cleanup if still in completed/failed/error state
+                        if progress.get('stage') in ['completed', 'failed', 'error', 'cancelled']:
+                            del _deployment_progress[container_name]
                 threading.Thread(target=cleanup_progress, daemon=True).start()
                 
         except Exception as e:
@@ -1539,9 +1797,27 @@ class EnvironmentPromoteSingle(Resource):
             return {'error': str(e)}, 500
 
 
+# Cache for environment status to reduce load
+_environment_status_cache = {
+    'data': None,
+    'timestamp': None,
+    'ttl': 2  # Cache for 2 seconds
+}
+
 class EnvironmentStatus(Resource):
     """Get status of all environments using DockerPilot"""
     def get(self):
+        global _environment_status_cache
+        
+        # Check cache first
+        import time
+        current_time = time.time()
+        if (_environment_status_cache['data'] is not None and 
+            _environment_status_cache['timestamp'] is not None and
+            current_time - _environment_status_cache['timestamp'] < _environment_status_cache['ttl']):
+            app.logger.debug("Returning cached environment status")
+            return _environment_status_cache['data']
+        
         try:
             environments = ['dev', 'staging', 'prod']
             env_status = {}
@@ -2085,7 +2361,7 @@ class EnvironmentStatus(Resource):
                     'primary_image': dev_images[0] if dev_images else None
                 }
             
-            return {
+            result = {
                 'success': True,
                 'environments': env_status,
                 'debug': {
@@ -2095,6 +2371,12 @@ class EnvironmentStatus(Resource):
                     'deployments_dir': str(app.config['DEPLOYMENTS_DIR'])
                 }
             }
+            
+            # Update cache
+            _environment_status_cache['data'] = result
+            _environment_status_cache['timestamp'] = current_time
+            
+            return result
             
         except Exception as e:
             return {'error': str(e)}, 500
@@ -3892,14 +4174,18 @@ class ContainerMigrate(Resource):
             # Load server configs
             config = load_servers_config()
             target_server = None
-            for server in config.get('servers', []):
-                if server.get('id') == target_server_id:
-                    target_server = server
-                    break
-            
-            if not target_server:
-                update_progress('failed', 0, 'Target server not found')
-                return {'error': 'Target server not found'}, 404
+            if target_server_id == 'local':
+                # Local server - create a dummy config for local operations
+                target_server = {'id': 'local', 'hostname': 'localhost'}
+            else:
+                for server in config.get('servers', []):
+                    if server.get('id') == target_server_id:
+                        target_server = server
+                        break
+                
+                if not target_server:
+                    update_progress('failed', 0, 'Target server not found')
+                    return {'error': 'Target server not found'}, 404
             
             # Get source server config
             source_server = None
@@ -3921,6 +4207,10 @@ class ContainerMigrate(Resource):
             container_config = None
             image_tag = None
             export_image_tag = None  # Tag used for export/import
+            
+            # Create export image tag early (needed for deployment config)
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            export_image_tag = f"{container_name}_migrated:{timestamp}"
             
             if source_server_id == 'local':
                 # Get from local Docker
@@ -3979,6 +4269,46 @@ class ContainerMigrate(Resource):
                     update_progress('failed', 0, f'Error extracting container configuration: {str(e)}')
                     return {'error': f'Failed to get container from source server: {str(e)}'}, 500
             
+            # Step 1.5: Save deployment config (YAML) for proper container recreation
+            update_progress('saving_config', 15, 'Saving deployment configuration...')
+            check_cancel()
+            
+            try:
+                # Create deployment config structure
+                deployment_config = {
+                    'deployment': {
+                        'image_tag': container_config.get('image_tag', image_tag),
+                        'container_name': container_name,
+                        'port_mapping': container_config.get('port_mapping', {}),
+                        'environment': container_config.get('environment', {}),
+                        'volumes': container_config.get('volumes', {}),
+                        'restart_policy': container_config.get('restart_policy', 'unless-stopped'),
+                        'network': container_config.get('network', 'bridge'),
+                        'cpu_limit': container_config.get('cpu_limit'),
+                        'memory_limit': container_config.get('memory_limit')
+                    }
+                }
+                
+                # Add command if present
+                if container_config.get('command'):
+                    # Convert list to string if needed
+                    cmd = container_config['command']
+                    if isinstance(cmd, list):
+                        deployment_config['deployment']['command'] = ' '.join(cmd) if cmd else None
+                    else:
+                        deployment_config['deployment']['command'] = cmd
+                
+                # Save deployment config
+                config_path = save_deployment_config(
+                    container_name, 
+                    deployment_config, 
+                    image_tag=export_image_tag
+                )
+                app.logger.info(f"Saved deployment config to: {config_path}")
+            except Exception as e:
+                app.logger.warning(f"Failed to save deployment config: {e}. Continuing with migration...")
+                # Don't fail migration if config save fails
+            
             # Step 2: Export image from source
             update_progress('exporting', 20, f'Exporting image {image_tag} from source...')
             check_cancel()
@@ -3986,10 +4316,7 @@ class ContainerMigrate(Resource):
             app.logger.info(f"Exporting image {image_tag} from source...")
             image_export_path = None
             
-            # Create export image tag (same for both local and remote)
-            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-            export_image_tag = f"{container_name}_migrated:{timestamp}"
-            
+            # export_image_tag was already created earlier (before saving deployment config)
             if source_server_id == 'local':
                 # Export image locally
                 import tempfile
@@ -3997,11 +4324,57 @@ class ContainerMigrate(Resource):
                 image_export_path.close()
                 
                 try:
-                    # Commit container to image if needed, or use existing image
-                    # export_image_tag is already defined above
-                    pilot.client.images.get(image_tag).tag(export_image_tag)
+                    # Get the image object
+                    source_image = pilot.client.images.get(image_tag)
+                    image_id = source_image.id
+                    app.logger.info(f"Source image ID: {image_id}, Tags: {source_image.tags}")
                     
-                    # Save image to tar
+                    # Tag the image with export tag
+                    app.logger.info(f"Tagging image {image_tag} as {export_image_tag}...")
+                    source_image.tag(export_image_tag)
+                    
+                    # Give Docker a moment to sync the tag
+                    import time
+                    time.sleep(0.5)
+                    
+                    # Verify the tag was created by checking if image can be retrieved by tag
+                    try:
+                        tagged_image = pilot.client.images.get(export_image_tag)
+                        app.logger.info(f"Successfully tagged image. Image ID: {tagged_image.id}, Tags: {tagged_image.tags}")
+                        
+                        # Verify export_image_tag is in the tags list
+                        if export_image_tag not in tagged_image.tags:
+                            app.logger.warning(f"Tag {export_image_tag} not found in image tags: {tagged_image.tags}")
+                            # Try to use docker tag command as fallback
+                            app.logger.info(f"Trying docker tag command as fallback...")
+                            result = subprocess.run(
+                                ['docker', 'tag', image_id, export_image_tag],
+                                capture_output=True,
+                                text=True,
+                                timeout=30
+                            )
+                            if result.returncode != 0:
+                                raise Exception(f"docker tag failed: {result.stderr}")
+                            # Reload image after tagging
+                            tagged_image = pilot.client.images.get(export_image_tag)
+                            app.logger.info(f"Tagged via docker command. Tags: {tagged_image.tags}")
+                    except Exception as e:
+                        app.logger.error(f"Failed to verify tagged image: {e}")
+                        # Try docker tag command as fallback
+                        app.logger.info(f"Trying docker tag command as fallback...")
+                        result = subprocess.run(
+                            ['docker', 'tag', image_id, export_image_tag],
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        if result.returncode != 0:
+                            raise Exception(f"Image tag {export_image_tag} was not created successfully: {result.stderr}")
+                        app.logger.info(f"Tagged via docker command successfully")
+                    
+                    # Save image to tar using image ID (more reliable than tag)
+                    # But also include the tag so it's preserved
+                    app.logger.info(f"Saving image {export_image_tag} (ID: {image_id}) to {image_export_path.name}...")
                     result = subprocess.run(
                         ['docker', 'save', '-o', image_export_path.name, export_image_tag],
                         capture_output=True,
@@ -4009,11 +4382,27 @@ class ContainerMigrate(Resource):
                         timeout=300
                     )
                     if result.returncode != 0:
-                        raise Exception(f"Failed to save image: {result.stderr}")
+                        app.logger.error(f"docker save failed: stdout={result.stdout}, stderr={result.stderr}")
+                        # Try with image ID as fallback
+                        app.logger.info(f"Trying docker save with image ID as fallback...")
+                        result = subprocess.run(
+                            ['docker', 'save', '-o', image_export_path.name, image_id],
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+                        if result.returncode != 0:
+                            raise Exception(f"Failed to save image: {result.stderr}")
+                        app.logger.warning(f"Saved using image ID instead of tag. Tag may not be preserved.")
+                    
+                    app.logger.info(f"Image saved successfully. File size: {os.path.getsize(image_export_path.name)} bytes")
                 except Exception as e:
-                    if os.path.exists(image_export_path.name):
+                    error_msg = f'Failed to export image: {str(e)}'
+                    app.logger.error(f"Migration error during image export (local): {error_msg}", exc_info=True)
+                    if image_export_path and os.path.exists(image_export_path.name):
                         os.unlink(image_export_path.name)
-                    return {'error': f'Failed to export image: {str(e)}'}, 500
+                    update_progress('failed', 0, error_msg)
+                    return {'error': error_msg}, 500
             else:
                 # Export image from remote server
                 import tempfile
@@ -4093,209 +4482,495 @@ class ContainerMigrate(Resource):
                     # Clean up remote tar
                     execute_command_via_ssh(source_server, f"rm -f {remote_tar_path}", check_exit_status=False)
                 except Exception as e:
-                    if os.path.exists(image_export_path.name):
+                    error_msg = f'Failed to export image from remote: {str(e)}'
+                    app.logger.error(f"Migration error during image export (remote): {error_msg}", exc_info=True)
+                    if image_export_path and os.path.exists(image_export_path.name):
                         os.unlink(image_export_path.name)
-                    return {'error': f'Failed to export image from remote: {str(e)}'}, 500
+                    update_progress('failed', 0, error_msg)
+                    return {'error': error_msg}, 500
             
             # Step 3: Transfer image to target server
-            update_progress('transferring', 50, f'Transferring image to target server {target_server.get("hostname")}...')
-            check_cancel()
-            
-            app.logger.info(f"Transferring image to target server {target_server.get('hostname')}...")
-            try:
-                import paramiko
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                
-                # Connect to target server
-                try:
-                    if target_server.get('auth_type') == 'password':
-                        ssh.connect(
-                            target_server.get('hostname'),
-                            port=target_server.get('port', 22),
-                            username=target_server.get('username'),
-                            password=target_server.get('password'),
-                            timeout=30  # Increased timeout for large file transfers
-                        )
-                    elif target_server.get('auth_type') == 'key':
-                        from io import StringIO
-                        key_file = StringIO(target_server.get('private_key'))
-                        try:
-                            key = paramiko.RSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                        except:
-                            key_file.seek(0)
-                            try:
-                                key = paramiko.DSSKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                            except:
-                                key_file.seek(0)
-                                key = paramiko.ECDSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                        
-                        ssh.connect(
-                            target_server.get('hostname'),
-                            port=target_server.get('port', 22),
-                            username=target_server.get('username'),
-                            pkey=key,
-                            timeout=30  # Increased timeout for large file transfers
-                        )
-                    else:
-                        raise Exception(f"Unsupported auth_type: {target_server.get('auth_type')}")
-                except Exception as e:
-                    app.logger.error(f"Failed to connect to target server {target_server.get('hostname')}: {e}", exc_info=True)
-                    update_progress('failed', 0, f'Error connecting to target server: {str(e)}')
-                    raise Exception(f"Failed to connect to target server: {str(e)}")
-                
-                # Upload image tar via SFTP
-                remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
-                
-                # Check if local file exists
-                if not os.path.exists(image_export_path.name):
-                    raise Exception(f"Local image file does not exist: {image_export_path.name}")
-                
-                file_size = os.path.getsize(image_export_path.name)
-                file_size_mb = file_size / (1024*1024)
-                app.logger.info(f"Uploading image file {image_export_path.name} ({file_size_mb:.2f} MB) to {remote_tar_path}")
-                
-                # Check available disk space on target server before transfer
-                try:
-                    df_output = execute_command_via_ssh(target_server, "df -m /tmp | tail -1 | awk '{print $4}'")
-                    available_space_mb = int(df_output.strip())
-                    app.logger.info(f"Available disk space on target server /tmp: {available_space_mb} MB")
+            if target_server_id == 'local':
+                # Target is local server
+                if source_server_id == 'local':
+                    # Both source and target are local - image was already tagged and saved to tar
+                    # Now we need to load it from tar to ensure it's available with the correct tag
+                    update_progress('loading', 70, 'Loading image on local server...')
+                    check_cancel()
+                    try:
+                        # Load image from tar file (even though it's local, we need to ensure tag is correct)
+                        if image_export_path and os.path.exists(image_export_path.name):
+                            result = subprocess.run(
+                                ['docker', 'load', '-i', image_export_path.name],
+                                capture_output=True,
+                                text=True,
+                                timeout=300
+                            )
+                            if result.returncode != 0:
+                                raise Exception(f"Failed to load image: {result.stderr}")
+                            
+                            # docker load outputs to stderr, so combine both
+                            load_output = (result.stdout or '') + (result.stderr or '')
+                            app.logger.info(f"Image load stdout: {result.stdout}")
+                            app.logger.info(f"Image load stderr: {result.stderr}")
+                            app.logger.info(f"Image load combined output: {load_output}")
+                            
+                            # Verify image was loaded with correct tag
+                            if 'Loaded image:' in load_output:
+                                for line in load_output.split('\n'):
+                                    if 'Loaded image:' in line:
+                                        loaded_tag = line.split('Loaded image:')[1].strip()
+                                        if loaded_tag:
+                                            app.logger.info(f"Image loaded with tag: {loaded_tag}")
+                                            if export_image_tag not in loaded_tag and container_name in loaded_tag:
+                                                export_image_tag = loaded_tag
+                                            break
+                            
+                            # Verify image exists
+                            pilot = get_dockerpilot()
+                            images = pilot.client.images.list()
+                            image_found = False
+                            for img in images:
+                                if export_image_tag in [tag for tag_list in img.tags for tag in tag_list]:
+                                    image_found = True
+                                    app.logger.info(f"Image {export_image_tag} verified locally")
+                                    break
+                            if not image_found:
+                                raise Exception(f"Image {export_image_tag} not found locally after loading")
+                        else:
+                            raise Exception(f"Image tar file not found: {image_export_path.name if image_export_path else 'None'}")
+                    except Exception as e:
+                        error_msg = f'Failed to load image on local server: {str(e)}'
+                        app.logger.error(f"Migration error during image loading: {error_msg}", exc_info=True)
+                        update_progress('failed', 0, error_msg)
+                        return {'error': error_msg}, 500
+                else:
+                    # Source is remote, target is local - need to download and load image locally
+                    update_progress('transferring', 50, 'Downloading image from remote source...')
+                    check_cancel()
                     
-                    # Add 20% buffer for safety
-                    required_space_mb = int(file_size_mb * 1.2)
-                    if available_space_mb < required_space_mb:
-                        raise Exception(f"Insufficient disk space on target server. Required: {required_space_mb} MB, Available: {available_space_mb} MB")
-                except ValueError:
-                    app.logger.warning("Could not parse available disk space, continuing anyway...")
-                except Exception as e:
-                    app.logger.warning(f"Could not check disk space: {e}, continuing anyway...")
-                
-                # Check write permissions in /tmp
-                try:
-                    test_output = execute_command_via_ssh(target_server, f"touch {remote_tar_path}.test && rm -f {remote_tar_path}.test && echo 'OK'")
-                    if 'OK' not in test_output:
-                        raise Exception("Cannot write to /tmp directory on target server")
-                    app.logger.info("Write permissions verified in /tmp")
-                except Exception as e:
-                    app.logger.error(f"Cannot write to /tmp on target server: {e}")
-                    update_progress('failed', 0, f'No write permissions to /tmp on target server: {str(e)}')
-                    raise Exception(f"Cannot write to /tmp directory on target server: {str(e)}")
-                
-                try:
-                    sftp = ssh.open_sftp()
-                    
-                    # Use callback to show progress during upload
-                    last_logged_percent = -1
-                    def upload_progress(transferred, total):
-                        nonlocal last_logged_percent
-                        # Check if migration was cancelled during upload
-                        if _migration_cancel_flags.get(container_name, False):
-                            app.logger.info(f"Migration cancelled during upload at {transferred / (1024*1024):.2f} MB")
-                            raise Exception('Migration was cancelled by user')
-                        
-                        if total > 0:
-                            percent = (transferred / total) * 100
-                            if int(percent) // 10 > last_logged_percent:  # Log every 10%
-                                app.logger.info(f"Upload progress: {percent:.1f}% ({transferred / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB)")
-                                last_logged_percent = int(percent) // 10
+                    # Download image tar from remote source via SCP
+                    import paramiko
+                    from io import BytesIO
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     
                     try:
-                        # Check cancel before starting upload
-                        check_cancel()
+                        # Connect to source server
+                        if source_server.get('auth_type') == 'password':
+                            ssh.connect(
+                                source_server.get('hostname'),
+                                port=source_server.get('port', 22),
+                                username=source_server.get('username'),
+                                password=source_server.get('password'),
+                                timeout=30
+                            )
+                        elif source_server.get('auth_type') == 'key':
+                            from io import StringIO
+                            key_file = StringIO(source_server.get('private_key'))
+                            try:
+                                key = paramiko.RSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
+                            except:
+                                key_file.seek(0)
+                                try:
+                                    key = paramiko.DSSKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
+                                except:
+                                    key_file.seek(0)
+                                    key = paramiko.ECDSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
+                            
+                            ssh.connect(
+                                source_server.get('hostname'),
+                                port=source_server.get('port', 22),
+                                username=source_server.get('username'),
+                                pkey=key,
+                                timeout=30
+                            )
                         
-                        # Try to remove any existing file first
+                        # Download tar file via SFTP
+                        sftp = ssh.open_sftp()
+                        remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                        
+                        # Create local temp file for download
+                        import tempfile
+                        local_tar_path = tempfile.NamedTemporaryFile(delete=False, suffix='.tar')
+                        local_tar_path.close()
+                        
                         try:
-                            sftp.remove(remote_tar_path)
-                            app.logger.info(f"Removed existing file: {remote_tar_path}")
-                        except:
-                            pass  # File doesn't exist, that's fine
-                        
-                        sftp.put(image_export_path.name, remote_tar_path, callback=upload_progress)
-                        app.logger.info(f"Successfully uploaded image to {remote_tar_path}")
-                        
-                        # Verify file was uploaded correctly
-                        try:
-                            remote_stat = sftp.stat(remote_tar_path)
-                            if remote_stat.st_size != file_size:
-                                raise Exception(f"File size mismatch. Local: {file_size} bytes, Remote: {remote_stat.st_size} bytes")
-                            app.logger.info(f"File verification successful. Size: {remote_stat.st_size} bytes")
-                        except Exception as verify_error:
-                            app.logger.error(f"File verification failed: {verify_error}")
-                            raise Exception(f"Uploaded file verification failed: {str(verify_error)}")
-                    except IOError as sftp_error:
-                        # SFTP specific error - try to get more details
-                        error_msg = str(sftp_error)
-                        app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
-                        
-                        # Check if it's a disk space issue
-                        if 'No space left' in error_msg or 'disk full' in error_msg.lower():
-                            raise Exception(f"Insufficient disk space on target server: {error_msg}")
-                        
-                        # Check if it's a permission issue
-                        if 'Permission denied' in error_msg or 'permission' in error_msg.lower():
-                            raise Exception(f"Permission denied on target server: {error_msg}")
-                        
-                        # Generic SFTP error
-                        raise Exception(f"SFTP upload failed: {error_msg}. This may be due to insufficient disk space, permission issues, or network problems.")
-                    except Exception as sftp_error:
-                        app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
-                        raise Exception(f"SFTP upload failed: {str(sftp_error)}")
+                            sftp.get(remote_tar_path, local_tar_path.name)
+                            sftp.close()
+                            ssh.close()
+                            
+                            # Clean up remote tar
+                            execute_command_via_ssh(source_server, f"rm -f {remote_tar_path}", check_exit_status=False)
+                            
+                            # Load image locally
+                            update_progress('loading', 70, 'Loading image on local server...')
+                            check_cancel()
+                            
+                            result = subprocess.run(
+                                ['docker', 'load', '-i', local_tar_path.name],
+                                capture_output=True,
+                                text=True,
+                                timeout=300
+                            )
+                            if result.returncode != 0:
+                                raise Exception(f"Failed to load image: {result.stderr}")
+                            
+                            load_output = result.stdout
+                            app.logger.info(f"Image load output: {load_output}")
+                            
+                            # Verify image was loaded
+                            if 'Loaded image:' in load_output:
+                                for line in load_output.split('\n'):
+                                    if 'Loaded image:' in line:
+                                        loaded_tag = line.split('Loaded image:')[1].strip()
+                                        if loaded_tag:
+                                            app.logger.info(f"Image loaded with tag: {loaded_tag}")
+                                            if export_image_tag not in loaded_tag and container_name in loaded_tag:
+                                                export_image_tag = loaded_tag
+                                            break
+                            
+                            # Clean up local tar
+                            if os.path.exists(local_tar_path.name):
+                                os.unlink(local_tar_path.name)
+                                
+                        except Exception as e:
+                            if os.path.exists(local_tar_path.name):
+                                os.unlink(local_tar_path.name)
+                            raise
+                    except Exception as e:
+                        error_msg = f'Failed to download and load image from remote source: {str(e)}'
+                        app.logger.error(f"Migration error during image download: {error_msg}", exc_info=True)
+                        update_progress('failed', 0, error_msg)
+                        return {'error': error_msg}, 500
                     finally:
-                        sftp.close()
-                except Exception as e:
-                    app.logger.error(f"Failed to upload image file via SFTP: {e}", exc_info=True)
-                    update_progress('failed', 0, f'Error transferring image: {str(e)}')
-                    raise Exception(f"Failed to upload image file: {str(e)}")
-                finally:
-                    ssh.close()
-                
-                # Load image on target server
-                update_progress('loading', 70, 'Loading image on target server...')
+                        try:
+                            ssh.close()
+                        except:
+                            pass
+            else:
+                # Target is remote server
+                update_progress('transferring', 50, f'Transferring image to target server {target_server.get("hostname")}...')
                 check_cancel()
                 
-                load_output = execute_docker_command_via_ssh(
-                    target_server,
-                    f"load -i {remote_tar_path}"
-                )
-                app.logger.info(f"Image load output: {load_output}")
-                
-                # After load, verify the image tag exists
-                # docker load preserves tags, so export_image_tag should be available
+                app.logger.info(f"Transferring image to target server {target_server.get('hostname')}...")
                 try:
-                    # Check what images were loaded - docker load outputs "Loaded image: repo:tag"
-                    if 'Loaded image:' in load_output:
-                        # Extract image tag from output
-                        for line in load_output.split('\n'):
-                            if 'Loaded image:' in line:
-                                loaded_tag = line.split('Loaded image:')[1].strip()
-                                if loaded_tag:
-                                    # Use the loaded tag if different from export_image_tag
-                                    app.logger.info(f"Image loaded with tag: {loaded_tag}")
-                                    # export_image_tag should match, but verify
-                                    if export_image_tag not in loaded_tag and container_name in loaded_tag:
-                                        # Try to use the loaded tag
-                                        export_image_tag = loaded_tag
-                                    break
+                    import paramiko
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     
-                    # Verify image exists on target
-                    images_output = execute_docker_command_via_ssh(
+                    # Connect to target server
+                    try:
+                        if target_server.get('auth_type') == 'password':
+                            ssh.connect(
+                                target_server.get('hostname'),
+                                port=target_server.get('port', 22),
+                                username=target_server.get('username'),
+                                password=target_server.get('password'),
+                                timeout=30  # Increased timeout for large file transfers
+                            )
+                        elif target_server.get('auth_type') == 'key':
+                            from io import StringIO
+                            key_file = StringIO(target_server.get('private_key'))
+                            try:
+                                key = paramiko.RSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
+                            except:
+                                key_file.seek(0)
+                                try:
+                                    key = paramiko.DSSKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
+                                except:
+                                    key_file.seek(0)
+                                    key = paramiko.ECDSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
+                            
+                            ssh.connect(
+                                target_server.get('hostname'),
+                                port=target_server.get('port', 22),
+                                username=target_server.get('username'),
+                                pkey=key,
+                                timeout=30  # Increased timeout for large file transfers
+                            )
+                        else:
+                            raise Exception(f"Unsupported auth_type: {target_server.get('auth_type')}")
+                    except Exception as e:
+                        app.logger.error(f"Failed to connect to target server {target_server.get('hostname')}: {e}", exc_info=True)
+                        update_progress('failed', 0, f'Error connecting to target server: {str(e)}')
+                        raise Exception(f"Failed to connect to target server: {str(e)}")
+                    
+                    # Upload image tar via SFTP
+                    remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                    
+                    # Check if local file exists
+                    if not os.path.exists(image_export_path.name):
+                        raise Exception(f"Local image file does not exist: {image_export_path.name}")
+                    
+                    file_size = os.path.getsize(image_export_path.name)
+                    file_size_mb = file_size / (1024*1024)
+                    app.logger.info(f"Uploading image file {image_export_path.name} ({file_size_mb:.2f} MB) to {remote_tar_path}")
+                    
+                    # Check available disk space on target server before transfer
+                    try:
+                        df_output = execute_command_via_ssh(target_server, "df -m /tmp | tail -1 | awk '{print $4}'")
+                        available_space_mb = int(df_output.strip())
+                        app.logger.info(f"Available disk space on target server /tmp: {available_space_mb} MB")
+                        
+                        # Add 20% buffer for safety
+                        required_space_mb = int(file_size_mb * 1.2)
+                        if available_space_mb < required_space_mb:
+                            raise Exception(f"Insufficient disk space on target server. Required: {required_space_mb} MB, Available: {available_space_mb} MB")
+                    except ValueError:
+                        app.logger.warning("Could not parse available disk space, continuing anyway...")
+                    except Exception as e:
+                        app.logger.warning(f"Could not check disk space: {e}, continuing anyway...")
+                    
+                    # Check write permissions in /tmp
+                    try:
+                        test_output = execute_command_via_ssh(target_server, f"touch {remote_tar_path}.test && rm -f {remote_tar_path}.test && echo 'OK'")
+                        if 'OK' not in test_output:
+                            raise Exception("Cannot write to /tmp directory on target server")
+                        app.logger.info("Write permissions verified in /tmp")
+                    except Exception as e:
+                        app.logger.error(f"Cannot write to /tmp on target server: {e}")
+                        update_progress('failed', 0, f'No write permissions to /tmp on target server: {str(e)}')
+                        raise Exception(f"Cannot write to /tmp directory on target server: {str(e)}")
+                    
+                    try:
+                        sftp = ssh.open_sftp()
+                        
+                        # Use callback to show progress during upload
+                        last_logged_percent = -1
+                        def upload_progress(transferred, total):
+                            nonlocal last_logged_percent
+                            # Check if migration was cancelled during upload
+                            if _migration_cancel_flags.get(container_name, False):
+                                app.logger.info(f"Migration cancelled during upload at {transferred / (1024*1024):.2f} MB")
+                                raise Exception('Migration was cancelled by user')
+                            
+                            if total > 0:
+                                percent = (transferred / total) * 100
+                                if int(percent) // 10 > last_logged_percent:  # Log every 10%
+                                    app.logger.info(f"Upload progress: {percent:.1f}% ({transferred / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB)")
+                                    last_logged_percent = int(percent) // 10
+                        
+                        try:
+                            # Check cancel before starting upload
+                            check_cancel()
+                            
+                            # Try to remove any existing file first
+                            try:
+                                sftp.remove(remote_tar_path)
+                                app.logger.info(f"Removed existing file: {remote_tar_path}")
+                            except:
+                                pass  # File doesn't exist, that's fine
+                            
+                            sftp.put(image_export_path.name, remote_tar_path, callback=upload_progress)
+                            app.logger.info(f"Successfully uploaded image to {remote_tar_path}")
+                            
+                            # Verify file was uploaded correctly
+                            try:
+                                remote_stat = sftp.stat(remote_tar_path)
+                                if remote_stat.st_size != file_size:
+                                    raise Exception(f"File size mismatch. Local: {file_size} bytes, Remote: {remote_stat.st_size} bytes")
+                                app.logger.info(f"File verification successful. Size: {remote_stat.st_size} bytes")
+                            except Exception as verify_error:
+                                app.logger.error(f"File verification failed: {verify_error}")
+                                raise Exception(f"Uploaded file verification failed: {str(verify_error)}")
+                        except IOError as sftp_error:
+                            # SFTP specific error - try to get more details
+                            error_msg = str(sftp_error)
+                            app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
+                            
+                            # Check if it's a disk space issue
+                            if 'No space left' in error_msg or 'disk full' in error_msg.lower():
+                                raise Exception(f"Insufficient disk space on target server: {error_msg}")
+                            
+                            # Check if it's a permission issue
+                            if 'Permission denied' in error_msg or 'permission' in error_msg.lower():
+                                raise Exception(f"Permission denied on target server: {error_msg}")
+                            
+                            # Generic SFTP error
+                            raise Exception(f"SFTP upload failed: {error_msg}. This may be due to insufficient disk space, permission issues, or network problems.")
+                        except Exception as sftp_error:
+                            app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
+                            raise Exception(f"SFTP upload failed: {str(sftp_error)}")
+                        finally:
+                            sftp.close()
+                    except Exception as e:
+                        app.logger.error(f"Failed to upload image file via SFTP: {e}", exc_info=True)
+                        update_progress('failed', 0, f'Error transferring image: {str(e)}')
+                        raise Exception(f"Failed to upload image file: {str(e)}")
+                    finally:
+                        ssh.close()
+                    
+                    # Load image on target server
+                    update_progress('loading', 70, 'Loading image on target server...')
+                    check_cancel()
+                    
+                    app.logger.info(f"Loading image from {remote_tar_path} on target server {target_server.get('hostname')}...")
+                    app.logger.info(f"Expected image tag: {export_image_tag}")
+                    
+                    load_output, load_stderr = execute_docker_command_via_ssh(
                         target_server,
-                        f"images --filter reference={export_image_tag.split(':')[0]} --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
+                        f"load -i {remote_tar_path}",
+                        return_stderr=True
                     )
-                    if export_image_tag.split(':')[0] in images_output:
-                        app.logger.info(f"Image {export_image_tag} successfully verified on target server")
-                    else:
-                        app.logger.warning(f"Could not verify image {export_image_tag}, but continuing...")
+                    # docker load outputs to stderr, so combine both
+                    combined_output = (load_output or '') + (load_stderr or '')
+                    app.logger.info(f"Image load stdout: {load_output}")
+                    app.logger.info(f"Image load stderr: {load_stderr}")
+                    app.logger.info(f"Image load combined output: {combined_output}")
+                    
+                    # Use combined output for parsing
+                    load_output = combined_output
+                    
+                    # If still no output, check images after load
+                    if not load_output or 'Loaded image:' not in load_output:
+                        app.logger.warning(f"docker load output seems incomplete or empty. Checking images after load...")
+                        # Try to get more info by checking images after load
+                        images_after_load = execute_docker_command_via_ssh(
+                            target_server,
+                            "images --format '{{.Repository}}:{{.Tag}}' --filter 'dangling=false'"
+                        )
+                        app.logger.info(f"Images on target server after load: {images_after_load}")
+                    
+                    # After load, verify the image tag exists
+                    # docker load preserves tags, so export_image_tag should be available
+                    loaded_tags = []
+                    try:
+                        # Check what images were loaded - docker load outputs "Loaded image: repo:tag"
+                        if 'Loaded image:' in load_output:
+                            # Extract all loaded image tags
+                            for line in load_output.split('\n'):
+                                if 'Loaded image:' in line:
+                                    loaded_tag = line.split('Loaded image:')[1].strip()
+                                    if loaded_tag:
+                                        loaded_tags.append(loaded_tag)
+                                        app.logger.info(f"Image loaded with tag: {loaded_tag}")
+                            
+                            # Try to find matching tag
+                            if loaded_tags:
+                                # First, try exact match
+                                if export_image_tag in loaded_tags:
+                                    app.logger.info(f"Found exact match for export_image_tag: {export_image_tag}")
+                                else:
+                                    # Try to find tag containing container_name
+                                    matching_tag = None
+                                    for tag in loaded_tags:
+                                        if container_name in tag or export_image_tag.split(':')[0] in tag:
+                                            matching_tag = tag
+                                            break
+                                    
+                                    if matching_tag:
+                                        app.logger.info(f"Using matching tag: {matching_tag} (instead of {export_image_tag})")
+                                        export_image_tag = matching_tag
+                                    else:
+                                        # Use first loaded tag as fallback
+                                        app.logger.warning(f"No matching tag found, using first loaded tag: {loaded_tags[0]}")
+                                        export_image_tag = loaded_tags[0]
+                        else:
+                            app.logger.warning(f"No 'Loaded image:' found in docker load output: {load_output}")
+                        
+                        # Verify image exists on target with exact tag match
+                        app.logger.info(f"Verifying image {export_image_tag} exists on target server...")
+                        images_output = execute_docker_command_via_ssh(
+                            target_server,
+                            f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
+                        )
+                        
+                        # Check if our tag exists in the output
+                        image_found = False
+                        for line in images_output.split('\n'):
+                            line = line.strip()
+                            if line == export_image_tag:
+                                image_found = True
+                                app.logger.info(f"Image {export_image_tag} successfully verified on target server")
+                                break
+                        
+                        if not image_found:
+                            # Try without tag (just repository)
+                            repo_name = export_image_tag.split(':')[0]
+                            for line in images_output.split('\n'):
+                                line = line.strip()
+                                if line.startswith(repo_name + ':'):
+                                    # Found image with same repo but different tag - use it
+                                    app.logger.warning(f"Image {export_image_tag} not found, but found {line}. Using it instead.")
+                                    export_image_tag = line
+                                    image_found = True
+                                    break
+                        
+                        if not image_found:
+                            # Try to find and retag the loaded image
+                            app.logger.warning(f"Image {export_image_tag} not found after load. Attempting to find and retag...")
+                            
+                            # Get all images with their IDs
+                            images_with_ids = execute_docker_command_via_ssh(
+                                target_server,
+                                "images --format '{{.ID}} {{.Repository}}:{{.Tag}}' --no-trunc"
+                            )
+                            
+                            # Find the most recently loaded image (should be one of the loaded_tags)
+                            if loaded_tags:
+                                # Try to find image by matching repository name or by checking if it's untagged
+                                for line in images_with_ids.split('\n'):
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    parts = line.split(' ', 1)
+                                    if len(parts) == 2:
+                                        img_id = parts[0]
+                                        img_tag = parts[1]
+                                        # Check if this image matches any of our loaded tags or is untagged
+                                        for loaded_tag in loaded_tags:
+                                            if loaded_tag in img_tag or img_tag == '<none>:<none>' or (export_image_tag.split(':')[0] in img_tag and img_tag != '<none>:<none>'):
+                                                # This might be our image - try to tag it
+                                                app.logger.info(f"Found potential image ID {img_id[:12]} with tag {img_tag}, retagging as {export_image_tag}...")
+                                                try:
+                                                    execute_docker_command_via_ssh(
+                                                        target_server,
+                                                        f"tag {img_id} {export_image_tag}"
+                                                    )
+                                                    # Verify the tag was created
+                                                    images_after_retag = execute_docker_command_via_ssh(
+                                                        target_server,
+                                                        f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
+                                                    )
+                                                    if export_image_tag in images_after_retag:
+                                                        app.logger.info(f"Successfully retagged image as {export_image_tag}")
+                                                        image_found = True
+                                                        break
+                                                except Exception as retag_error:
+                                                    app.logger.warning(f"Failed to retag image: {retag_error}")
+                                                    continue
+                                    
+                                    if image_found:
+                                        break
+                            
+                            # If still not found, try to use the first loaded tag
+                            if not image_found:
+                                if loaded_tags:
+                                    # Use the first loaded tag
+                                    export_image_tag = loaded_tags[0]
+                                    app.logger.warning(f"Using first loaded tag as fallback: {export_image_tag}")
+                                    image_found = True
+                                else:
+                                    error_msg = f"Image {export_image_tag} was not found on target server after loading. Loaded tags: {loaded_tags}, Available images: {images_output[:500]}"
+                                    app.logger.error(error_msg)
+                                    raise Exception(error_msg)
+                            
+                    except Exception as e:
+                        error_msg = f"Failed to verify loaded image tag: {str(e)}"
+                        app.logger.error(error_msg)
+                        raise Exception(error_msg)
+                    
+                    # Clean up remote tar
+                    execute_command_via_ssh(target_server, f"rm -f {remote_tar_path}", check_exit_status=False)
+                    
                 except Exception as e:
-                    app.logger.warning(f"Could not verify loaded image tag: {e}, using export_image_tag: {export_image_tag}")
-                
-                # Clean up remote tar
-                execute_command_via_ssh(target_server, f"rm -f {remote_tar_path}", check_exit_status=False)
-                
-            except Exception as e:
-                if os.path.exists(image_export_path.name):
-                    os.unlink(image_export_path.name)
-                return {'error': f'Failed to transfer image to target: {str(e)}'}, 500
+                    error_msg = f'Failed to transfer image to target: {str(e)}'
+                    app.logger.error(f"Migration error during image transfer: {error_msg}", exc_info=True)
+                    if image_export_path and os.path.exists(image_export_path.name):
+                        os.unlink(image_export_path.name)
+                    update_progress('failed', 0, error_msg)
+                    return {'error': error_msg}, 500
             
             # Clean up local tar
             if os.path.exists(image_export_path.name):
@@ -4328,31 +5003,470 @@ class ContainerMigrate(Resource):
             except Exception as e:
                 app.logger.warning(f"Failed to check/remove existing container: {e}")
             
-            # Step 5: Create and run container on target server
+            # Step 5: Pre-flight checks before creating container
+            update_progress('validating', 85, 'Validating target server compatibility...')
+            check_cancel()
+            
+            try:
+                # Check CPU architecture compatibility
+                source_arch = self._get_server_architecture(source_server if source_server_id != 'local' else None)
+                target_arch = self._get_server_architecture(target_server)
+                
+                app.logger.info(f"Source server architecture: {source_arch}, Target server architecture: {target_arch}")
+                
+                # Check if architectures differ
+                if source_arch != target_arch:
+                    app.logger.warning(f"Architecture mismatch: source={source_arch}, target={target_arch}")
+                    # Will add --platform flag to docker run command
+                
+                # Check port availability on target server
+                port_conflicts = self._check_port_availability(target_server, container_config.get('port_mapping', {}))
+                if port_conflicts:
+                    conflict_ports = ', '.join(port_conflicts)
+                    error_msg = f"Port(s) already in use on target server: {conflict_ports}. Please stop the containers using these ports or choose different ports."
+                    update_progress('failed', 0, error_msg)
+                    return {'error': error_msg}, 400
+                
+            except Exception as e:
+                app.logger.warning(f"Pre-flight checks failed (continuing anyway): {e}")
+                # Don't fail migration on pre-flight check errors, but log them
+            
+            # Step 6: Create and run container on target server
             update_progress('creating', 90, 'Creating and starting container on target server...')
             check_cancel()
             
-            app.logger.info(f"Creating container on target server using image tag: {export_image_tag or image_tag}...")
+            # Use export_image_tag if available (the one we just loaded), otherwise fallback to original image_tag
+            target_image_tag = export_image_tag if export_image_tag else image_tag
+            
+            # Final verification: Check if image exists on target before creating container
+            app.logger.info(f"Final verification: Checking if image {target_image_tag} exists on target server...")
             try:
-                # Use export_image_tag if available (the one we just loaded), otherwise fallback to original image_tag
-                target_image_tag = export_image_tag if export_image_tag else image_tag
+                if target_server_id == 'local':
+                    # Local server - use Docker client
+                    pilot = get_dockerpilot()
+                    try:
+                        pilot.client.images.get(target_image_tag)
+                        app.logger.info(f"Image {target_image_tag} verified on local server")
+                    except Exception as e:
+                        # Try to find image by repository name
+                        repo_name = target_image_tag.split(':')[0]
+                        images = pilot.client.images.list(name=repo_name)
+                        if images:
+                            # Use first matching image
+                            found_tag = images[0].tags[0] if images[0].tags else images[0].id
+                            app.logger.warning(f"Image {target_image_tag} not found, but found {found_tag}. Using it instead.")
+                            target_image_tag = found_tag
+                        else:
+                            raise Exception(f"Image {target_image_tag} not found on local server: {str(e)}")
+                else:
+                    # Remote server - use docker images command
+                    images_output = execute_docker_command_via_ssh(
+                        target_server,
+                        f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
+                    )
+                    image_found = False
+                    for line in images_output.split('\n'):
+                        line = line.strip()
+                        if line == target_image_tag:
+                            image_found = True
+                            app.logger.info(f"Image {target_image_tag} verified on remote server")
+                            break
+                    
+                    if not image_found:
+                        # Try to find by repository name
+                        repo_name = target_image_tag.split(':')[0]
+                        for line in images_output.split('\n'):
+                            line = line.strip()
+                            if line.startswith(repo_name + ':'):
+                                app.logger.warning(f"Image {target_image_tag} not found, but found {line}. Using it instead.")
+                                target_image_tag = line
+                                image_found = True
+                                break
+                        
+                        if not image_found:
+                            raise Exception(f"Image {target_image_tag} not found on target server. Available images: {images_output[:500]}")
+            except Exception as e:
+                error_msg = f"Image verification failed before container creation: {str(e)}"
+                app.logger.error(error_msg)
+                update_progress('failed', 0, error_msg)
+                return {'error': error_msg}, 500
+            
+            app.logger.info(f"Creating container on target server using image tag: {target_image_tag}...")
+            try:
+                
+                # Validate architecture compatibility and get platform flag
+                # This function detects both target server and image platform, and determines
+                # if --platform flag is needed for cross-architecture execution
+                arch_validation = self._validate_architecture_compatibility(
+                    target_server,
+                    target_image_tag
+                )
+                
+                # Get source server architecture for logging
+                source_arch = self._get_server_architecture(source_server if source_server_id != 'local' else None)
+                
+                # Use platform flag from validation (this is the image's platform)
+                # This ensures Docker uses the correct architecture or attempts emulation
+                # ALWAYS prefer image platform over target server architecture
+                image_platform = arch_validation.get('image_platform')
+                platform_flag = arch_validation.get('platform_flag')
+                target_server_arch = arch_validation.get('target_arch')
+                
+                app.logger.info(
+                    f"Architecture validation results: "
+                    f"target_server={target_server_arch}, "
+                    f"image_platform={image_platform}, "
+                    f"platform_flag={platform_flag}, "
+                    f"compatible={arch_validation.get('compatible')}, "
+                    f"needs_emulation={arch_validation.get('needs_emulation')}"
+                )
+                
+                # Use image platform if available, otherwise use target arch
+                # This is critical: we MUST use image's platform, not target server's
+                target_arch_for_run = image_platform if image_platform else (platform_flag if platform_flag else target_server_arch)
+                
+                # If we still don't have a platform, try to detect it directly
+                if not target_arch_for_run:
+                    app.logger.warning("Could not determine platform from validation, attempting direct detection...")
+                    detected_platform = self._get_image_platform(target_server, target_image_tag)
+                    if detected_platform:
+                        target_arch_for_run = detected_platform
+                        app.logger.info(f"Directly detected image platform: {detected_platform}")
+                    else:
+                        # Last resort: try to get platform from docker inspect on remote server
+                        app.logger.warning("Direct detection failed, trying docker inspect on remote server...")
+                        try:
+                            if target_server_id != 'local':
+                                # Try to get ImageManifestDescriptor.platform from docker inspect JSON
+                                import json
+                                inspect_output = execute_docker_command_via_ssh(
+                                    target_server,
+                                    f"inspect {target_image_tag}",
+                                    check_exit_status=False
+                                )
+                                if inspect_output:
+                                    inspect_data = json.loads(inspect_output)
+                                    if isinstance(inspect_data, list) and len(inspect_data) > 0:
+                                        manifest_descriptor = inspect_data[0].get('ImageManifestDescriptor', {})
+                                        if manifest_descriptor:
+                                            platform_info = manifest_descriptor.get('platform', {})
+                                            if platform_info:
+                                                arch = platform_info.get('architecture', '').lower()
+                                                os_type = platform_info.get('os', 'linux').lower()
+                                                variant = platform_info.get('variant', '').lower()
+                                                
+                                                if variant:
+                                                    target_arch_for_run = f'{os_type}/{arch}/{variant}'
+                                                else:
+                                                    target_arch_for_run = f'{os_type}/{arch}'
+                                                
+                                                app.logger.info(f"Detected platform from ImageManifestDescriptor on remote: {target_arch_for_run}")
+                        except Exception as e:
+                            app.logger.warning(f"Failed to get platform from remote docker inspect: {e}")
+                        
+                        # Final fallback: use target server architecture (but this is wrong for cross-arch!)
+                        if not target_arch_for_run:
+                            target_arch_for_run = target_server_arch
+                            app.logger.error(
+                                f"⚠️  CRITICAL: Could not detect image platform! "
+                                f"Using target server architecture as fallback: {target_arch_for_run}. "
+                                f"This may cause 'exec format error' if image architecture differs!"
+                            )
+                
+                # Final check: if image platform is different from target server, we MUST use image platform
+                if image_platform and target_server_arch and image_platform != target_server_arch:
+                    if target_arch_for_run != image_platform:
+                        app.logger.warning(
+                            f"⚠️  Platform mismatch detected! "
+                            f"Image platform ({image_platform}) differs from target server ({target_server_arch}). "
+                            f"Overriding target_arch_for_run to use image platform: {image_platform}"
+                        )
+                        target_arch_for_run = image_platform
+                
+                app.logger.info(f"Final target_arch_for_run: {target_arch_for_run} (will be used for --platform flag)")
+                
+                # Check if migration is possible
+                migration_possible = arch_validation.get('migration_possible', True)
+                app.logger.info(
+                    f"🔍 Migration possibility check: "
+                    f"migration_possible={migration_possible}, "
+                    f"compatible={arch_validation.get('compatible')}, "
+                    f"needs_emulation={arch_validation.get('needs_emulation')}, "
+                    f"emulation_supported={arch_validation.get('emulation_supported')}"
+                )
+                
+                if not migration_possible:
+                    error_msg = (
+                        f"Cannot migrate container: Image architecture ({arch_validation.get('image_platform')}) "
+                        f"does not match target server ({arch_validation.get('target_arch')}), "
+                        f"and emulation is not available. {arch_validation.get('emulation_message', '')} "
+                        f"To enable emulation on Raspberry Pi, install: "
+                        f"sudo apt-get update && sudo apt-get install -y qemu-user-static binfmt-support"
+                    )
+                    app.logger.error(f"❌ BLOCKING MIGRATION: {error_msg}")
+                    update_progress('failed', 0, error_msg)
+                    
+                    # Explicit error payload for frontend to display a hard-blocking message
+                    return {
+                        'success': False,
+                        'error': error_msg,
+                        'code': 'EMULATION_UNAVAILABLE',
+                        'details': {
+                            'image_platform': arch_validation.get('image_platform'),
+                            'target_arch': arch_validation.get('target_arch'),
+                            'needs_emulation': arch_validation.get('needs_emulation'),
+                            'emulation_supported': arch_validation.get('emulation_supported'),
+                            'emulation_message': arch_validation.get('emulation_message')
+                        }
+                    }, 400
+                
+                # Extra hard guard: if image != target arch and emulation not supported, abort (defensive)
+                if arch_validation.get('needs_emulation') and not arch_validation.get('emulation_supported'):
+                    error_msg = (
+                        f"Architecture mismatch (image={arch_validation.get('image_platform')}, "
+                        f"target={arch_validation.get('target_arch')}) and emulation not supported. "
+                        f"Migration aborted to avoid exec format error."
+                    )
+                    app.logger.error(f"❌ HARD BLOCK: {error_msg}")
+                    update_progress('failed', 0, error_msg)
+                    return {
+                        'success': False,
+                        'error': error_msg,
+                        'code': 'EMULATION_UNAVAILABLE',
+                        'details': {
+                            'image_platform': arch_validation.get('image_platform'),
+                            'target_arch': arch_validation.get('target_arch'),
+                            'needs_emulation': arch_validation.get('needs_emulation'),
+                            'emulation_supported': arch_validation.get('emulation_supported'),
+                            'emulation_message': arch_validation.get('emulation_message')
+                        }
+                    }, 400
+                
+                if arch_validation.get('needs_emulation'):
+                    if arch_validation.get('emulation_supported'):
+                        app.logger.warning(
+                            f"⚠️  Cross-architecture execution detected. "
+                            f"Image ({arch_validation.get('image_platform')}) will run on "
+                            f"target server ({arch_validation.get('target_arch')}) with emulation. "
+                            f"{arch_validation.get('emulation_message', '')}"
+                        )
+                    else:
+                        # This should not happen if migration_possible check above works, but just in case
+                        error_msg = (
+                            f"Cannot migrate: Emulation required but not available. "
+                            f"{arch_validation.get('emulation_message', '')}"
+                        )
+                        app.logger.error(f"❌ {error_msg}")
+                        update_progress('failed', 0, error_msg)
+                        return {'error': error_msg}, 400
+                
+                # Log container config before building docker run command
+                app.logger.info(f"Container config for docker run: image={target_image_tag}, ports={container_config.get('port_mapping', {})}, env={len(container_config.get('environment', {}))} vars, volumes={len(container_config.get('volumes', {}))} mounts")
+                
+                # Final safety check: ensure target_arch_for_run is set
+                if not target_arch_for_run:
+                    app.logger.error(
+                        f"❌ CRITICAL: target_arch_for_run is None! "
+                        f"This will cause 'exec format error'. "
+                        f"Attempting emergency platform detection..."
+                    )
+                    # Emergency fallback: try to get platform from ImageManifestDescriptor
+                    try:
+                        if target_server_id == 'local':
+                            pilot = get_dockerpilot()
+                            image = pilot.client.images.get(target_image_tag)
+                            manifest = image.attrs.get('ImageManifestDescriptor', {})
+                            if manifest:
+                                platform_info = manifest.get('platform', {})
+                                if platform_info:
+                                    arch = platform_info.get('architecture', '').lower()
+                                    os_type = platform_info.get('os', 'linux').lower()
+                                    target_arch_for_run = f'{os_type}/{arch}'
+                                    app.logger.info(f"Emergency detection: {target_arch_for_run}")
+                        else:
+                            # Remote server - use docker inspect
+                            import json
+                            inspect_output = execute_docker_command_via_ssh(
+                                target_server,
+                                f"inspect {target_image_tag}",
+                                check_exit_status=False
+                            )
+                            if inspect_output:
+                                inspect_data = json.loads(inspect_output)
+                                if isinstance(inspect_data, list) and len(inspect_data) > 0:
+                                    manifest = inspect_data[0].get('ImageManifestDescriptor', {})
+                                    if manifest:
+                                        platform_info = manifest.get('platform', {})
+                                        if platform_info:
+                                            arch = platform_info.get('architecture', '').lower()
+                                            os_type = platform_info.get('os', 'linux').lower()
+                                            target_arch_for_run = f'{os_type}/{arch}'
+                                            app.logger.info(f"Emergency detection (remote): {target_arch_for_run}")
+                    except Exception as e:
+                        app.logger.error(f"Emergency platform detection failed: {e}")
                 
                 # Build docker run command from config
-                docker_run_cmd = self._build_docker_run_command(container_config, container_name, target_image_tag)
+                # Use platform_flag (image platform) for target_arch parameter
+                docker_run_cmd = self._build_docker_run_command(
+                    container_config, 
+                    container_name, 
+                    target_image_tag,
+                    target_arch=target_arch_for_run,
+                    source_arch=source_arch
+                )
                 
-                app.logger.info(f"Running command: docker {docker_run_cmd}")
+                # Verify that --platform flag is in the command
+                if target_arch_for_run and f'--platform {target_arch_for_run}' not in docker_run_cmd:
+                    app.logger.error(
+                        f"❌ CRITICAL: --platform flag is missing from docker run command! "
+                        f"target_arch_for_run={target_arch_for_run}, "
+                        f"command={docker_run_cmd[:200]}..."
+                    )
+                    # Force add the platform flag
+                    # Find where 'run' is and add --platform after it
+                    parts = docker_run_cmd.split()
+                    if 'run' in parts:
+                        run_idx = parts.index('run')
+                        parts.insert(run_idx + 1, '--platform')
+                        parts.insert(run_idx + 2, target_arch_for_run)
+                        docker_run_cmd = ' '.join(parts)
+                        app.logger.info(f"Fixed command: docker {docker_run_cmd[:200]}...")
+                
+                app.logger.info(f"Final docker run command: docker {docker_run_cmd}")
+                
+                # Final check: Verify image exists right before creating container
+                app.logger.info(f"Final check: Verifying image {target_image_tag} exists on target server before docker run...")
+                try:
+                    if target_server_id == 'local':
+                        pilot = get_dockerpilot()
+                        pilot.client.images.get(target_image_tag)
+                        app.logger.info(f"Image {target_image_tag} confirmed on local server")
+                    else:
+                        # Quick check on remote server
+                        repo_name = target_image_tag.split(':')[0]
+                        grep_pattern = f'^{target_image_tag}$|^{repo_name}:'
+                        images_check = execute_docker_command_via_ssh(
+                            target_server,
+                            f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep -E '{grep_pattern}'"
+                        )
+                        if target_image_tag not in images_check:
+                            # Try to find the image by repository
+                            all_images = execute_docker_command_via_ssh(
+                                target_server,
+                                f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
+                            )
+                            app.logger.warning(f"Image {target_image_tag} not found in final check. Available images: {all_images[:500]}")
+                            
+                            # Also get images with IDs to find untagged images
+                            images_with_ids = execute_docker_command_via_ssh(
+                                target_server,
+                                "images --format '{{.ID}} {{.Repository}}:{{.Tag}}' --no-trunc"
+                            )
+                            app.logger.info(f"All images with IDs: {images_with_ids[:1000]}")
+                            
+                            # Try to retag if we can find the repository
+                            repo_name = target_image_tag.split(':')[0]
+                            image_found_for_retag = False
+                            
+                            # First, try to find by repository name
+                            for line in all_images.split('\n'):
+                                line = line.strip()
+                                if line and line.startswith(repo_name + ':'):
+                                    app.logger.info(f"Retagging {line} to {target_image_tag}...")
+                                    execute_docker_command_via_ssh(
+                                        target_server,
+                                        f"tag {line} {target_image_tag}"
+                                    )
+                                    image_found_for_retag = True
+                                    break
+                            
+                            # If not found, try to find untagged image (might be the one we just loaded)
+                            if not image_found_for_retag:
+                                for line in images_with_ids.split('\n'):
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    parts = line.split(' ', 1)
+                                    if len(parts) == 2:
+                                        img_id = parts[0]
+                                        img_tag = parts[1]
+                                        # Check if it's an untagged image or matches our repository
+                                        if img_tag == '<none>:<none>' or (repo_name in img_tag and img_tag != '<none>:<none>'):
+                                            app.logger.info(f"Found potential image ID {img_id[:12]} with tag {img_tag}, retagging to {target_image_tag}...")
+                                            try:
+                                                execute_docker_command_via_ssh(
+                                                    target_server,
+                                                    f"tag {img_id} {target_image_tag}"
+                                                )
+                                                # Verify the tag was created
+                                                verify_output = execute_docker_command_via_ssh(
+                                                    target_server,
+                                                    f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep '^{target_image_tag}$'"
+                                                )
+                                                if target_image_tag in verify_output:
+                                                    app.logger.info(f"Successfully retagged image as {target_image_tag}")
+                                                    image_found_for_retag = True
+                                                    break
+                                            except Exception as retag_error:
+                                                app.logger.warning(f"Failed to retag image {img_id[:12]}: {retag_error}")
+                                                continue
+                            
+                            if not image_found_for_retag:
+                                raise Exception(f"Could not find or retag image {target_image_tag} on target server. Available images: {all_images[:500]}")
+                        else:
+                            app.logger.info(f"Image {target_image_tag} confirmed on remote server")
+                except Exception as verify_error:
+                    app.logger.error(f"Final image verification failed: {verify_error}")
+                    # Don't fail here - try to create container anyway, but log the error
                 
                 # Execute on target server
-                execute_docker_command_via_ssh(target_server, docker_run_cmd)
+                if target_server_id == 'local':
+                    # Local server - use subprocess directly (subprocess is already imported at top)
+                    full_command = f"docker {docker_run_cmd}"
+                    app.logger.info(f"🔧 EXECUTING LOCAL COMMAND: {full_command}")
+                    result = subprocess.run(
+                        full_command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    app.logger.info(f"Command exit code: {result.returncode}")
+                    if result.stdout:
+                        app.logger.info(f"Command stdout: {result.stdout}")
+                    if result.stderr:
+                        app.logger.warning(f"Command stderr: {result.stderr}")
+                    if result.returncode != 0:
+                        raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                else:
+                    # Remote server - use SSH
+                    full_command = f"docker {docker_run_cmd}"
+                    app.logger.info(f"🔧 EXECUTING REMOTE COMMAND on {target_server.get('hostname')}: {full_command}")
+                    try:
+                        output = execute_docker_command_via_ssh(target_server, docker_run_cmd)
+                        app.logger.info(f"Remote command output: {output}")
+                    except Exception as ssh_error:
+                        app.logger.error(f"Remote command failed: {ssh_error}", exc_info=True)
+                        raise
                 
                 update_progress('completed', 100, f'Migration completed successfully! Container {container_name} is running on target server.')
                 
             except Exception as e:
                 check_cancel()  # Check if it was cancelled
-                update_progress('failed', 0, f'Error creating container: {str(e)}')
-                return {'error': f'Failed to create container on target: {str(e)}'}, 500
+                error_msg = str(e)
+                
+                # Provide helpful error messages for common issues
+                if 'platform' in error_msg.lower() and ('does not match' in error_msg.lower() or 'no specific platform' in error_msg.lower()):
+                    error_msg = f"Architecture mismatch detected. The image platform ({source_arch if source_arch else 'unknown'}) does not match target server ({target_arch}). " \
+                               f"Try using a multi-arch image or specify --platform flag. Original error: {error_msg}"
+                elif 'port is already allocated' in error_msg.lower() or 'bind' in error_msg.lower() and 'failed' in error_msg.lower():
+                    error_msg = f"Port conflict detected. One or more ports are already in use on the target server. " \
+                               f"Please stop the containers using these ports or modify port mappings. Original error: {error_msg}"
+                
+                update_progress('failed', 0, f'Error creating container: {error_msg}')
+                return {'error': f'Failed to create container on target: {error_msg}'}, 500
             
-            # Step 6: Optionally stop source container
+            # Step 7: Optionally stop source container
             if stop_source:
                 update_progress('stopping_source', 95, 'Stopping source container...')
                 check_cancel()
@@ -4389,9 +5503,9 @@ class ContainerMigrate(Resource):
             error_msg = str(e)
             app.logger.error(f"Migration failed: {error_msg}", exc_info=True)
             
-            # Update progress with error
-            if container_name in _migration_progress:
-                if 'anulowana' in error_msg.lower() or 'cancelled' in error_msg.lower():
+            # Update progress with error (only if container_name is defined)
+            if container_name and container_name in _migration_progress:
+                if 'cancelled' in error_msg.lower():
                     _migration_progress[container_name] = {
                         'stage': 'cancelled',
                         'progress': _migration_progress[container_name].get('progress', 0),
@@ -4402,10 +5516,11 @@ class ContainerMigrate(Resource):
                     _migration_progress[container_name] = {
                         'stage': 'failed',
                         'progress': _migration_progress[container_name].get('progress', 0),
-                        'message': f'Błąd migracji: {error_msg}',
+                        'message': f'Migration error: {error_msg}',
                         'timestamp': datetime.now().isoformat()
                     }
             
+            # Ensure we always return a proper error response
             return {'error': error_msg}, 500
     
     def _extract_container_config(self, container):
@@ -4420,18 +5535,44 @@ class ContainerMigrate(Resource):
             'restart_policy': 'no',
             'network': 'bridge',
             'cpu_limit': None,
-            'memory_limit': None
+            'memory_limit': None,
+            'privileged': False,
+            'command': None,
+            'entrypoint': None
         }
+        
+        # Extract command and entrypoint
+        container_config = attrs.get('Config', {})
+        if container_config.get('Cmd'):
+            config['command'] = container_config['Cmd']
+        if container_config.get('Entrypoint'):
+            config['entrypoint'] = container_config['Entrypoint']
         
         # Extract ports
         if 'NetworkSettings' in attrs:
             ports = attrs['NetworkSettings'].get('Ports', {})
+            app.logger.debug(f"Extracting ports from NetworkSettings.Ports: {ports}")
             for container_port, host_bindings in ports.items():
                 if host_bindings:
                     port_num = container_port.split('/')[0]
                     host_port = host_bindings[0].get('HostPort', '')
                     if host_port:
                         config['port_mapping'][port_num] = host_port
+                        app.logger.debug(f"Extracted port mapping: {port_num} -> {host_port}")
+            
+            # Also check ExposedPorts in Config (for ports that are exposed but not bound)
+            if 'Config' in attrs:
+                exposed_ports = attrs['Config'].get('ExposedPorts', {})
+                if exposed_ports:
+                    app.logger.debug(f"Found ExposedPorts in Config: {exposed_ports}")
+                    for exposed_port in exposed_ports.keys():
+                        port_num = exposed_port.split('/')[0]
+                        # If port is exposed but not mapped, use the same port number for both
+                        if port_num not in config['port_mapping']:
+                            config['port_mapping'][port_num] = port_num
+                            app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            
+            app.logger.info(f"Final port_mapping: {config['port_mapping']}")
         
         # Extract environment
         env_list = attrs.get('Config', {}).get('Env', [])
@@ -4466,6 +5607,9 @@ class ContainerMigrate(Resource):
                 config['memory_limit'] = f"{int(memory_mb / 1024)}Gi"
             else:
                 config['memory_limit'] = f"{int(memory_mb)}Mi"
+        
+        # Privileged flag
+        config['privileged'] = host_config.get('Privileged', False)
         
         return config
     
@@ -4479,18 +5623,44 @@ class ContainerMigrate(Resource):
             'restart_policy': 'no',
             'network': 'bridge',
             'cpu_limit': None,
-            'memory_limit': None
+            'memory_limit': None,
+            'privileged': False,
+            'command': None,
+            'entrypoint': None
         }
+        
+        # Extract command and entrypoint
+        container_config = attrs.get('Config', {})
+        if container_config.get('Cmd'):
+            config['command'] = container_config['Cmd']
+        if container_config.get('Entrypoint'):
+            config['entrypoint'] = container_config['Entrypoint']
         
         # Extract ports
         if 'NetworkSettings' in attrs:
             ports = attrs['NetworkSettings'].get('Ports', {})
+            app.logger.debug(f"Extracting ports from NetworkSettings.Ports: {ports}")
             for container_port, host_bindings in ports.items():
                 if host_bindings:
                     port_num = container_port.split('/')[0]
                     host_port = host_bindings[0].get('HostPort', '')
                     if host_port:
                         config['port_mapping'][port_num] = host_port
+                        app.logger.debug(f"Extracted port mapping: {port_num} -> {host_port}")
+            
+            # Also check ExposedPorts in Config (for ports that are exposed but not bound)
+            if 'Config' in attrs:
+                exposed_ports = attrs['Config'].get('ExposedPorts', {})
+                if exposed_ports:
+                    app.logger.debug(f"Found ExposedPorts in Config: {exposed_ports}")
+                    for exposed_port in exposed_ports.keys():
+                        port_num = exposed_port.split('/')[0]
+                        # If port is exposed but not mapped, use the same port number for both
+                        if port_num not in config['port_mapping']:
+                            config['port_mapping'][port_num] = port_num
+                            app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            
+            app.logger.info(f"Final port_mapping: {config['port_mapping']}")
         
         # Extract environment
         env_list = attrs.get('Config', {}).get('Env', [])
@@ -4526,11 +5696,558 @@ class ContainerMigrate(Resource):
             else:
                 config['memory_limit'] = f"{int(memory_mb)}Mi"
         
+        # Privileged flag
+        config['privileged'] = host_config.get('Privileged', False)
+        
         return config
     
-    def _build_docker_run_command(self, config, container_name, image_tag):
+    def _get_server_architecture(self, server_config=None):
+        """Get CPU architecture of a server (local or remote)"""
+        try:
+            # Check if this is local server (None or id == 'local')
+            is_local = server_config is None or server_config.get('id') == 'local'
+            
+            if is_local:
+                # Local server
+                import platform
+                machine = platform.machine().lower()
+                if 'arm64' in machine or 'aarch64' in machine:
+                    return 'linux/arm64'
+                elif 'amd64' in machine or 'x86_64' in machine:
+                    return 'linux/amd64'
+                elif 'arm' in machine:
+                    return 'linux/arm/v7'
+                return f'linux/{machine}'
+            else:
+                # Remote server - check via SSH
+                arch_output = execute_command_via_ssh(server_config, "uname -m", check_exit_status=False)
+                if arch_output:
+                    arch = arch_output.strip().lower()
+                    # Normalize architecture names
+                    if 'arm64' in arch or 'aarch64' in arch:
+                        return 'linux/arm64'
+                    elif 'amd64' in arch or 'x86_64' in arch:
+                        return 'linux/amd64'
+                    elif 'arm' in arch:
+                        return 'linux/arm/v7'
+                    return f'linux/{arch}'
+        except Exception as e:
+            app.logger.warning(f"Could not determine server architecture: {e}")
+            return None
+    
+    def _get_image_platform(self, server_config, image_tag):
+        """Get platform/architecture of a Docker image
+        
+        Tries multiple methods to detect platform:
+        1. ImageManifestDescriptor.platform (most reliable for loaded images)
+        2. Architecture/Os/Variant from image attributes
+        3. Fallback to docker inspect with format
+        
+        Returns:
+            str: Platform in format 'linux/amd64', 'linux/arm64', etc. or None if cannot determine
+        """
+        try:
+            is_local = server_config is None or server_config.get('id') == 'local'
+            
+            if is_local:
+                # Local server - use Docker SDK
+                try:
+                    from docker import get_docker_client
+                    client = get_docker_client()
+                    image = client.images.get(image_tag)
+                    
+                    # Method 1: Try ImageManifestDescriptor.platform (most reliable)
+                    # This is especially important for images loaded via docker load
+                    try:
+                        # Get full inspect JSON
+                        import json
+                        inspect_json = image.attrs
+                        
+                        # Check ImageManifestDescriptor.platform
+                        manifest_descriptor = inspect_json.get('ImageManifestDescriptor', {})
+                        if manifest_descriptor:
+                            platform_info = manifest_descriptor.get('platform', {})
+                            if platform_info:
+                                arch = platform_info.get('architecture', '').lower()
+                                os_type = platform_info.get('os', 'linux').lower()
+                                variant = platform_info.get('variant', '').lower()
+                                
+                                # Build platform string
+                                if variant:
+                                    platform = f'{os_type}/{arch}/{variant}'
+                                else:
+                                    platform = f'{os_type}/{arch}'
+                                
+                                app.logger.info(f"Detected image platform from ImageManifestDescriptor: {platform}")
+                                return platform
+                    except Exception as e:
+                        app.logger.debug(f"Could not get platform from ImageManifestDescriptor: {e}")
+                    
+                    # Method 2: Get architecture from image attributes
+                    arch = image.attrs.get('Architecture', '').lower()
+                    os_type = image.attrs.get('Os', 'linux').lower()
+                    variant = image.attrs.get('Variant', '').lower()
+                    
+                    if arch:
+                        # Normalize to Docker platform format
+                        if 'arm64' in arch or 'aarch64' in arch:
+                            platform = f'{os_type}/arm64'
+                        elif 'amd64' in arch or 'x86_64' in arch:
+                            platform = f'{os_type}/amd64'
+                        elif 'arm' in arch:
+                            if variant and ('v7' in variant or 'v6' in variant):
+                                platform = f'{os_type}/arm/v7'
+                            else:
+                                platform = f'{os_type}/arm64'
+                        else:
+                            platform = f'{os_type}/{arch}'
+                        
+                        app.logger.info(f"Detected image platform from attributes: {platform}")
+                        return platform
+                    
+                    return None
+                except Exception as e:
+                    app.logger.debug(f"Could not get image platform via Docker SDK: {e}")
+                    return None
+            else:
+                # Remote server - use docker inspect via SSH
+                try:
+                    # Method 1: Try to get ImageManifestDescriptor.platform from full JSON
+                    try:
+                        import json
+                        inspect_json_output = execute_docker_command_via_ssh(
+                            server_config,
+                            f"inspect {image_tag}",
+                            check_exit_status=False
+                        )
+                        if inspect_json_output:
+                            inspect_data = json.loads(inspect_json_output)
+                            if isinstance(inspect_data, list) and len(inspect_data) > 0:
+                                manifest_descriptor = inspect_data[0].get('ImageManifestDescriptor', {})
+                                if manifest_descriptor:
+                                    platform_info = manifest_descriptor.get('platform', {})
+                                    if platform_info:
+                                        arch = platform_info.get('architecture', '').lower()
+                                        os_type = platform_info.get('os', 'linux').lower()
+                                        variant = platform_info.get('variant', '').lower()
+                                        
+                                        if variant:
+                                            platform = f'{os_type}/{arch}/{variant}'
+                                        else:
+                                            platform = f'{os_type}/{arch}'
+                                        
+                                        app.logger.info(f"Detected image platform from ImageManifestDescriptor (remote): {platform}")
+                                        return platform
+                    except json.JSONDecodeError:
+                        app.logger.debug("Could not parse docker inspect JSON")
+                    except Exception as e:
+                        app.logger.debug(f"Could not get platform from ImageManifestDescriptor (remote): {e}")
+                    
+                    # Method 2: Use docker inspect with format
+                    inspect_output = execute_docker_command_via_ssh(
+                        server_config,
+                        f"inspect {image_tag} --format '{{{{.Architecture}}}}|{{{{.Os}}}}|{{{{.Variant}}}}'",
+                        check_exit_status=False
+                    )
+                    if inspect_output:
+                        parts = inspect_output.strip().split('|')
+                        arch = parts[0].lower() if len(parts) > 0 else ''
+                        os_type = (parts[1].lower() if len(parts) > 1 else 'linux')
+                        variant = (parts[2].lower() if len(parts) > 2 else '')
+                        
+                        if arch:
+                            # Normalize to Docker platform format
+                            if 'arm64' in arch or 'aarch64' in arch:
+                                platform = f'{os_type}/arm64'
+                            elif 'amd64' in arch or 'x86_64' in arch:
+                                platform = f'{os_type}/amd64'
+                            elif 'arm' in arch:
+                                if 'v7' in variant or 'v6' in variant:
+                                    platform = f'{os_type}/arm/v7'
+                                else:
+                                    platform = f'{os_type}/arm64'
+                            else:
+                                platform = f'{os_type}/{arch}'
+                            
+                            app.logger.info(f"Detected image platform from inspect format (remote): {platform}")
+                            return platform
+                    
+                    return None
+                except Exception as e:
+                    app.logger.debug(f"Could not get image platform via docker inspect: {e}")
+                    return None
+        except Exception as e:
+            app.logger.warning(f"Could not determine image platform: {e}")
+            return None
+    
+    def _check_emulation_support(self, server_config):
+        """Check if target server supports cross-architecture emulation (QEMU/binfmt_misc)
+        
+        Returns:
+            dict: {
+                'supported': bool,
+                'qemu_available': bool,
+                'binfmt_misc_available': bool,
+                'message': str
+            }
+        """
+        try:
+            is_local = server_config is None or server_config.get('id') == 'local'
+            
+            qemu_available = False
+            binfmt_misc_available = False
+            
+            if is_local:
+                # Local server - check directly
+                import os
+                # Check for binfmt_misc
+                binfmt_misc_path = '/proc/sys/fs/binfmt_misc'
+                if os.path.exists(binfmt_misc_path):
+                    try:
+                        entries = os.listdir(binfmt_misc_path)
+                        binfmt_misc_available = len(entries) > 0
+                        # Check for qemu entries
+                        qemu_available = any('qemu' in entry.lower() for entry in entries)
+                    except:
+                        pass
+                
+                # Check for qemu-x86_64-static
+                import shutil
+                if shutil.which('qemu-x86_64-static'):
+                    qemu_available = True
+            else:
+                # Remote server - check via SSH
+                app.logger.info(f"Checking emulation support on remote server {server_config.get('hostname')}...")
+                
+                # Check binfmt_misc
+                try:
+                    binfmt_check = execute_command_via_ssh(
+                        server_config,
+                        "ls -la /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -q qemu && echo 'yes' || echo 'no'",
+                        check_exit_status=False
+                    )
+                    app.logger.debug(f"binfmt_misc check output: {binfmt_check}")
+                    if 'yes' in binfmt_check.lower().strip():
+                        binfmt_misc_available = True
+                        qemu_available = True
+                        app.logger.info("✓ binfmt_misc with QEMU found on remote server")
+                    else:
+                        app.logger.info("✗ binfmt_misc with QEMU NOT found on remote server")
+                except Exception as e:
+                    app.logger.warning(f"Could not check binfmt_misc on remote server: {e}")
+                
+                # Check for qemu-x86_64-static
+                try:
+                    qemu_check = execute_command_via_ssh(
+                        server_config,
+                        "which qemu-x86_64-static 2>/dev/null && echo 'yes' || echo 'no'",
+                        check_exit_status=False
+                    )
+                    app.logger.debug(f"qemu-x86_64-static check output: {qemu_check}")
+                    if 'yes' in qemu_check.lower().strip():
+                        qemu_available = True
+                        app.logger.info("✓ qemu-x86_64-static found on remote server")
+                    else:
+                        app.logger.info("✗ qemu-x86_64-static NOT found on remote server")
+                except Exception as e:
+                    app.logger.warning(f"Could not check qemu-x86_64-static on remote server: {e}")
+            
+            supported = qemu_available or binfmt_misc_available
+            
+            message = ""
+            if supported:
+                if qemu_available and binfmt_misc_available:
+                    message = "QEMU emulation is available (binfmt_misc + qemu-x86_64-static)"
+                elif qemu_available:
+                    message = "QEMU emulation is available (qemu-x86_64-static found)"
+                else:
+                    message = "QEMU emulation is available (binfmt_misc found)"
+            else:
+                message = "QEMU emulation is NOT available. Cross-architecture containers will fail with 'exec format error'."
+            
+            return {
+                'supported': supported,
+                'qemu_available': qemu_available,
+                'binfmt_misc_available': binfmt_misc_available,
+                'message': message
+            }
+        except Exception as e:
+            app.logger.warning(f"Could not check emulation support: {e}")
+            return {
+                'supported': False,
+                'qemu_available': False,
+                'binfmt_misc_available': False,
+                'message': f"Could not check emulation support: {str(e)}"
+            }
+    
+    def _validate_architecture_compatibility(self, server_config, image_tag, image_platform=None):
+        """Validate architecture compatibility between image and target server
+        
+        This function:
+        1. Detects target server architecture
+        2. Detects image platform (if not provided)
+        3. Determines if --platform flag is needed
+        4. Returns recommended platform flag value
+        
+        Args:
+            server_config: Target server configuration (None for local)
+            image_tag: Docker image tag to check
+            image_platform: Optional pre-detected image platform (if None, will be detected)
+            
+        Returns:
+            dict: {
+                'target_arch': str,  # Target server architecture (e.g., 'linux/arm64')
+                'image_platform': str,  # Image platform (e.g., 'linux/amd64')
+                'platform_flag': str or None,  # Recommended --platform flag value
+                'compatible': bool,  # True if architectures match
+                'needs_emulation': bool  # True if emulation will be needed
+            }
+        """
+        try:
+            # Get target server architecture
+            target_arch = self._get_server_architecture(server_config)
+            if not target_arch:
+                app.logger.warning("Could not determine target server architecture")
+                target_arch = 'linux/amd64'  # Default fallback
+            
+            # Get image platform if not provided
+            if not image_platform:
+                image_platform = self._get_image_platform(server_config, image_tag)
+            
+            if not image_platform:
+                app.logger.warning(f"Could not determine image platform for {image_tag}, assuming target architecture")
+                image_platform = target_arch
+            
+            # Normalize platform strings for comparison
+            def normalize_platform(platform_str):
+                """Normalize platform string for comparison"""
+                if not platform_str:
+                    return None
+                # Remove variant if present (e.g., 'linux/arm/v7' -> 'linux/arm')
+                parts = platform_str.split('/')
+                if len(parts) >= 2:
+                    # Keep os and arch, ignore variant
+                    return f"{parts[0]}/{parts[1]}"
+                return platform_str
+            
+            target_normalized = normalize_platform(target_arch)
+            image_normalized = normalize_platform(image_platform)
+            
+            # Check if architectures match
+            compatible = (target_normalized == image_normalized)
+            needs_emulation = not compatible
+            
+            # If emulation is needed, check if it's available
+            emulation_support = None
+            if needs_emulation:
+                app.logger.info(f"🔍 Checking emulation support for cross-architecture migration (image: {image_platform}, target: {target_arch})...")
+                emulation_support = self._check_emulation_support(server_config)
+                app.logger.info(
+                    f"Emulation check results: supported={emulation_support.get('supported')}, "
+                    f"qemu={emulation_support.get('qemu_available')}, "
+                    f"binfmt_misc={emulation_support.get('binfmt_misc_available')}, "
+                    f"message={emulation_support.get('message')}"
+                )
+                if not emulation_support.get('supported'):
+                    app.logger.error(
+                        f"❌ CRITICAL: Cross-architecture migration requires emulation, but it's NOT available on target server. "
+                        f"Image platform: {image_platform}, Target server: {target_arch}. "
+                        f"Message: {emulation_support.get('message')}"
+                    )
+            
+            # Determine platform flag value
+            # ALWAYS use image platform for --platform flag
+            # This ensures Docker uses the correct architecture (or attempts emulation)
+            platform_flag = image_platform if image_platform else None
+            
+            # Determine if migration is possible
+            # Migration is possible if:
+            # 1. Architectures are compatible (no emulation needed), OR
+            # 2. Emulation is needed AND emulation is supported
+            if compatible:
+                migration_possible = True
+            elif needs_emulation:
+                if emulation_support and emulation_support.get('supported'):
+                    migration_possible = True
+                else:
+                    migration_possible = False
+            else:
+                # Should not happen, but default to True for safety
+                migration_possible = True
+            
+            result = {
+                'target_arch': target_arch,
+                'image_platform': image_platform,
+                'platform_flag': platform_flag,
+                'compatible': compatible,
+                'needs_emulation': needs_emulation,
+                'emulation_supported': emulation_support.get('supported') if emulation_support else (True if not needs_emulation else False),
+                'emulation_message': emulation_support.get('message') if emulation_support else None,
+                'migration_possible': migration_possible
+            }
+            
+            app.logger.info(
+                f"Migration possibility calculation: "
+                f"compatible={compatible}, "
+                f"needs_emulation={needs_emulation}, "
+                f"emulation_support={emulation_support is not None}, "
+                f"emulation_supported={result.get('emulation_supported')}, "
+                f"migration_possible={migration_possible}"
+            )
+            
+            # Log detailed information
+            if compatible:
+                app.logger.info(f"Architecture compatibility: ✓ Image ({image_platform}) matches target server ({target_arch})")
+            else:
+                if emulation_support and emulation_support.get('supported'):
+                    app.logger.warning(
+                        f"Architecture mismatch: ✗ Image ({image_platform}) does not match target server ({target_arch}). "
+                        f"Will use --platform {image_platform} with emulation. {emulation_support.get('message')}"
+                    )
+                else:
+                    app.logger.error(
+                        f"❌ Architecture mismatch: ✗ Image ({image_platform}) does not match target server ({target_arch}). "
+                        f"Emulation is NOT available: {emulation_support.get('message') if emulation_support else 'unknown'}. "
+                        f"Migration will FAIL with 'exec format error'!"
+                    )
+            
+            return result
+            
+        except Exception as e:
+            app.logger.error(f"Error validating architecture compatibility: {e}", exc_info=True)
+            # Return safe defaults
+            return {
+                'target_arch': 'linux/amd64',
+                'image_platform': 'linux/amd64',
+                'platform_flag': None,
+                'compatible': True,
+                'needs_emulation': False
+            }
+    
+    def _check_port_availability(self, server_config, port_mapping):
+        """Check if ports are available on target server"""
+        if not port_mapping:
+            return []
+        
+        # Check if this is local server
+        is_local = server_config is None or server_config.get('id') == 'local'
+        
+        conflicts = []
+        try:
+            # Get list of used ports on target server using multiple methods
+            used_ports = set()
+            
+            # Method 1: Check docker ps output for port mappings
+            try:
+                if is_local:
+                    # Local server - use Docker client directly
+                    import docker
+                    client = docker.from_env()
+                    containers = client.containers.list(all=True)
+                    import re
+                    for container in containers:
+                        ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+                        for container_port, host_bindings in ports.items():
+                            if host_bindings:
+                                for binding in host_bindings:
+                                    host_port = binding.get('HostPort', '')
+                                    if host_port:
+                                        used_ports.add(host_port)
+                else:
+                    # Remote server - check via SSH
+                    ps_output = execute_docker_command_via_ssh(server_config, "ps --format '{{.Ports}}'", check_exit_status=False)
+                    if ps_output:
+                        import re
+                        # Parse formats like:
+                        # "0.0.0.0:61208->61208/tcp"
+                        # "::61208->61208/tcp"
+                        # "0.0.0.0:61208->61208/tcp, 0.0.0.0:61209->61209/tcp"
+                        for line in ps_output.strip().split('\n'):
+                            if line.strip():
+                                # Match host ports (before ->)
+                                port_matches = re.findall(r':(\d+)->', line)
+                                for port in port_matches:
+                                    used_ports.add(port)
+            except Exception as e:
+                app.logger.debug(f"Could not check ports via docker ps: {e}")
+            
+            # Method 2: Check system ports using netstat or ss (more reliable)
+            try:
+                if is_local:
+                    # Local server - use socket to check ports
+                    import socket
+                    for container_port, host_port in port_mapping.items():
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        result = sock.connect_ex(('127.0.0.1', int(host_port)))
+                        sock.close()
+                        if result == 0:
+                            conflicts.append(str(host_port))
+                else:
+                    # Remote server - check via SSH
+                    # Try ss first (more modern), fallback to netstat
+                    port_check_cmd = "ss -tln | grep -E ':[0-9]+' | sed 's/.*:\([0-9]*\).*/\\1/' || netstat -tln | grep -E ':[0-9]+' | sed 's/.*:\([0-9]*\).*/\\1/'"
+                    port_output = execute_command_via_ssh(server_config, port_check_cmd, check_exit_status=False)
+                    if port_output:
+                        for line in port_output.strip().split('\n'):
+                            port = line.strip()
+                            if port.isdigit():
+                                used_ports.add(port)
+                    
+                    # Check if any of our ports are in use
+                    for container_port, host_port in port_mapping.items():
+                        if str(host_port) in used_ports:
+                            conflicts.append(str(host_port))
+            except Exception as e:
+                app.logger.debug(f"Could not check ports via netstat/ss: {e}")
+                    
+        except Exception as e:
+            app.logger.warning(f"Could not check port availability: {e}")
+            # Don't fail on port check errors - let Docker handle it
+        
+        return conflicts
+    
+    def _build_docker_run_command(self, config, container_name, image_tag, target_arch=None, source_arch=None):
         """Build docker run command from configuration"""
         cmd_parts = ['run', '-d', '--name', container_name]
+        
+        # Helper to normalize memory limits for docker CLI (expects m/g, not Mi/Gi)
+        def _normalize_memory_limit(mem_value):
+            if not mem_value:
+                return mem_value
+            val = str(mem_value).strip()
+            lower = val.lower()
+            replacements = {
+                'mib': 'm',
+                'gib': 'g',
+                'mi': 'm',
+                'gi': 'g'
+            }
+            for suffix, repl in replacements.items():
+                if lower.endswith(suffix):
+                    # keep the numeric part, replace suffix
+                    return val[: -len(suffix)] + repl
+            return val
+        
+        # Add --pull=never to prevent Docker from trying to pull image from registry
+        # We've already loaded the image, so we don't want Docker to try pulling it
+        cmd_parts.extend(['--pull', 'never'])
+        
+        # ALWAYS add platform flag if target_arch is set
+        # This is critical for cross-architecture migration (e.g., amd64 image on arm64 server)
+        # The target_arch parameter should be the IMAGE's platform, not the target server's architecture
+        if target_arch:
+            app.logger.info(
+                f"✓ Adding --platform flag to docker run: {target_arch} "
+                f"(source server: {source_arch or 'unknown'})"
+            )
+            cmd_parts.extend(['--platform', target_arch])
+        else:
+            app.logger.error(
+                "❌ CRITICAL ERROR: No --platform flag will be added! "
+                "target_arch is None. This WILL cause 'exec format error' if image architecture differs from target server. "
+                f"image_tag={image_tag}, container_name={container_name}"
+            )
         
         # Add restart policy
         if config.get('restart_policy') and config['restart_policy'] != 'no':
@@ -4546,21 +6263,90 @@ class ContainerMigrate(Resource):
         
         # Add volumes
         for source, destination in config.get('volumes', {}).items():
-            cmd_parts.extend(['-v', f"{source}:{destination}"])
+            # Validate source/destination; skip invalid to avoid "invalid mode" errors
+            if not source or not destination:
+                app.logger.warning(f"Skipping volume with missing path: source='{source}', dest='{destination}'")
+                continue
+            # Basic safety: disallow mistaken mode-only entries (e.g., '/rootfs' treated as mode)
+            if source.startswith(':') or destination.startswith(':'):
+                app.logger.warning(f"Skipping volume with leading colon (likely malformed): {source}:{destination}")
+                continue
+            
+            # Handle accidental mode embedded in destination (e.g., "/rootfs:ro" or "/:/rootfs")
+            dest_part = destination
+            mode_part = None
+            if ':' in destination:
+                split_dest = destination.split(':', 1)
+                dest_part = split_dest[0]
+                mode_part = split_dest[1].strip() or None
+            
+            # Destination cannot be '/' (Docker rejects binding to root)
+            if dest_part == '/':
+                app.logger.warning(f"Skipping volume because destination cannot be '/': {source}:{destination}")
+                continue
+            
+            # If mode_part looks invalid (e.g., '/rootfs'), drop it
+            valid_modes = {'ro', 'rw', 'z', 'Z', 'shared', 'rshared', 'slave', 'rslave', 'private', 'rprivate', 'delegated', 'cached'}
+            if mode_part and mode_part not in valid_modes:
+                app.logger.warning(f"Dropping invalid volume mode '{mode_part}' for {source}:{destination}; using destination '{dest_part}' only")
+                mode_part = None
+            
+            if mode_part:
+                cmd_parts.extend(['-v', f"{source}:{dest_part}:{mode_part}"])
+            else:
+                cmd_parts.extend(['-v', f"{source}:{dest_part}"])
         
         # Add network
         if config.get('network') and config['network'] != 'bridge':
             cmd_parts.extend(['--network', config['network']])
         
+        # Add privileged if required (cadvisor/infrastructure often needs this)
+        privileged_flag = config.get('privileged', False)
+        # Heuristic: if image name contains cadvisor and not already privileged, enable it
+        if not privileged_flag and ('cadvisor' in image_tag.lower() or 'cadvisor' in container_name.lower()):
+            privileged_flag = True
+            app.logger.info("Enabling --privileged for cadvisor container")
+        if privileged_flag:
+            cmd_parts.append('--privileged')
+        
         # Add resource limits
         if config.get('cpu_limit'):
             cmd_parts.extend(['--cpus', config['cpu_limit']])
         if config.get('memory_limit'):
-            cmd_parts.extend(['--memory', config['memory_limit']])
+            normalized_mem = _normalize_memory_limit(config['memory_limit'])
+            if normalized_mem != config['memory_limit']:
+                app.logger.info(f"Normalized memory limit for docker run: {config['memory_limit']} -> {normalized_mem}")
+            cmd_parts.extend(['--memory', normalized_mem])
+        
+        # Add entrypoint if present
+        if config.get('entrypoint'):
+            entrypoint = config['entrypoint']
+            if isinstance(entrypoint, list):
+                entrypoint_str = ' '.join([f'"{arg}"' if ' ' in arg else arg for arg in entrypoint])
+            else:
+                entrypoint_str = entrypoint
+            cmd_parts.extend(['--entrypoint', entrypoint_str])
         
         # Add image
         cmd_parts.append(image_tag)
         
+        # Add command if present (after image, as it's the command argument)
+        if config.get('command'):
+            command = config['command']
+            if isinstance(command, list):
+                # Extend with command parts, properly quoted if needed
+                for cmd_part in command:
+                    # Quote if contains spaces or special characters
+                    if ' ' in cmd_part or any(char in cmd_part for char in ['&', '|', ';', '<', '>']):
+                        cmd_parts.append(f'"{cmd_part}"')
+                    else:
+                        cmd_parts.append(cmd_part)
+            else:
+                # If it's a string, use as-is (user's responsibility to quote properly)
+                cmd_parts.append(str(command))
+        
+        # Join all parts with spaces
+        # Note: This creates a shell command string, so proper quoting is important
         return ' '.join(cmd_parts)
 
 

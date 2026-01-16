@@ -13,7 +13,14 @@
       "memcached",
       "rabbitmq",
       "kafka",
-      "zookeeper"
+      "zookeeper",
+      "minikube",
+      "kicbase",
+      "kubernetes",
+      "k8s",
+      "kind",
+      "k3s",
+      "k3d"
     ],
     "endpoint_mappings": {
       "qdrant": "/healthz",

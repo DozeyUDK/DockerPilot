@@ -110,4 +110,10 @@ htmlcov/
 *.temp
 *.swp
 *~
-DockerPilotExtras/
+
+# DockerPilotExtras - exclude only generated/user files
+DockerPilotExtras/backup_*/
+DockerPilotExtras/*.log
+DockerPilotExtras/deployment_history.json
+DockerPilotExtras/.env
+DockerPilotExtras/.env.*
