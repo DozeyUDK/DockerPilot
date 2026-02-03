@@ -359,8 +359,24 @@ app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
+    'SESSION_COOKIE_SECURE',
+    'true' if os.environ.get('FLASK_ENV') == 'production' else 'false'
+).lower() == 'true'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=5)
-CORS(app, supports_credentials=True)  # Enable CORS for React frontend with credentials
+
+cors_origins_env = os.environ.get('CORS_ORIGINS')
+if cors_origins_env:
+    cors_origins = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+else:
+    cors_origins = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5000',
+        'http://127.0.0.1:5000'
+    ]
+
+CORS(app, supports_credentials=True, origins=cors_origins)
 api = Api(app)
 
 # Configuration
@@ -4268,6 +4284,12 @@ class ContainerMigrate(Resource):
                     app.logger.error(f"Error extracting container config from remote for {container_name}: {e}", exc_info=True)
                     update_progress('failed', 0, f'Error extracting container configuration: {str(e)}')
                     return {'error': f'Failed to get container from source server: {str(e)}'}, 500
+
+            if container_config and container_config.get('skipped_bind_mounts'):
+                skipped = container_config['skipped_bind_mounts']
+                app.logger.warning(
+                    f"Skipping {len(skipped)} bind mount(s) during migration for {container_name}: {skipped}"
+                )
             
             # Step 1.5: Save deployment config (YAML) for proper container recreation
             update_progress('saving_config', 15, 'Saving deployment configuration...')
@@ -5538,7 +5560,8 @@ class ContainerMigrate(Resource):
             'memory_limit': None,
             'privileged': False,
             'command': None,
-            'entrypoint': None
+            'entrypoint': None,
+            'skipped_bind_mounts': []
         }
         
         # Extract command and entrypoint
@@ -5581,13 +5604,22 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes
+        # Extract volumes (skip host bind mounts during migration)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
+            mount_type = mount.get('Type', '')
             source = mount.get('Source', '')
             destination = mount.get('Destination', '')
-            if destination:
-                config['volumes'][source] = destination
+            volume_name = mount.get('Name', '')
+            if not destination:
+                continue
+            if mount_type == 'bind':
+                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                continue
+            if mount_type == 'volume':
+                volume_source = volume_name or source
+                if volume_source:
+                    config['volumes'][volume_source] = destination
         
         # Extract restart policy
         host_config = attrs.get('HostConfig', {})
@@ -5626,7 +5658,8 @@ class ContainerMigrate(Resource):
             'memory_limit': None,
             'privileged': False,
             'command': None,
-            'entrypoint': None
+            'entrypoint': None,
+            'skipped_bind_mounts': []
         }
         
         # Extract command and entrypoint
@@ -5669,13 +5702,22 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes
+        # Extract volumes (skip host bind mounts during migration)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
+            mount_type = mount.get('Type', '')
             source = mount.get('Source', '')
             destination = mount.get('Destination', '')
-            if destination:
-                config['volumes'][source] = destination
+            volume_name = mount.get('Name', '')
+            if not destination:
+                continue
+            if mount_type == 'bind':
+                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                continue
+            if mount_type == 'volume':
+                volume_source = volume_name or source
+                if volume_source:
+                    config['volumes'][volume_source] = destination
         
         # Extract restart policy
         host_config = attrs.get('HostConfig', {})
@@ -6476,4 +6518,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug)
-
