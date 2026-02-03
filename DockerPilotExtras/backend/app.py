@@ -4284,6 +4284,12 @@ class ContainerMigrate(Resource):
                     app.logger.error(f"Error extracting container config from remote for {container_name}: {e}", exc_info=True)
                     update_progress('failed', 0, f'Error extracting container configuration: {str(e)}')
                     return {'error': f'Failed to get container from source server: {str(e)}'}, 500
+
+            if container_config and container_config.get('skipped_bind_mounts'):
+                skipped = container_config['skipped_bind_mounts']
+                app.logger.warning(
+                    f"Skipping {len(skipped)} bind mount(s) during migration for {container_name}: {skipped}"
+                )
             
             # Step 1.5: Save deployment config (YAML) for proper container recreation
             update_progress('saving_config', 15, 'Saving deployment configuration...')
@@ -5554,7 +5560,8 @@ class ContainerMigrate(Resource):
             'memory_limit': None,
             'privileged': False,
             'command': None,
-            'entrypoint': None
+            'entrypoint': None,
+            'skipped_bind_mounts': []
         }
         
         # Extract command and entrypoint
@@ -5597,13 +5604,22 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes
+        # Extract volumes (skip host bind mounts during migration)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
+            mount_type = mount.get('Type', '')
             source = mount.get('Source', '')
             destination = mount.get('Destination', '')
-            if destination:
-                config['volumes'][source] = destination
+            volume_name = mount.get('Name', '')
+            if not destination:
+                continue
+            if mount_type == 'bind':
+                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                continue
+            if mount_type == 'volume':
+                volume_source = volume_name or source
+                if volume_source:
+                    config['volumes'][volume_source] = destination
         
         # Extract restart policy
         host_config = attrs.get('HostConfig', {})
@@ -5642,7 +5658,8 @@ class ContainerMigrate(Resource):
             'memory_limit': None,
             'privileged': False,
             'command': None,
-            'entrypoint': None
+            'entrypoint': None,
+            'skipped_bind_mounts': []
         }
         
         # Extract command and entrypoint
@@ -5685,13 +5702,22 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes
+        # Extract volumes (skip host bind mounts during migration)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
+            mount_type = mount.get('Type', '')
             source = mount.get('Source', '')
             destination = mount.get('Destination', '')
-            if destination:
-                config['volumes'][source] = destination
+            volume_name = mount.get('Name', '')
+            if not destination:
+                continue
+            if mount_type == 'bind':
+                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                continue
+            if mount_type == 'volume':
+                volume_source = volume_name or source
+                if volume_source:
+                    config['volumes'][volume_source] = destination
         
         # Extract restart policy
         host_config = attrs.get('HostConfig', {})
