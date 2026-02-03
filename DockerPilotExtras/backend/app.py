@@ -359,8 +359,24 @@ app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
+    'SESSION_COOKIE_SECURE',
+    'true' if os.environ.get('FLASK_ENV') == 'production' else 'false'
+).lower() == 'true'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=5)
-CORS(app, supports_credentials=True)  # Enable CORS for React frontend with credentials
+
+cors_origins_env = os.environ.get('CORS_ORIGINS')
+if cors_origins_env:
+    cors_origins = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+else:
+    cors_origins = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5000',
+        'http://127.0.0.1:5000'
+    ]
+
+CORS(app, supports_credentials=True, origins=cors_origins)
 api = Api(app)
 
 # Configuration
@@ -6476,4 +6492,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug)
-

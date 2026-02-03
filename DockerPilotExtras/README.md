@@ -49,6 +49,18 @@ python run_dev.py
 
 Application will be available at `http://localhost:5000`
 
+### Security Configuration
+
+Set allowed browser origins and secure cookies explicitly in production:
+
+```bash
+# Comma-separated list of allowed origins
+export CORS_ORIGINS="https://extras.example.com"
+
+# Ensure cookies are marked Secure when behind HTTPS
+export SESSION_COOKIE_SECURE=true
+```
+
 ### 4. Using Loader Script (Recommended)
 
 For easier startup, use the loader script that starts both backend and frontend:
