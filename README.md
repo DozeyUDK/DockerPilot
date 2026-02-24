@@ -26,26 +26,44 @@ cd DockerPilot && install.bat
 
 **What the installer does:**
 - Checks Python 3.9+ and Docker
-- Installs Docker Pilot with all dependencies
-- Sets up `dockerpilot` command globally
+- Installs Docker Pilot in a **virtual environment** (default), so it works on Ubuntu/Debian 24.04+ and other distros with [PEP 668](https://peps.python.org/pep-0668/) (no "externally-managed-environment" error)
+- Puts `dockerpilot` in `~/.local/bin` (ensure it's in your `PATH`)
 - Verifies installation
 
+**Install options:**
+- `./install.sh` — install in venv (recommended for most users)
+- `./install.sh --system` — install system-wide (e.g. if you develop Docker Pilot)
+
 **Prerequisites:**
-- Python 3.9+ 
+- Python 3.9+
 - Docker 20.10+ (with daemon running)
+- On Debian/Ubuntu: `sudo apt install python3-venv` if the venv step fails
 
 ## Manual Installation
 
 ```bash
 git clone https://github.com/DozeyUDK/DockerPilot.git
 cd DockerPilot
-pip install -e .
+```
+
+On **Ubuntu 24.04+, Debian 12+** (or any PEP 668 environment), use a venv or `--break-system-packages`:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+# run with: .venv/bin/dockerpilot
+```
+
+Or system-wide (if you prefer):
+
+```bash
+pip install -e . --break-system-packages
 ```
 
 **Optional extras:**
 ```bash
-pip install -e .[git]  # Git integration for CI/CD
-pip install -e .[test] # Development dependencies
+pip install -e .[git]   # Git integration for CI/CD
+pip install -e .[test]  # Development dependencies
 ```
 
 **Verify installation:**

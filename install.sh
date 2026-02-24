@@ -2,8 +2,18 @@
 
 # Docker Pilot - One-Click Installation Script
 # Supports Linux and macOS
+# Default: installs in a venv (avoids PEP 668 "externally-managed-environment" on Ubuntu/Debian 24.04+)
+# Use: ./install.sh --system  for system-wide install (e.g. if you develop the app)
 
 set -e
+
+INSTALL_SYSTEM=false
+for arg in "$@"; do
+    if [ "$arg" = "--system" ]; then
+        INSTALL_SYSTEM=true
+        break
+    fi
+done
 
 echo "🚀 Docker Pilot Installation Script"
 echo "===================================="
@@ -63,10 +73,39 @@ fi
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# Install Docker Pilot (includes all dependencies)
-echo ""
-echo "📦 Installing Docker Pilot..."
-pip3 install -e .
+if [ "$INSTALL_SYSTEM" = true ]; then
+    # System-wide install (for developers or when you explicitly want it)
+    echo ""
+    echo "📦 Installing Docker Pilot (system-wide, --break-system-packages)..."
+    pip3 install -e . --break-system-packages
+    DOCKERPILOT_CMD="dockerpilot"
+else
+    # Default: venv (works on Ubuntu/Debian 24.04+ and other distros with PEP 668)
+    VENV_DIR="$SCRIPT_DIR/.venv"
+    if [ ! -d "$VENV_DIR" ]; then
+        echo ""
+        echo "📦 Creating virtual environment..."
+        if ! python3 -m venv "$VENV_DIR"; then
+            echo -e "${RED}❌ Failed to create venv. Install: sudo apt install python3-venv python3-full (Debian/Ubuntu)${NC}"
+            exit 1
+        fi
+    fi
+    # Ensure pip is available (some distros create venv without pip)
+    if [ ! -x "$VENV_DIR/bin/pip" ] && [ ! -x "$VENV_DIR/bin/pip3" ]; then
+        echo "   Installing pip in venv..."
+        "$VENV_DIR/bin/python" -m ensurepip --upgrade
+    fi
+    echo ""
+    echo "📦 Installing Docker Pilot (in venv)..."
+    "$VENV_DIR/bin/python" -m pip install -e .
+    DOCKERPILOT_BIN="$VENV_DIR/bin/dockerpilot"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$DOCKERPILOT_BIN" "$HOME/.local/bin/dockerpilot"
+    DOCKERPILOT_CMD="$HOME/.local/bin/dockerpilot"
+    if ! echo ":$PATH:" | grep -q ":${HOME}/.local/bin:"; then
+        echo -e "${YELLOW}   Add to your shell (e.g. ~/.bashrc): export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
+    fi
+fi
 
 echo ""
 echo -e "${GREEN}✅ Installation completed successfully!${NC}"
@@ -74,11 +113,10 @@ echo ""
 
 # Verify installation
 echo "🔍 Verifying installation..."
-if dockerpilot --help &> /dev/null; then
+if $DOCKERPILOT_CMD --help &> /dev/null; then
     echo -e "${GREEN}✅ Docker Pilot is ready!${NC}"
 else
-    echo -e "${YELLOW}⚠️  Installation complete, but command verification failed${NC}"
-    echo "   Try running: dockerpilot --help"
+    echo -e "${YELLOW}⚠️  Try: $DOCKERPILOT_CMD --help${NC}"
 fi
 
 echo ""
@@ -94,7 +132,11 @@ echo ""
 read -p "Install GitPython for Git integration? (y/N) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    pip3 install GitPython
+    if [ "$INSTALL_SYSTEM" = true ]; then
+        pip3 install GitPython --break-system-packages
+    else
+        "$VENV_DIR/bin/python" -m pip install GitPython
+    fi
     echo -e "${GREEN}✅ GitPython installed${NC}"
 fi
 
