@@ -120,8 +120,10 @@ def check_dependencies():
         for error in errors:
             print(f"   - {error}")
         print("\nInstall missing dependencies:")
-        print("   - Node.js: https://nodejs.org/")
-        print("   - Python: pip install -r requirements.txt")
+        print("   1. Run setup script (creates venv, installs Python deps):")
+        print("      chmod +x setup_extras.sh && ./setup_extras.sh")
+        print("   2. Then start with: .venv/bin/python loader.py")
+        print("   Node.js (if missing): sudo apt install nodejs npm  or  https://nodejs.org/")
         return False
     
     return True

@@ -8,15 +8,24 @@ Web application complementing [DockerPilot](https://github.com/DozeyUDK/DockerPi
 
 ### 1. Install Dependencies
 
-**Backend:**
+**One-time setup (recommended on Ubuntu/Debian 24.04+):**
 ```bash
-pip install -r requirements.txt
+cd DockerPilotExtras
+chmod +x setup_extras.sh && ./setup_extras.sh
 ```
+This creates a `.venv`, installs Python dependencies (avoids PEP 668 error), and optionally runs `npm install` in `frontend/` if Node.js is installed.
 
-**Frontend:**
+**Node.js** is not installed by the script. Install it if you need the frontend:
+- Debian/Ubuntu: `sudo apt install nodejs npm`
+- Or: https://nodejs.org/
+
+**Manual install (if you prefer):**
 ```bash
-cd frontend
-npm install
+# Backend (use venv on systems with PEP 668)
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# Frontend
+cd frontend && npm install
 ```
 
 ### 2. Development Mode
@@ -66,6 +75,8 @@ export SESSION_COOKIE_SECURE=true
 For easier startup, use the loader script that starts both backend and frontend:
 
 ```bash
+.venv/bin/python loader.py
+# or after: source .venv/bin/activate
 python loader.py
 ```
 
