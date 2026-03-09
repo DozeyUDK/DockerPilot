@@ -121,9 +121,13 @@ fi
 
 echo ""
 echo "🚀 Quick Start:"
-echo "   dockerpilot                    # Interactive mode"
-echo "   dockerpilot --help             # Show help"
-echo "   dockerpilot validate           # Check system"
+echo "   $DOCKERPILOT_CMD                    # Interactive mode"
+echo "   $DOCKERPILOT_CMD --help             # Show help"
+echo "   $DOCKERPILOT_CMD validate           # Check system"
+if [ "$INSTALL_SYSTEM" != true ]; then
+    echo ""
+    echo "   (venv is in: $VENV_DIR)"
+fi
 echo ""
 echo "📚 Documentation: README.md"
 echo ""
