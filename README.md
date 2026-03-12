@@ -1,4 +1,8 @@
 # Docker Pilot
+[![CI](https://github.com/DozeyUDK/DockerPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/DozeyUDK/DockerPilot/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/DozeyUDK/DockerPilot)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/DozeyUDK/DockerPilot?sort=semver)](https://github.com/DozeyUDK/DockerPilot/releases)
+[![Docs](https://img.shields.io/badge/docs-README%20%26%20guides-blue)](docs/)
 <img width="2667" height="465" alt="image" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**

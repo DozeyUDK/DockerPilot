@@ -1,0 +1,63 @@
+diff --git a/install.sh b/install.sh
+index e1b6575..b7da6a0 100755
+--- a/install.sh
++++ b/install.sh
+@@ -63,10 +63,20 @@ fi
+ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ cd "$SCRIPT_DIR"
+ 
+-# Install Docker Pilot (includes all dependencies)
++VENV_DIR="$SCRIPT_DIR/venv"
++PIP="$VENV_DIR/bin/pip"
++DP_CMD="$VENV_DIR/bin/dockerpilot"
++
++# Use venv to avoid "externally-managed-environment" on modern Linux (PEP 668)
+ echo ""
++echo "📦 Creating virtual environment..."
++if [ ! -d "$VENV_DIR" ]; then
++    python3 -m venv "$VENV_DIR" || { echo -e "${RED}❌ Failed to create venv. Install python3-venv: sudo apt install python3-venv${NC}"; exit 1; }
++fi
++echo -e "${GREEN}✅ Virtual environment ready${NC}"
++
+ echo "📦 Installing Docker Pilot..."
+-pip3 install -e .
++"$PIP" install -e . || { echo -e "${RED}❌ pip install failed${NC}"; exit 1; }
+ 
+ echo ""
+ echo -e "${GREEN}✅ Installation completed successfully!${NC}"
+@@ -74,18 +84,21 @@ echo ""
+ 
+ # Verify installation
+ echo "🔍 Verifying installation..."
+-if dockerpilot --help &> /dev/null; then
++if "$DP_CMD" --help &> /dev/null; then
+     echo -e "${GREEN}✅ Docker Pilot is ready!${NC}"
+ else
+     echo -e "${YELLOW}⚠️  Installation complete, but command verification failed${NC}"
+-    echo "   Try running: dockerpilot --help"
++    echo "   Try running: $DP_CMD --help"
+ fi
+ 
+ echo ""
+ echo "🚀 Quick Start:"
+-echo "   dockerpilot                    # Interactive mode"
+-echo "   dockerpilot --help             # Show help"
+-echo "   dockerpilot validate           # Check system"
++echo "   $DP_CMD                    # Interactive mode"
++echo "   $DP_CMD --help             # Show help"
++echo "   $DP_CMD validate           # Check system"
++echo ""
++echo "   Or activate venv first:    source $VENV_DIR/bin/activate"
++echo "   Then:                      dockerpilot"
+ echo ""
+ echo "📚 Documentation: README.md"
+ echo ""
+@@ -94,7 +107,7 @@ echo ""
+ read -p "Install GitPython for Git integration? (y/N) " -n 1 -r
+ echo
+ if [[ $REPLY =~ ^[Yy]$ ]]; then
+-    pip3 install GitPython
++    "$PIP" install GitPython
+     echo -e "${GREEN}✅ GitPython installed${NC}"
+ fi
+ 
