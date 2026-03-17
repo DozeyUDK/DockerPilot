@@ -90,12 +90,15 @@ def signal_handler(sig, frame):
 def check_dependencies():
     """Checks if required tools are available"""
     errors = []
+    node_version = None
     
     # Check Node.js/npm
     try:
         result = subprocess.run(['node', '--version'], capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
             errors.append("Node.js is not available")
+        else:
+            node_version = result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired):
         errors.append("Node.js is not installed")
     
@@ -107,6 +110,19 @@ def check_dependencies():
     except (FileNotFoundError, subprocess.TimeoutExpired):
         errors.append("npm is not installed")
     
+    # Vite 5 requires a modern Node.js (18+). Fail fast with a clear message.
+    if node_version:
+        try:
+            v = node_version.lstrip('v').split('.', 2)
+            major = int(v[0]) if v and v[0].isdigit() else None
+        except Exception:
+            major = None
+
+        if major is None:
+            errors.append(f"Unable to parse Node.js version: {node_version}")
+        elif major < 18:
+            errors.append(f"Node.js {node_version} is too old for the frontend (requires Node.js 18+).")
+
     # Check Python dependencies
     try:
         import flask
@@ -123,7 +139,7 @@ def check_dependencies():
         print("   1. Run setup script (creates venv, installs Python deps):")
         print("      chmod +x setup_extras.sh && ./setup_extras.sh")
         print("   2. Then start with: .venv/bin/python loader.py")
-        print("   Node.js (if missing): sudo apt install nodejs npm  or  https://nodejs.org/")
+        print("   Node.js (if missing/too old): install Node.js 18+ (recommended: NodeSource or nvm).")
         return False
     
     return True
@@ -478,13 +494,17 @@ def main():
     print()
     
     # Start frontend
-    if not start_frontend():
+    frontend_ok = start_frontend()
+    if not frontend_ok:
         print("\n⚠️  Frontend did not start, but backend is running.")
         print("   You can start frontend manually: cd frontend && npm run dev")
     
     print()
     print("=" * 60)
-    print("✅ Both servers are running!")
+    if frontend_ok:
+        print("✅ Both servers are running!")
+    else:
+        print("⚠️  Backend is running (frontend failed)")
     print("=" * 60)
     print("\nPress Ctrl+C to stop both servers\n")
     
