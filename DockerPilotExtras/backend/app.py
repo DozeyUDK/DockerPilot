@@ -1345,6 +1345,128 @@ def find_all_deployment_configs_for_env(env: str) -> list:
     
     return configs
 
+
+def get_env_servers_config_path() -> Path:
+    """Get path to environment->server mapping file."""
+    return app.config['CONFIG_DIR'] / 'environments.json'
+
+
+def load_env_servers_config() -> dict:
+    """Load environment to server mapping.
+
+    Format:
+      {
+        "env_servers": { "dev": "serverA", "staging": "serverB", "prod": "serverC" }
+      }
+    """
+    config_path = get_env_servers_config_path()
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+        except Exception as e:
+            app.logger.error(f"Failed to load environments config: {e}")
+    return {"env_servers": {}}
+
+
+def resolve_server_id_for_env(env: str) -> str:
+    """Resolve which server_id should host a given environment."""
+    cfg = load_env_servers_config()
+    env_servers = cfg.get("env_servers", {}) if isinstance(cfg, dict) else {}
+    return env_servers.get(env, "local")
+
+
+def get_server_config_by_id(server_id: str):
+    """Return server config dict from servers.json by id."""
+    if server_id == 'local':
+        return {'id': 'local'}
+    config = load_servers_config()
+    for server in config.get('servers', []):
+        if server.get('id') == server_id:
+            return server
+    return None
+
+
+def _apply_env_resource_presets(deployment: dict, target_env: str) -> None:
+    """Apply environment resource presets in-place (cpu/memory)."""
+    env_configs = {
+        'dev': {'cpu': '0.5', 'memory': '512Mi'},
+        'staging': {'cpu': '1.0', 'memory': '1Gi'},
+        'prod': {'cpu': '2.0', 'memory': '2Gi'},
+    }
+    preset = env_configs.get(target_env)
+    if not preset:
+        return
+    deployment['cpu_limit'] = preset['cpu']
+    deployment['memory_limit'] = preset['memory']
+
+
+def _write_remote_file(server_config: dict, remote_path: str, content: str) -> None:
+    """Write text file to remote host via SSH using base64 payload."""
+    import base64
+    payload = base64.b64encode(content.encode('utf-8')).decode('ascii')
+    remote_dir = str(Path(remote_path).parent)
+    cmd = (
+        f"mkdir -p '{remote_dir}' && "
+        f"python3 - <<'PY'\n"
+        f"import base64, pathlib\n"
+        f"p = pathlib.Path(r'''{remote_path}''')\n"
+        f"p.parent.mkdir(parents=True, exist_ok=True)\n"
+        f"data = base64.b64decode(r'''{payload}'''.encode('ascii'))\n"
+        f"p.write_bytes(data)\n"
+        f"print('OK')\n"
+        f"PY"
+    )
+    execute_command_via_ssh(server_config, cmd, check_exit_status=True)
+
+
+def promote_config_to_server(server_id: str, config_path_str: str, from_env: str, to_env: str, skip_backup: bool = False) -> bool:
+    """Promote by deploying on the target server (env -> server mapping).
+
+    For remote servers, we SSH in, write the promoted config, and run dockerpilot there.
+    """
+    try:
+        if not config_path_str or not Path(config_path_str).exists():
+            raise FileNotFoundError(f"Config file not found: {config_path_str}")
+
+        with open(config_path_str, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+        deployment = config.get('deployment') or {}
+        if not isinstance(deployment, dict):
+            raise ValueError("Invalid deployment config format (deployment must be a dict)")
+
+        container_name = deployment.get('container_name') or Path(config_path_str).parent.name.split('_')[0]
+        _apply_env_resource_presets(deployment, to_env)
+
+        # Choose deployment strategy by environment
+        deployment_type = 'blue-green' if to_env == 'prod' else 'rolling'
+
+        # Local target: use in-process pilot (existing behavior)
+        if server_id == 'local':
+            pilot = get_dockerpilot()
+            return bool(pilot.environment_promotion(from_env, to_env, config_path_str, skip_backup))
+
+        server_config = get_server_config_by_id(server_id)
+        if not server_config:
+            raise ValueError(f"Target server '{server_id}' not found in servers config")
+
+        # Write promoted config to remote ~/.dockerpilot_extras/deployments/<container>/deployment-<env>.yml
+        remote_config_path = f"/home/{server_config.get('username','root')}/.dockerpilot_extras/deployments/{container_name}/deployment-{to_env}.yml"
+        promoted_yaml = yaml.dump(config, default_flow_style=False, allow_unicode=True)
+        _write_remote_file(server_config, remote_config_path, promoted_yaml)
+
+        # Run deploy remotely
+        cmd = f"dockerpilot deploy config '{remote_config_path}' --type {deployment_type}"
+        if skip_backup:
+            cmd += " --skip-backup"
+        execute_command_via_ssh(server_config, cmd, check_exit_status=True)
+        return True
+
+    except Exception as e:
+        app.logger.error(f"Remote promotion failed ({from_env}->{to_env} on {server_id}): {e}", exc_info=True)
+        return False
+
 class EnvironmentPromote(Resource):
     """Promote environment using DockerPilot"""
     def post(self):
@@ -1368,8 +1490,8 @@ class EnvironmentPromote(Resource):
             
             app.logger.info(f"Found {len(configs_to_promote)} deployment config(s) for {from_env} environment")
             
-            # Promote all containers with their configs
-            pilot = get_dockerpilot()
+            # Resolve target server for environment (env -> server mapping)
+            target_server_id = resolve_server_id_for_env(to_env)
             results = {
                 'success': [],
                 'failed': []
@@ -1382,7 +1504,7 @@ class EnvironmentPromote(Resource):
                 try:
                     app.logger.info(f"Promoting {container_name} from {from_env} to {to_env} using config: {config_path_str}")
                     skip_backup = data.get('skip_backup', False)
-                    success = pilot.environment_promotion(from_env, to_env, config_path_str, skip_backup)
+                    success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, skip_backup)
                     
                     if success:
                         results['success'].append(container_name)
@@ -1726,21 +1848,11 @@ class EnvironmentPromoteSingle(Resource):
             else:
                 pilot = get_dockerpilot()
             
-            # Set progress callback in pilot
-            def update_progress(stage, progress, message):
-                _deployment_progress[container_name] = {
-                    'stage': stage,
-                    'progress': progress,
-                    'message': message,
-                    'timestamp': datetime.now().isoformat()
-                }
-            
-            pilot._progress_callback = update_progress
-            
             config_path_str = config_to_promote['path']
             
             try:
-                success = pilot.environment_promotion(from_env, to_env, config_path_str, skip_backup)
+                target_server_id = resolve_server_id_for_env(to_env)
+                success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, skip_backup)
                 
                 # Wait a moment for final progress callback from pilot
                 import time
@@ -4146,6 +4258,85 @@ class ServerTest(Resource):
             return {'error': str(e)}, 500
 
 
+class BlueGreenReplace(Resource):
+    """Blue-green replace: zastąp działający kontener nowym z podanym obrazem (zero downtime). Używane np. z Jenkinsa."""
+    def post(self):
+        try:
+            data = request.get_json() or {}
+            container_name = data.get('container_name')
+            image_tag = data.get('image_tag')
+            if not container_name or not image_tag:
+                return {'success': False, 'error': 'container_name and image_tag are required'}, 400
+            pilot = get_dockerpilot()
+            client = pilot.client
+            try:
+                container = client.containers.get(container_name)
+            except Exception as e:
+                if 'NotFound' in str(type(e).__name__):
+                    return {'success': False, 'error': f'Container {container_name} not found'}, 404
+                raise
+            attrs = container.attrs
+            port_mapping = {}
+            if 'NetworkSettings' in attrs:
+                ports = attrs['NetworkSettings'].get('Ports', {})
+                for container_port, host_bindings in ports.items():
+                    if host_bindings:
+                        port_num = container_port.split('/')[0]
+                        host_port = host_bindings[0].get('HostPort', '')
+                        if host_port:
+                            port_mapping[port_num] = host_port
+            environment = {}
+            for env_var in attrs.get('Config', {}).get('Env', []):
+                if '=' in env_var:
+                    k, v = env_var.split('=', 1)
+                    environment[k] = v
+            volumes = {}
+            for mount in attrs.get('Mounts', []):
+                src, dest = mount.get('Source', ''), mount.get('Destination', '')
+                if dest:
+                    volumes[src or mount.get('Name', '')] = dest
+            host_config = attrs.get('HostConfig', {})
+            restart_policy = (host_config.get('RestartPolicy') or {}).get('Name', 'no')
+            network_mode = host_config.get('NetworkMode', 'bridge') or 'bridge'
+            if network_mode == 'default':
+                network_mode = 'bridge'
+            deployment_config = {
+                'deployment': {
+                    'image_tag': image_tag,
+                    'container_name': container_name,
+                    'port_mapping': port_mapping,
+                    'environment': environment,
+                    'volumes': volumes,
+                    'restart_policy': restart_policy,
+                    'network': network_mode,
+                    'health_check_endpoint': _detect_health_check_endpoint(image_tag),
+                    'health_check_timeout': 30,
+                    'health_check_retries': 10,
+                }
+            }
+            config_path = save_deployment_config(container_name, deployment_config, image_tag=image_tag)
+            result = subprocess.run(
+                ['dockerpilot', 'deploy', 'config', str(config_path), '--type', 'blue-green'],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if result.returncode == 0:
+                return {
+                    'success': True,
+                    'message': f'Blue-green deploy zakończony: {container_name} na obrazie {image_tag}',
+                    'output': result.stdout,
+                }
+            return {
+                'success': False,
+                'error': result.stderr or 'Deploy failed',
+                'output': result.stdout,
+            }, 500
+        except Exception as e:
+            app.logger.error(f"BlueGreenReplace failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}, 500
+
+
 class ContainerMigrate(Resource):
     """Migrate container from one server to another"""
     def post(self):
@@ -5548,6 +5739,7 @@ class ContainerMigrate(Resource):
     def _extract_container_config(self, container):
         """Extract container configuration from Docker container object"""
         attrs = container.attrs
+        host_config = attrs.get('HostConfig', {})  # used early for PortBindings fallback
         
         config = {
             'image_tag': attrs.get('Config', {}).get('Image', ''),
@@ -5594,6 +5786,15 @@ class ContainerMigrate(Resource):
                         if port_num not in config['port_mapping']:
                             config['port_mapping'][port_num] = port_num
                             app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            # Fallback: HostConfig.PortBindings (e.g. when NetworkSettings.Ports is empty or container uses host network)
+            if not config['port_mapping'] and attrs.get('HostConfig', {}).get('PortBindings'):
+                for key, bindings in attrs['HostConfig']['PortBindings'].items():
+                    if bindings and isinstance(bindings, list):
+                        host_port = bindings[0].get('HostPort', '') if isinstance(bindings[0], dict) else ''
+                        if host_port:
+                            port_num = key.split('/')[0]
+                            config['port_mapping'][port_num] = host_port
+                            app.logger.debug(f"Extracted port from PortBindings: {port_num} -> {host_port}")
             
             app.logger.info(f"Final port_mapping: {config['port_mapping']}")
         
@@ -5622,7 +5823,6 @@ class ContainerMigrate(Resource):
                     config['volumes'][volume_source] = destination
         
         # Extract restart policy
-        host_config = attrs.get('HostConfig', {})
         restart_policy_config = host_config.get('RestartPolicy', {})
         if restart_policy_config:
             config['restart_policy'] = restart_policy_config.get('Name', 'no')
@@ -5661,6 +5861,7 @@ class ContainerMigrate(Resource):
             'entrypoint': None,
             'skipped_bind_mounts': []
         }
+        host_config = attrs.get('HostConfig', {})
         
         # Extract command and entrypoint
         container_config = attrs.get('Config', {})
@@ -5692,6 +5893,15 @@ class ContainerMigrate(Resource):
                         if port_num not in config['port_mapping']:
                             config['port_mapping'][port_num] = port_num
                             app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            # Fallback: HostConfig.PortBindings (e.g. when NetworkSettings.Ports is empty or container uses host network)
+            if not config['port_mapping'] and attrs.get('HostConfig', {}).get('PortBindings'):
+                for key, bindings in attrs['HostConfig']['PortBindings'].items():
+                    if bindings and isinstance(bindings, list):
+                        host_port = bindings[0].get('HostPort', '') if isinstance(bindings[0], dict) else ''
+                        if host_port:
+                            port_num = key.split('/')[0]
+                            config['port_mapping'][port_num] = host_port
+                            app.logger.debug(f"Extracted port from PortBindings: {port_num} -> {host_port}")
             
             app.logger.info(f"Final port_mapping: {config['port_mapping']}")
         
@@ -5720,7 +5930,6 @@ class ContainerMigrate(Resource):
                     config['volumes'][volume_source] = destination
         
         # Extract restart policy
-        host_config = attrs.get('HostConfig', {})
         restart_policy_config = host_config.get('RestartPolicy', {})
         if restart_policy_config:
             config['restart_policy'] = restart_policy_config.get('Name', 'no')
@@ -6338,9 +6547,14 @@ class ContainerMigrate(Resource):
             else:
                 cmd_parts.extend(['-v', f"{source}:{dest_part}"])
         
-        # Add network
-        if config.get('network') and config['network'] != 'bridge':
-            cmd_parts.extend(['--network', config['network']])
+        # Add network. If source had --network host but we have port_mapping, use bridge on target
+        # so that -p is applied (Docker ignores -p when using host network).
+        network = config.get('network') or 'bridge'
+        if config.get('port_mapping') and network == 'host':
+            app.logger.info("Using bridge network on target so port mappings apply (source had host network)")
+            network = 'bridge'
+        if network and network != 'bridge':
+            cmd_parts.extend(['--network', network])
         
         # Add privileged if required (cadvisor/infrastructure often needs this)
         privileged_flag = config.get('privileged', False)
@@ -6360,31 +6574,42 @@ class ContainerMigrate(Resource):
                 app.logger.info(f"Normalized memory limit for docker run: {config['memory_limit']} -> {normalized_mem}")
             cmd_parts.extend(['--memory', normalized_mem])
         
-        # Add entrypoint if present
+        # Add entrypoint if present. Docker allows only ONE executable for --entrypoint;
+        # if the image has Entrypoint=["tini", "--", "/docker-entrypoint.sh"], we must pass
+        # only "tini" to --entrypoint and put the rest ("--", "/docker-entrypoint.sh") in the
+        # command after the image, otherwise " -- " is parsed as end-of-options and breaks the run.
+        entrypoint_args_to_append = []  # rest of entrypoint list to pass as command prefix
         if config.get('entrypoint'):
             entrypoint = config['entrypoint']
             if isinstance(entrypoint, list):
-                entrypoint_str = ' '.join([f'"{arg}"' if ' ' in arg else arg for arg in entrypoint])
+                if len(entrypoint) > 1:
+                    entrypoint_str = entrypoint[0]
+                    entrypoint_args_to_append = entrypoint[1:]
+                else:
+                    entrypoint_str = entrypoint[0] if entrypoint else None
             else:
                 entrypoint_str = entrypoint
-            cmd_parts.extend(['--entrypoint', entrypoint_str])
+            if entrypoint_str:
+                cmd_parts.extend(['--entrypoint', entrypoint_str])
         
-        # Add image
+        # Add image (must come right after options; nothing between --entrypoint and IMAGE)
         cmd_parts.append(image_tag)
         
-        # Add command if present (after image, as it's the command argument)
+        # Add command: first any extra entrypoint args (e.g. "--", "/docker-entrypoint.sh"), then Cmd
+        for arg in entrypoint_args_to_append:
+            if ' ' in arg or any(c in arg for c in ['&', '|', ';', '<', '>']):
+                cmd_parts.append(f'"{arg}"')
+            else:
+                cmd_parts.append(arg)
         if config.get('command'):
             command = config['command']
             if isinstance(command, list):
-                # Extend with command parts, properly quoted if needed
                 for cmd_part in command:
-                    # Quote if contains spaces or special characters
                     if ' ' in cmd_part or any(char in cmd_part for char in ['&', '|', ';', '<', '>']):
                         cmd_parts.append(f'"{cmd_part}"')
                     else:
                         cmd_parts.append(cmd_part)
             else:
-                # If it's a string, use as-is (user's responsibility to quote properly)
                 cmd_parts.append(str(command))
         
         # Join all parts with spaces
@@ -6496,6 +6721,7 @@ api.add_resource(ServerUpdate, '/api/servers/<string:server_id>')
 api.add_resource(ServerDelete, '/api/servers/<string:server_id>')
 api.add_resource(ServerTest, '/api/servers/<string:server_id>/test', '/api/servers/test')
 api.add_resource(ServerSelect, '/api/servers/select')
+api.add_resource(BlueGreenReplace, '/api/containers/blue-green-replace')
 api.add_resource(ContainerMigrate, '/api/containers/migrate')
 api.add_resource(MigrationProgress, '/api/containers/migration-progress')
 api.add_resource(CancelMigration, '/api/containers/cancel-migration')
@@ -6504,13 +6730,55 @@ api.add_resource(CancelMigration, '/api/containers/cancel-migration')
 @app.route('/')
 def index():
     """Serve React app"""
-    return send_from_directory(app.static_folder, 'index.html')
+    index_path = Path(app.static_folder) / 'index.html'
+    if index_path.exists():
+        return send_from_directory(app.static_folder, 'index.html')
+
+    dev_url = (
+        os.environ.get('FRONTEND_DEV_URL')
+        or os.environ.get('VITE_DEV_URL')
+        or 'http://localhost:5173'
+    )
+    return (
+        f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DockerPilot Extras</title>
+  </head>
+  <body>
+    <h2>DockerPilot Extras backend is running.</h2>
+    <p>No frontend build found at <code>{index_path}</code>.</p>
+    <p>Start the frontend dev server and open: <a href="{dev_url}">{dev_url}</a></p>
+  </body>
+</html>""",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
 
 
 @app.errorhandler(404)
 def not_found(e):
     """Handle React Router routes"""
-    return send_from_directory(app.static_folder, 'index.html')
+    # Keep API 404s as JSON-ish errors, don't mask them with SPA fallback.
+    if request.path.startswith('/api/'):
+        return {"error": "Not found", "path": request.path}, 404
+
+    index_path = Path(app.static_folder) / 'index.html'
+    if index_path.exists():
+        return send_from_directory(app.static_folder, 'index.html')
+
+    dev_url = (
+        os.environ.get('FRONTEND_DEV_URL')
+        or os.environ.get('VITE_DEV_URL')
+        or 'http://localhost:5173'
+    )
+    return (
+        f"Frontend build not found. Start Vite and open {dev_url}",
+        404,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
 
 
 if __name__ == '__main__':
