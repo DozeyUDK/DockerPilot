@@ -4839,7 +4839,7 @@ class ContainerMigrate(Resource):
                     return {'error': error_msg}, 500
             
             # Step 5: Pre-flight checks before creating container
-            update_progress('validating', 85, 'Validating target server compatibility...')
+            update_progress('validating', 89, 'Validating target server compatibility...')
             check_cancel()
             
             try:
@@ -5650,25 +5650,25 @@ class ContainerMigrate(Resource):
 
         return ssh
 
-    def _download_file_from_server(self, server_config, remote_path: str, local_path: str):
+    def _download_file_from_server(self, server_config, remote_path: str, local_path: str, progress_callback=None):
         """Download file from remote server via SFTP."""
         ssh = self._open_ssh_client_for_transfer(server_config)
         try:
             sftp = ssh.open_sftp()
             try:
-                sftp.get(remote_path, local_path)
+                sftp.get(remote_path, local_path, callback=progress_callback)
             finally:
                 sftp.close()
         finally:
             ssh.close()
 
-    def _upload_file_to_server(self, server_config, local_path: str, remote_path: str):
+    def _upload_file_to_server(self, server_config, local_path: str, remote_path: str, progress_callback=None):
         """Upload file to remote server via SFTP."""
         ssh = self._open_ssh_client_for_transfer(server_config)
         try:
             sftp = ssh.open_sftp()
             try:
-                sftp.put(local_path, remote_path)
+                sftp.put(local_path, remote_path, callback=progress_callback)
             finally:
                 sftp.close()
         finally:
@@ -5760,6 +5760,36 @@ class ContainerMigrate(Resource):
             stage_progress = 84 + int((idx - 1) * 5 / max(total, 1))
             update_progress('migrating_data', stage_progress, stage_msg)
 
+            def make_transfer_callback(step_name: str, progress_start: int, progress_span: int):
+                """Create throttled transfer callback with progress updates + cancel checks."""
+                last_bucket = {'value': -1}
+
+                def _callback(transferred: int, total_bytes: int):
+                    check_cancel()
+                    if total_bytes <= 0:
+                        return
+
+                    percent = min(100.0, (float(transferred) / float(total_bytes)) * 100.0)
+                    bucket = int(percent // 5)
+                    if bucket <= last_bucket['value']:
+                        return
+                    last_bucket['value'] = bucket
+
+                    progress_value = min(
+                        progress_start + int((percent / 100.0) * progress_span),
+                        89,
+                    )
+                    transferred_mb = transferred / (1024 * 1024)
+                    total_mb = total_bytes / (1024 * 1024)
+                    update_progress(
+                        'migrating_data',
+                        progress_value,
+                        f"[{idx}/{total}] {step_name}: {percent:.1f}% "
+                        f"({transferred_mb:.2f} MB / {total_mb:.2f} MB)",
+                    )
+
+                return _callback
+
             ts = int(time.time())
             safe_container = re.sub(r'[^a-zA-Z0-9_.-]', '_', container_name)
             local_archive = tempfile.NamedTemporaryFile(
@@ -5820,7 +5850,17 @@ class ContainerMigrate(Resource):
                         min(stage_progress + 1, 88),
                         f"[{idx}/{total}] Downloading mount archive from source server..."
                     )
-                    self._download_file_from_server(source_server, source_archive_path, local_archive_path)
+                    download_callback = make_transfer_callback(
+                        "Downloading mount archive from source server",
+                        stage_progress,
+                        2,
+                    )
+                    self._download_file_from_server(
+                        source_server,
+                        source_archive_path,
+                        local_archive_path,
+                        progress_callback=download_callback,
+                    )
                     execute_command_via_ssh(
                         source_server,
                         f"rm -f {shlex.quote(source_archive_path)}",
@@ -5837,12 +5877,22 @@ class ContainerMigrate(Resource):
                         f"[{idx}/{total}] Uploading mount archive to target server..."
                     )
                     target_archive_path = target_remote_archive
-                    self._upload_file_to_server(target_server, local_archive_path, target_archive_path)
+                    upload_callback = make_transfer_callback(
+                        "Uploading mount archive to target server",
+                        min(stage_progress + 2, 89),
+                        2,
+                    )
+                    self._upload_file_to_server(
+                        target_server,
+                        local_archive_path,
+                        target_archive_path,
+                        progress_callback=upload_callback,
+                    )
 
                 # 4) Restore archive on target mount
                 update_progress(
                     'migrating_data',
-                    min(stage_progress + 3, 89),
+                    min(stage_progress + 4, 89),
                     f"[{idx}/{total}] Restoring data into target mount..."
                 )
                 if mount_type == 'bind':
