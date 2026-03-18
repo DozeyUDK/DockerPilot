@@ -1798,14 +1798,19 @@ class DeploymentProgress(Resource):
                 for name, progress in _deployment_progress.items():
                     if not progress:
                         continue
+                    merged_progress = progress
+                    migration_progress = _migration_progress.get(name)
+                    if migration_progress and progress.get('stage') in ['migrating', 'preparing']:
+                        # While promotion runs migration internally, expose live migration progress here.
+                        merged_progress = {**progress, **migration_progress}
                     
-                    stage = progress.get('stage', '')
+                    stage = merged_progress.get('stage', '')
                     # Only return deployments that are not completed/failed/error/cancelled
                     if stage not in ['completed', 'failed', 'error', 'cancelled']:
-                        active_deployments[name] = progress
+                        active_deployments[name] = merged_progress
                     else:
                         # Mark completed/cancelled deployments for cleanup (older than 30 seconds)
-                        timestamp_str = progress.get('timestamp')
+                        timestamp_str = merged_progress.get('timestamp')
                         if timestamp_str:
                             try:
                                 timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
@@ -1835,10 +1840,23 @@ class DeploymentProgress(Resource):
             
             # Return progress for specific container
             progress = _deployment_progress.get(container_name, None)
+            migration_progress = _migration_progress.get(container_name, None)
+            
+            if progress and migration_progress and progress.get('stage') in ['migrating', 'preparing']:
+                return {
+                    'success': True,
+                    'progress': {**progress, **migration_progress}
+                }
+            
             if progress:
                 return {
                     'success': True,
                     'progress': progress
+                }
+            elif migration_progress:
+                return {
+                    'success': True,
+                    'progress': migration_progress
                 }
             else:
                 return {
@@ -3986,7 +4004,8 @@ class ContainerMigrate(Resource):
                 'stage': 'initializing',
                 'progress': 0,
                 'message': f'Inicjalizacja migracji {container_name}...',
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'logs': [f"[{datetime.now().strftime('%H:%M:%S')}] Initializing migration for {container_name}"],
             }
             _migration_cancel_flags[container_name] = False
             
@@ -3998,11 +4017,18 @@ class ContainerMigrate(Resource):
             def update_progress(stage, progress, message):
                 """Update migration progress"""
                 if not _migration_cancel_flags.get(container_name, False):
+                    prev = _migration_progress.get(container_name, {})
+                    logs = list(prev.get('logs', []))
+                    line = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
+                    if not logs or logs[-1] != line:
+                        logs.append(line)
+                    logs = logs[-300:]  # keep recent lines only
                     _migration_progress[container_name] = {
                         'stage': stage,
                         'progress': progress,
                         'message': message,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': datetime.now().isoformat(),
+                        'logs': logs
                     }
             
             # Load server configs
@@ -4304,6 +4330,7 @@ class ContainerMigrate(Resource):
                     
                     # Use SFTP to download
                     sftp = ssh.open_sftp()
+                    last_download_logged_percent = -1
                     
                     # Add callback to check for cancellation during download
                     def download_progress(transferred, total):
@@ -4311,6 +4338,17 @@ class ContainerMigrate(Resource):
                         if _migration_cancel_flags.get(container_name, False):
                             app.logger.info(f"Migration cancelled during download at {transferred / (1024*1024):.2f} MB")
                             raise Exception('Migration was cancelled by user')
+                        if total > 0:
+                            nonlocal last_download_logged_percent
+                            percent = (transferred / total) * 100
+                            current_bucket = int(percent) // 10
+                            if current_bucket > last_download_logged_percent:
+                                update_progress(
+                                    'exporting',
+                                    25 + int(percent * 0.2),  # 25-45
+                                    f"Downloading image from source: {percent:.1f}% ({transferred / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB)"
+                                )
+                                last_download_logged_percent = current_bucket
                     
                     # Check cancel before starting download
                     check_cancel()
@@ -4522,6 +4560,11 @@ class ContainerMigrate(Resource):
                                 percent = (transferred / total) * 100
                                 if int(percent) // 10 > last_logged_percent:  # Log every 10%
                                     app.logger.info(f"Upload progress: {percent:.1f}% ({transferred / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB)")
+                                    update_progress(
+                                        'transferring',
+                                        50 + int(percent * 0.2),  # 50-70
+                                        f"Uploading image to target: {percent:.1f}% ({transferred / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB)"
+                                    )
                                     last_logged_percent = int(percent) // 10
                         
                         try:
@@ -5730,6 +5773,11 @@ class ContainerMigrate(Resource):
 
             try:
                 # 1) Create archive on source side
+                update_progress(
+                    'migrating_data',
+                    stage_progress,
+                    f"[{idx}/{total}] Archiving mount data on source ({mount_type}:{destination})..."
+                )
                 if source_server is None:
                     source_archive_path = local_archive_path
                 else:
@@ -5767,6 +5815,11 @@ class ContainerMigrate(Resource):
 
                 # 2) Ensure archive is local (download from source if needed)
                 if source_server is not None:
+                    update_progress(
+                        'migrating_data',
+                        min(stage_progress + 1, 88),
+                        f"[{idx}/{total}] Downloading mount archive from source server..."
+                    )
                     self._download_file_from_server(source_server, source_archive_path, local_archive_path)
                     execute_command_via_ssh(
                         source_server,
@@ -5778,10 +5831,20 @@ class ContainerMigrate(Resource):
                 if target_server is None:
                     target_archive_path = local_archive_path
                 else:
+                    update_progress(
+                        'migrating_data',
+                        min(stage_progress + 2, 89),
+                        f"[{idx}/{total}] Uploading mount archive to target server..."
+                    )
                     target_archive_path = target_remote_archive
                     self._upload_file_to_server(target_server, local_archive_path, target_archive_path)
 
                 # 4) Restore archive on target mount
+                update_progress(
+                    'migrating_data',
+                    min(stage_progress + 3, 89),
+                    f"[{idx}/{total}] Restoring data into target mount..."
+                )
                 if mount_type == 'bind':
                     target_source = mount_source
                     if bind_kind == 'file':

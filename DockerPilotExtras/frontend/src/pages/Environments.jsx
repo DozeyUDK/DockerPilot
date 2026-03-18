@@ -34,6 +34,7 @@ function Environments() {
   const [privilegedPaths, setPrivilegedPaths] = useState([]) // Paths requiring sudo
   const [sudoModalContainerName, setSudoModalContainerName] = useState(null) // Container name for modal
   const [deploymentProgress, setDeploymentProgress] = useState(null) // Progress tracking for deployment
+  const [showDeploymentLogs, setShowDeploymentLogs] = useState(false)
   const cancelPollingRef = useRef(false) // Ref to cancel polling immediately
   const [showServerModal, setShowServerModal] = useState(false) // Show server add/edit modal
   const [editingServer, setEditingServer] = useState(null) // Server being edited (null for new)
@@ -162,6 +163,12 @@ function Environments() {
     }
     load()
   }, [])
+
+  useEffect(() => {
+    if (!deploymentProgress) {
+      setShowDeploymentLogs(false)
+    }
+  }, [deploymentProgress, promotingContainer])
 
   // Poll progress when promoting container
   useEffect(() => {
@@ -1231,6 +1238,7 @@ function Environments() {
     container.name.toLowerCase().includes(containerSearch.toLowerCase()) ||
     (container.image && container.image.toLowerCase().includes(containerSearch.toLowerCase()))
   )
+  const deploymentLogs = Array.isArray(deploymentProgress?.logs) ? deploymentProgress.logs : []
 
   const filteredFiles = browserItems.filter(item => {
     if (item.is_dir) return true
@@ -1462,30 +1470,68 @@ function Environments() {
               alignItems: 'center'
             }}>
               <span>Stage: {deploymentProgress.stage}</span>
-              {promotingContainer && 
-               deploymentProgress.stage !== 'completed' && 
-               deploymentProgress.stage !== 'failed' && 
-               deploymentProgress.stage !== 'error' && 
-               deploymentProgress.stage !== 'cancelled' && (
-                <button
-                  onClick={() => handleStopPromotion(promotingContainer)}
-                  disabled={cancellingContainer === promotingContainer}
-                  style={{
-                    padding: '5px 15px',
-                    backgroundColor: '#dc3545',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: cancellingContainer === promotingContainer ? 'not-allowed' : 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    opacity: cancellingContainer === promotingContainer ? 0.6 : 1
-                  }}
-                >
-                  {cancellingContainer === promotingContainer ? 'Cancelling...' : '⏹️ Stop Deployment'}
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {deploymentLogs.length > 0 && (
+                  <button
+                    onClick={() => setShowDeploymentLogs(prev => !prev)}
+                    style={{
+                      padding: '5px 10px',
+                      backgroundColor: '#495057',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    {showDeploymentLogs ? '🙈 Hide logs' : `🧾 Show logs (${deploymentLogs.length})`}
+                  </button>
+                )}
+                {promotingContainer && 
+                 deploymentProgress.stage !== 'completed' && 
+                 deploymentProgress.stage !== 'failed' && 
+                 deploymentProgress.stage !== 'error' && 
+                 deploymentProgress.stage !== 'cancelled' && (
+                  <button
+                    onClick={() => handleStopPromotion(promotingContainer)}
+                    disabled={cancellingContainer === promotingContainer}
+                    style={{
+                      padding: '5px 15px',
+                      backgroundColor: '#dc3545',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: cancellingContainer === promotingContainer ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      opacity: cancellingContainer === promotingContainer ? 0.6 : 1
+                    }}
+                  >
+                    {cancellingContainer === promotingContainer ? 'Cancelling...' : '⏹️ Stop Deployment'}
+                  </button>
+                )}
+              </div>
             </div>
+            {showDeploymentLogs && deploymentLogs.length > 0 && (
+              <div style={{
+                marginTop: '10px',
+                maxHeight: '240px',
+                overflowY: 'auto',
+                backgroundColor: theme === 'dark' ? '#0f172a' : '#111827',
+                color: '#d1fae5',
+                borderRadius: '6px',
+                border: '1px solid #334155',
+                padding: '10px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: '12px',
+                lineHeight: '1.45'
+              }}>
+                {deploymentLogs.slice(-200).map((line, idx) => (
+                  <div key={`${idx}-${line}`}>{line}</div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3361,4 +3407,3 @@ function Environments() {
 }
 
 export default Environments
-
