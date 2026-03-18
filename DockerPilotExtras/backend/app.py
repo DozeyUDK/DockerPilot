@@ -1916,7 +1916,7 @@ class EnvironmentPromoteSingle(Resource):
                         'container_name': container_name,
                         'source_server_id': source_server_id,
                         'target_server_id': target_server_id,
-                        'include_data': bool(include_data) and not bool(skip_backup),
+                        'include_data': bool(include_data),
                         'stop_source': bool(stop_source),
                     },
                 ):
