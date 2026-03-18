@@ -1369,11 +1369,70 @@ def load_env_servers_config() -> dict:
     return {"env_servers": {}}
 
 
+def save_env_servers_config(config: dict) -> bool:
+    """Save environment->server mapping to file."""
+    config_path = get_env_servers_config_path()
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        app.logger.error(f"Failed to save environments config: {e}")
+        return False
+
+
 def resolve_server_id_for_env(env: str) -> str:
     """Resolve which server_id should host a given environment."""
     cfg = load_env_servers_config()
     env_servers = cfg.get("env_servers", {}) if isinstance(cfg, dict) else {}
     return env_servers.get(env, "local")
+
+
+def _get_containers_and_images_for_server(server_config) -> tuple:
+    """Get containers and images list for one server (local or remote). Returns (containers, images)."""
+    if server_config is None:
+        server_config = {'id': 'local'}
+    containers = []
+    images = []
+    try:
+        out = execute_docker_command_via_ssh(
+            server_config,
+            r"ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'",
+            check_exit_status=False
+        )
+        for line in (out or "").strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                containers.append({
+                    "name": parts[0].lstrip("/"),
+                    "image": parts[1],
+                    "state": parts[2].lower(),
+                    "status": parts[3],
+                })
+    except Exception as e:
+        app.logger.warning(f"Failed to get containers for server {server_config.get('id', '?')}: {e}")
+    try:
+        out = execute_docker_command_via_ssh(
+            server_config,
+            r"images --format '{{.Repository}}\t{{.Tag}}'",
+            check_exit_status=False
+        )
+        for line in (out or "").strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0] and parts[0] != "<none>":
+                tag = f"{parts[0]}:{parts[1]}"
+                if tag not in images:
+                    images.append(tag)
+    except Exception as e:
+        app.logger.warning(f"Failed to get images for server {server_config.get('id', '?')}: {e}")
+    return containers, images
 
 
 def get_server_config_by_id(server_id: str):
@@ -1800,6 +1859,8 @@ class EnvironmentPromoteSingle(Resource):
             to_env = data.get('to_env')
             container_name = data.get('container_name')
             skip_backup = data.get('skip_backup', False)
+            include_data = data.get('include_data', False)
+            stop_source = data.get('stop_source', False)
             
             if not from_env or not to_env or not container_name:
                 return {'error': 'Missing required parameters'}, 400
@@ -1811,22 +1872,6 @@ class EnvironmentPromoteSingle(Resource):
                 'message': f'Inicjalizacja promocji {container_name}...',
                 'timestamp': datetime.now().isoformat()
             }
-            
-            # Find deployment config for this specific container
-            configs = find_all_deployment_configs_for_env(from_env)
-            config_to_promote = None
-            
-            for config_item in configs:
-                if config_item['container_name'] == container_name:
-                    config_to_promote = config_item
-                    break
-            
-            if not config_to_promote:
-                del _deployment_progress[container_name]
-                return {
-                    'success': False,
-                    'error': f'No deployment configuration found for {container_name} in {from_env} environment'
-                }, 404
             
             app.logger.info(f"Promoting single container {container_name} from {from_env} to {to_env}")
             
@@ -1848,11 +1893,45 @@ class EnvironmentPromoteSingle(Resource):
             else:
                 pilot = get_dockerpilot()
             
-            config_path_str = config_to_promote['path']
-            
             try:
+                # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
+                # Source/target servers are resolved from env->server mapping.
+                source_server_id = resolve_server_id_for_env(from_env)
                 target_server_id = resolve_server_id_for_env(to_env)
-                success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, skip_backup)
+                if source_server_id == target_server_id:
+                    raise ValueError(f"Source and target servers are the same ({source_server_id}). Update environment mapping.")
+
+                _deployment_progress[container_name] = {
+                    'stage': 'migrating',
+                    'progress': 20,
+                    'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                # Reuse the existing migration implementation by calling the migrate resource in a test request context.
+                with app.test_request_context(
+                    '/api/containers/migrate',
+                    method='POST',
+                    json={
+                        'container_name': container_name,
+                        'source_server_id': source_server_id,
+                        'target_server_id': target_server_id,
+                        'include_data': bool(include_data) and not bool(skip_backup),
+                        'stop_source': bool(stop_source),
+                    },
+                ):
+                    migrate_result = ContainerMigrate().post()
+
+                # Flask-RESTful resources may return (dict, status) tuples
+                if isinstance(migrate_result, tuple) and len(migrate_result) >= 2:
+                    body, status = migrate_result[0], migrate_result[1]
+                    if status >= 400:
+                        success = False
+                    else:
+                        success = True
+                else:
+                    body = migrate_result
+                    success = True
                 
                 # Wait a moment for final progress callback from pilot
                 import time
@@ -1874,8 +1953,9 @@ class EnvironmentPromoteSingle(Resource):
                     app.logger.info(f"Successfully promoted {container_name}")
                     return {
                         'success': True,
-                        'message': f'Container {container_name} promoted from {format_env_name(from_env)} to {format_env_name(to_env)}',
-                        'container_name': container_name
+                        'message': f'Container {container_name} promoted (migrated) from {format_env_name(from_env)} to {format_env_name(to_env)}',
+                        'container_name': container_name,
+                        'details': body
                     }
                 else:
                     # Only set 'failed' if not already set by pilot callback
@@ -1889,7 +1969,7 @@ class EnvironmentPromoteSingle(Resource):
                     app.logger.error(f"Failed to promote {container_name}")
                     return {
                         'success': False,
-                        'error': f'Failed to promote {container_name}'
+                        'error': body.get('error') if isinstance(body, dict) else f'Failed to promote {container_name}'
                     }, 500
                     
             except Exception as e:
@@ -1949,565 +2029,51 @@ class EnvironmentStatus(Resource):
         try:
             environments = ['dev', 'staging', 'prod']
             env_status = {}
-            
-            # Check if remote server is selected
-            server_config = get_selected_server_config()
-            
-            containers = []
-            images = []
-            
-            if server_config:
-                # Use remote server via SSH
-                try:
-                    # Get containers via SSH - use tab-separated format for easier parsing
-                    # Use raw string to avoid issues with curly braces in Go template syntax
-                    containers_output = execute_docker_command_via_ssh(
-                        server_config,
-                        r"ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'"
-                    )
-                    # Parse tab-separated lines
-                    for line in containers_output.strip().split('\n'):
-                        line = line.strip()
-                        if line:
-                            parts = line.split('\t')
-                            if len(parts) >= 4:
-                                container_name = parts[0].lstrip('/')
-                                containers.append({
-                                    'name': container_name,
-                                    'image': parts[1],
-                                    'state': parts[2].lower(),
-                                    'status': parts[3]
-                                })
-                    
-                    # Get images via SSH
-                    images_output = execute_docker_command_via_ssh(
-                        server_config,
-                        r"images --format '{{.Repository}}\t{{.Tag}}'"
-                    )
-                    # Parse tab-separated lines
-                    for line in images_output.strip().split('\n'):
-                        line = line.strip()
-                        if line:
-                            parts = line.split('\t')
-                            if len(parts) >= 2:
-                                repo = parts[0]
-                                tag = parts[1]
-                                if repo and repo != '<none>':
-                                    image_tag = f"{repo}:{tag}"
-                                    if image_tag not in images:
-                                        images.append(image_tag)
-                                
-                except Exception as e:
-                    app.logger.error(f"Failed to get containers/images from remote server: {e}")
-                    return {
-                        'error': f'Failed to connect to remote server: {str(e)}',
-                        'environments': {env: {'containers': [], 'error': f'Remote server connection failed: {str(e)}'} for env in environments}
-                    }, 500
-            else:
-                # Use local DockerPilot
-                pilot = get_dockerpilot()
-                
-                # Check if Docker client is available
-                if not pilot.client or not pilot.container_manager:
-                    return {
-                        'error': 'Docker client not initialized',
-                        'environments': {env: {'containers': [], 'error': 'Docker not available'} for env in environments}
-                    }, 500
-                
-                # Get containers using DockerPilot
-                containers_data = pilot.list_containers(show_all=True, format_output='json')
-                if isinstance(containers_data, list):
-                    for container in containers_data:
-                        if isinstance(container, dict):
-                            containers.append({
-                                'name': container.get('name', ''),
-                                'image': container.get('image', ''),
-                                'state': container.get('state', '').lower(),
-                                'status': container.get('status', '')
-                            })
-                
-                # Get images using DockerPilot
-                images_data = pilot.list_images(show_all=True, format_output='json')
-                if isinstance(images_data, list):
-                    for image in images_data:
-                        if isinstance(image, dict):
-                            image_tag = image.get('repository', '') + ':' + image.get('tag', 'latest')
-                            if image_tag != ':latest':
-                                images.append(image_tag)
-                        elif isinstance(image, str):
-                            images.append(image)
-            
-            # FIRST: Check deployment history to determine which containers are in PROD
-            # This takes priority over configs to ensure recent deployments are correctly mapped
-            history_locations = [
-                app.config['CONFIG_DIR'] / 'deployment_history.json',
-                Path.home() / 'DockerPilot' / 'deployment_history.json',
-                Path.cwd() / 'deployment_history.json'
-            ]
-            
-            active_deployments = {}
-            container_to_env_map = {}  # Map container base names to environments (PROD takes priority)
-            
-            for history_path in history_locations:
-                if history_path.exists():
-                    try:
-                        with open(history_path, 'r', encoding='utf-8') as f:
-                            history = json.load(f)
-                            # Sort by timestamp, most recent first
-                            sorted_history = sorted(history, key=lambda x: x.get('timestamp', ''), reverse=True)
-                            
-                            # Get most recent deployment for each container
-                            # Check deployment history for environment information
-                            for record in sorted_history:
-                                container_name = record.get('container_name', '').lower()
-                                if container_name and container_name not in active_deployments:
-                                    active_deployments[container_name] = record
-                                    
-                                    # Check if deployment history has environment info
-                                    deployment_env = record.get('environment') or record.get('target_env')
-                                    deployment_type = record.get('type', '').lower()
-                                    
-                                    # Priority: prod > staging > dev
-                                    # If type contains 'prod' or 'promotion-prod', it's definitely PROD
-                                    if 'prod' in deployment_type or 'promotion-prod' in deployment_type:
-                                        container_to_env_map[container_name] = 'prod'
-                                        app.logger.info(f"Container {container_name} mapped to PROD based on deployment history type '{deployment_type}' (timestamp: {record.get('timestamp', 'unknown')})")
-                                    elif deployment_env == 'prod':
-                                        container_to_env_map[container_name] = 'prod'
-                                        app.logger.info(f"Container {container_name} mapped to PROD based on deployment history environment (timestamp: {record.get('timestamp', 'unknown')})")
-                                    elif deployment_env == 'staging':
-                                        # Only map to staging if there's an actual staging deployment config or container with _staging suffix
-                                        # Otherwise, staging promotion might have just saved config without deploying
-                                        container_to_env_map[container_name] = 'staging'
-                                        app.logger.info(f"Container {container_name} mapped to STAGING based on deployment history (timestamp: {record.get('timestamp', 'unknown')})")
-                                    elif 'staging' in deployment_type and deployment_env == 'staging':
-                                        container_to_env_map[container_name] = 'staging'
-                                        app.logger.info(f"Container {container_name} mapped to STAGING based on deployment history type '{deployment_type}' (timestamp: {record.get('timestamp', 'unknown')})")
-                                    else:
-                                        # Default to prod for recent deployments without explicit env info
-                                        container_to_env_map[container_name] = 'prod'
-                                        app.logger.info(f"Container {container_name} mapped to PROD based on deployment history (timestamp: {record.get('timestamp', 'unknown')})")
-                    except Exception as e:
-                        app.logger.warning(f"Failed to load deployment history from {history_path}: {e}")
-                        pass
-            
-            # SECOND: Load deployment configs from unified deployment directory structure
-            env_container_names = {}
-            all_container_names = set()  # Track all known container names from configs
-            loaded_configs = []  # Track which configs were loaded (for debugging)
-            
-            # Load from unified deployment directory structure
-            deployments_dir = app.config['DEPLOYMENTS_DIR']
-            if deployments_dir.exists():
-                # Find all deployment directories
-                all_deployments = find_all_deployment_dirs()
-                
-                for deployment_dir, metadata in all_deployments:
-                    container_name = metadata.get('container_name', '').lower()
-                    if not container_name:
-                        continue
-                    
-                    all_container_names.add(container_name)
-                    loaded_configs.append(f"deployment: {deployment_dir.name} -> {container_name}")
-                    
-                    # Check for environment-specific configs
-                    for env in environments:
-                        env_config_path = deployment_dir / f'deployment-{env}.yml'
-                        if env_config_path.exists():
-                            try:
-                                with open(env_config_path, 'r', encoding='utf-8') as f:
-                                    env_config = yaml.safe_load(f) or {}
-                                    config_container_name = env_config.get('deployment', {}).get('container_name', '').lower()
-                                    # Check if config container name matches base container name or with suffix
-                                    base_config_name = config_container_name
-                                    for suffix in ['_staging', '_blue', '_green', '_canary', '_new', '_old']:
-                                        if base_config_name.endswith(suffix):
-                                            base_config_name = base_config_name[:-len(suffix)]
-                                            break
-                                    
-                                    # Match if container name matches config name or base name
-                                    if (config_container_name == container_name or 
-                                        base_config_name == container_name or
-                                        container_name == config_container_name or
-                                        (env == 'staging' and container_name == f"{base_config_name}_staging")):
-                                        # Store multiple container names per environment (use list)
-                                        if env not in env_container_names:
-                                            env_container_names[env] = []
-                                        # Use base name for mapping
-                                        if base_config_name not in env_container_names[env]:
-                                            env_container_names[env].append(base_config_name)
-                                        # Only set mapping if not already set by deployment history (PROD takes priority)
-                                        if base_config_name not in container_to_env_map:
-                                            container_to_env_map[base_config_name] = env
-                                        app.logger.info(f"Loaded {env} config from {deployment_dir.name}: container={base_config_name} -> {container_to_env_map.get(base_config_name, env)}")
-                            except Exception as e:
-                                app.logger.warning(f"Failed to load {env_config_path}: {e}")
-                    
-                    # Check for main deployment.yml
-                    main_config_path = deployment_dir / 'deployment.yml'
-                    if main_config_path.exists():
-                        try:
-                            with open(main_config_path, 'r', encoding='utf-8') as f:
-                                main_config = yaml.safe_load(f) or {}
-                                if main_config.get('deployment', {}).get('container_name', '').lower() == container_name:
-                                    # If no env-specific config found and not in deployment history, default to prod
-                                    if container_name not in container_to_env_map:
-                                        container_to_env_map[container_name] = 'prod'
-                                    # Also set for prod environment if not already set
-                                    if 'prod' not in env_container_names:
-                                        env_container_names['prod'] = []
-                                    if container_name not in env_container_names['prod']:
-                                        env_container_names['prod'].append(container_name)
-                        except Exception as e:
-                            app.logger.warning(f"Failed to load {main_config_path}: {e}")
-            
-            # Also check legacy locations for backward compatibility
-            legacy_locations = [
-                app.config['CONFIG_DIR'],  # ~/.dockerpilot_extras/
-                Path.home() / 'DockerPilot',  # Main project directory
-            ]
-            
-            for config_dir in legacy_locations:
-                # Check for legacy deployment-{env}.yml files
-                for env in environments:
-                    env_config_path = config_dir / f'deployment-{env}.yml'
-                    if env_config_path.exists():
-                        try:
-                            with open(env_config_path, 'r', encoding='utf-8') as f:
-                                env_config = yaml.safe_load(f) or {}
-                                container_name = env_config.get('deployment', {}).get('container_name', '')
-                                if container_name:
-                                    container_name_lower = container_name.lower()
-                                    # Store multiple container names per environment (use list)
-                                    if env not in env_container_names:
-                                        env_container_names[env] = []
-                                    if container_name_lower not in env_container_names[env]:
-                                        env_container_names[env].append(container_name_lower)
-                                    all_container_names.add(container_name_lower)
-                                    # Only set mapping if not already set by deployment history (PROD takes priority)
-                                    if container_name_lower not in container_to_env_map:
-                                        container_to_env_map[container_name_lower] = env
-                                    loaded_configs.append(f"legacy {env}: {str(env_config_path)} -> {container_name}")
-                        except:
-                            pass
-                
-                # Check for legacy named configs (e.g., grafana-deployment.yml)
-                try:
-                    if hasattr(config_dir, 'glob'):
-                        config_files = list(config_dir.glob('*-deployment.yml'))
-                        for config_path in config_files:
-                            if any(f'deployment-{env}.yml' in str(config_path) for env in environments):
-                                continue
-                            try:
-                                with open(config_path, 'r', encoding='utf-8') as f:
-                                    config = yaml.safe_load(f) or {}
-                                    container_name = config.get('deployment', {}).get('container_name', '')
-                                    if container_name:
-                                        container_name_lower = container_name.lower()
-                                        all_container_names.add(container_name_lower)
-                                        loaded_configs.append(f"legacy named: {str(config_path)} -> {container_name}")
-                                        # Only set to prod if not already mapped by deployment history
-                                        if container_name_lower not in container_to_env_map:
-                                            container_to_env_map[container_name_lower] = 'prod'
-                            except:
-                                pass
-                except:
-                    pass
-            
-            app.logger.info(f"Loaded {len(loaded_configs)} configs: {loaded_configs}")
-            app.logger.info(f"Known container names: {all_container_names}")
-            app.logger.info(f"Container to env map: {container_to_env_map}")
-            
-            # Also check deployment history to see which environment is active
-            history_locations = [
-                app.config['CONFIG_DIR'] / 'deployment_history.json',
-                Path.home() / 'DockerPilot' / 'deployment_history.json',
-                Path.cwd() / 'deployment_history.json'
-            ]
-            
-            active_deployments = {}
-            recent_deployments = []  # Track recent deployments to infer environment
-            for history_path in history_locations:
-                if history_path.exists():
-                    try:
-                        with open(history_path, 'r', encoding='utf-8') as f:
-                            history = json.load(f)
-                            # Sort by timestamp, most recent first
-                            sorted_history = sorted(history, key=lambda x: x.get('timestamp', ''), reverse=True)
-                            recent_deployments = sorted_history[:10]  # Last 10 deployments
-                            
-                            # Get most recent deployment for each container
-                            for record in sorted_history:
-                                container_name = record.get('container_name', '').lower()
-                                if container_name and container_name not in active_deployments:
-                                    active_deployments[container_name] = record
-                                    # Update container_to_env_map based on history
-                                    # Check if deployment history has environment info
-                                    deployment_env = record.get('environment') or record.get('target_env')
-                                    if deployment_env:
-                                        # Use environment from deployment history
-                                        container_to_env_map[container_name] = deployment_env
-                                        app.logger.info(f"Container {container_name} mapped to {deployment_env} based on deployment history (timestamp: {record.get('timestamp', 'unknown')})")
-                                    elif container_name not in container_to_env_map:
-                                        # Default to prod if no environment info
-                                        container_to_env_map[container_name] = 'prod'
-                                        app.logger.info(f"Container {container_name} mapped to PROD based on deployment history (timestamp: {record.get('timestamp', 'unknown')})")
-                    except:
-                        pass
-            
-            # Track which containers have been assigned to an environment
-            # to prevent duplicates across environments
-            assigned_containers = set()
-            # Store full container lists per environment (before limiting to 5 for display)
-            env_containers_full = {}
-            
-            # Process each environment (process PROD first to take priority)
-            env_processing_order = ['prod', 'staging', 'dev']
-            for env in env_processing_order:
-                if env not in environments:
-                    continue
-                    
-                env_containers = []
-                env_images = []
-                
-                # Find containers for this environment
-                # Use container_to_env_map as the primary source of truth
-                # This ensures containers are assigned to only one environment
-                for c in containers:
-                    container_id = c.get('name', '')
-                    name_lower = c['name'].lower()
-                    
-                    # Handle blue/green/canary/staging variants: grafana_blue -> grafana, grafana_staging -> grafana
-                    base_name = name_lower
-                    for suffix in ['_blue', '_green', '_canary', '_new', '_old', '_staging']:
-                        if base_name.endswith(suffix):
-                            base_name = base_name[:-len(suffix)]
-                            break
-                    
-                    # Check if this container is mapped to this environment
-                    mapped_env = container_to_env_map.get(base_name)
-                    
-                    # Skip if already assigned to another environment
-                    if container_id in assigned_containers:
-                        continue
-                    
-                    # Priority 1: Container with _staging suffix belongs to STAGING
-                    if name_lower.endswith('_staging') and env == 'staging':
-                        env_containers.append(c)
-                        assigned_containers.add(container_id)
-                        continue
-                    
-                    # Priority 2: Containers with _blue/_green suffix belong to PROD (blue-green deployment)
-                    if (name_lower.endswith('_blue') or name_lower.endswith('_green')) and env == 'prod':
-                        env_containers.append(c)
-                        assigned_containers.add(container_id)
-                        continue
-                    
-                    # Priority 3: Check explicit mapping from deployment history/configs
-                    if mapped_env == env:
-                        # Container is explicitly mapped to this environment
-                        env_containers.append(c)
-                        assigned_containers.add(container_id)
-                        continue
-                    
-                    # Priority 4: For PROD, check if container has no _staging suffix
-                    # This handles containers that are actually running in PROD despite staging history
-                    if env == 'prod' and mapped_env is None:
-                        # Check if this is a PROD container (no _staging suffix, has deployment-prod.yml or no deployment-staging.yml)
-                        has_staging_suffix = name_lower.endswith('_staging')
-                        has_blue_green_suffix = name_lower.endswith('_blue') or name_lower.endswith('_green')
-                        has_staging_config = base_name in env_container_names.get('staging', [])
-                        has_prod_config = base_name in env_container_names.get('prod', [])
-                        
-                        # Skip blue/green variants (already handled above)
-                        if has_blue_green_suffix:
-                            continue
-                        
-                        # If container doesn't have _staging suffix, it's running in PROD
-                        # Even if it has deployment-staging.yml (which was just a saved config)
-                        if not has_staging_suffix:
-                            # Default to PROD for containers without staging suffix
-                            env_containers.append(c)
-                            assigned_containers.add(container_id)
-                            container_to_env_map[base_name] = 'prod'
-                            app.logger.info(f"Container {container_id} assigned to PROD (no staging suffix - running in PROD)")
-                            continue
-                    
-                    # Priority 5: Check deployment history
-                    if mapped_env is None:
-                        has_deployment_history = base_name in active_deployments
-                        
-                        if has_deployment_history:
-                            # Check if deployment history has environment info
-                            deployment_record = active_deployments.get(base_name, {})
-                            deployment_env = deployment_record.get('environment') or deployment_record.get('target_env')
-                            deployment_type = deployment_record.get('type', '').lower()
-                            
-                            # Only trust staging history if container actually has _staging suffix
-                            # Containers without _staging suffix are in PROD, not STAGING
-                            if deployment_env == 'staging' and env == 'staging':
-                                has_staging_suffix = name_lower.endswith('_staging')
-                                # Only assign to staging if it has staging suffix
-                                # If no suffix, it's running in PROD (even if deployment-staging.yml exists)
-                                if has_staging_suffix:
-                                    env_containers.append(c)
-                                    assigned_containers.add(container_id)
-                                    container_to_env_map[base_name] = env
-                                    continue
-                            elif deployment_env == env:
-                                # Deployment history explicitly says this environment
-                                env_containers.append(c)
-                                assigned_containers.add(container_id)
-                                container_to_env_map[base_name] = env
-                                continue
-                            elif env == 'prod' and (deployment_type == 'promotion-prod' or deployment_env == 'prod'):
-                                # PROD promotion takes priority
-                                env_containers.append(c)
-                                assigned_containers.add(container_id)
-                                container_to_env_map[base_name] = 'prod'
-                                continue
-                    
-                    # Priority 6: Check configs
-                    if mapped_env is None:
-                        # Check if container name matches expected names for this environment
-                        expected_container_names = env_container_names.get(env, [])
-                        if isinstance(expected_container_names, str):
-                            expected_container_names = [expected_container_names]
-                        
-                        # Check if base name or full name matches expected names
-                        matches_expected = False
-                        for expected_name in expected_container_names:
-                            if (name_lower == expected_name or 
-                                name_lower.startswith(expected_name + '_') or
-                                base_name == expected_name):
-                                matches_expected = True
-                                break
-                        
-                        # Also check if container has staging suffix and we're in staging environment
-                        if env == 'staging' and name_lower.endswith('_staging'):
-                            staging_base = name_lower[:-8]  # Remove '_staging'
-                            if staging_base in expected_container_names:
-                                matches_expected = True
-                        
-                        if matches_expected:
-                            # Check if this container has deployment history that says it's in another environment
-                            # Only skip if explicitly mapped to another environment via history
-                            if base_name in active_deployments:
-                                deployment_record = active_deployments[base_name]
-                                deployment_env = deployment_record.get('environment') or deployment_record.get('target_env')
-                                deployment_type = deployment_record.get('type', '').lower()
-                                # If deployment history says PROD, don't override with staging
-                                if (deployment_env == 'prod' or deployment_type == 'promotion-prod') and env != 'prod':
-                                    continue
-                            
-                            # Container matches config for this environment
-                            env_containers.append(c)
-                            assigned_containers.add(container_id)
-                            # Update mapping to reflect assignment
-                            container_to_env_map[base_name] = env
-                
-                # 4. Find images for this environment
-                # Check images used by containers in this environment
-                for c in env_containers:
-                    if c['image'] and c['image'] not in env_images:
-                        env_images.append(c['image'])
-                
-                # Also check for images with env suffix or matching container images
-                for img in images:
-                    img_lower = img.lower()
-                    if (env in img_lower or 
-                        img.endswith(f'-{env}') or 
-                        img.endswith(f':{env}')):
-                        if img not in env_images:
-                            env_images.append(img)
-                
-                # If no images found but we have containers, use their images
-                if not env_images and env_containers:
-                    for c in env_containers:
-                        if c.get('image') and c['image'] not in env_images:
-                            env_images.append(c['image'])
-                
-                # Store full container list before limiting for display
-                env_containers_full[env] = env_containers.copy()
-                
-                running_containers = [c for c in env_containers if c['state'] == 'running']
-                stopped_containers = [c for c in env_containers if c['state'] != 'running']
-                
+            # Each environment shows data from the server mapped to that env (env_servers).
+            env_servers_cfg = load_env_servers_config()
+            env_servers = env_servers_cfg.get("env_servers", {}) if isinstance(env_servers_cfg, dict) else {}
+
+            for env in environments:
+                server_id = env_servers.get(env, "local")
+                server_config = get_server_config_by_id(server_id)
+                containers, images = _get_containers_and_images_for_server(server_config)
+                running = [c for c in containers if c.get("state") == "running"]
+                stopped = [c for c in containers if c.get("state") != "running"]
+                env_images = list(images)[:5]
+                primary_image = env_images[0] if env_images else None
+                # Server label for UI (name or hostname)
+                server_label = "Local"
+                if server_id != "local" and server_config:
+                    server_label = server_config.get("name") or server_config.get("hostname") or server_id
+
                 env_status[env] = {
-                    'containers': {
-                        'total': len(env_containers),
-                        'running': len(running_containers),
-                        'stopped': len(stopped_containers),
-                        'list': env_containers[:5],  # Limit to 5 for display
-                        'all': env_containers  # Full list for modal/selection
+                    "containers": {
+                        "total": len(containers),
+                        "running": len(running),
+                        "stopped": len(stopped),
+                        "list": containers[:5],
+                        "all": containers,
                     },
-                    'images': env_images[:5] if env_images else [],  # Limit to 5
-                    'status': 'active' if running_containers else ('inactive' if env_containers else 'empty'),
-                    'primary_image': env_images[0] if env_images else None
+                    "images": env_images,
+                    "status": "active" if running else ("inactive" if containers else "empty"),
+                    "primary_image": primary_image,
+                    "server_id": server_id,
+                    "server_label": server_label,
                 }
-            
-            # After processing all environments, assign unassigned containers to DEV as fallback
-            # This ensures new containers without configs are automatically assigned to DEV
-            unassigned = [c for c in containers if c.get('name', '') not in assigned_containers]
-            if unassigned and 'dev' in env_containers_full:
-                # Add unassigned containers to DEV
-                for c in unassigned:
-                    container_id = c.get('name', '')
-                    env_containers_full['dev'].append(c)
-                    assigned_containers.add(container_id)
-                    
-                    name_lower = c['name'].lower()
-                    base_name = name_lower
-                    for suffix in ['_blue', '_green', '_canary', '_new', '_old']:
-                        if base_name.endswith(suffix):
-                            base_name = base_name[:-len(suffix)]
-                            break
-                    container_to_env_map[base_name] = 'dev'
-                    app.logger.info(f"Auto-assigned unassigned container '{container_id}' to DEV (default)")
-                
-                # Update DEV status with unassigned containers
-                dev_containers = env_containers_full['dev']
-                running_dev = [c for c in dev_containers if c.get('state', '').lower() == 'running']
-                stopped_dev = [c for c in dev_containers if c.get('state', '').lower() != 'running']
-                
-                # Update images
-                dev_images = env_status['dev']['images'].copy()
-                for c in dev_containers:
-                    if c.get('image') and c['image'] not in dev_images:
-                        if len(dev_images) < 5:
-                            dev_images.append(c['image'])
-                
-                env_status['dev'] = {
-                    'containers': {
-                        'total': len(dev_containers),
-                        'running': len(running_dev),
-                        'stopped': len(stopped_dev),
-                        'list': dev_containers[:5]  # Limit to 5 for display
-                    },
-                    'images': dev_images[:5] if dev_images else [],
-                    'status': 'active' if running_dev else ('inactive' if dev_containers else 'empty'),
-                    'primary_image': dev_images[0] if dev_images else None
-                }
-            
+
             result = {
-                'success': True,
-                'environments': env_status,
-                'debug': {
-                    'loaded_configs': loaded_configs,
-                    'known_containers': list(all_container_names),
-                    'container_mapping': container_to_env_map,
-                    'deployments_dir': str(app.config['DEPLOYMENTS_DIR'])
-                }
+                "success": True,
+                "environments": env_status,
+                "debug": {"env_servers": env_servers},
             }
-            
-            # Update cache
-            _environment_status_cache['data'] = result
-            _environment_status_cache['timestamp'] = current_time
-            
+            _environment_status_cache["data"] = result
+            _environment_status_cache["timestamp"] = current_time
             return result
-            
+
         except Exception as e:
-            return {'error': str(e)}, 500
+            app.logger.exception("Environment status failed")
+            return {"success": False, "error": str(e), "environments": {}}, 500
+
 
 
 class StatusCheck(Resource):
@@ -3610,91 +3176,73 @@ class PrepareContainerConfig(Resource):
             data = request.get_json()
             container_name = data.get('container_name')
             target_env = data.get('target_env', 'dev')  # dev/staging/prod
+            source_env = data.get('source_env') or target_env  # where to inspect the running container
             
             if not container_name:
                 return {'error': 'container_name is required'}, 400
             
             if target_env not in ['dev', 'staging', 'prod']:
                 return {'error': 'target_env must be dev, staging, or prod'}, 400
-            
-            pilot = get_dockerpilot()
-            client = pilot.client
-            
-            try:
-                container = client.containers.get(container_name)
-            except Exception as e:
-                if 'NotFound' in str(type(e).__name__):
-                    return {'error': f'Container {container_name} not found'}, 404
-                raise
-            
-            # Extract container configuration - inline the logic from prepare_container_for_promotion
-            attrs = container.attrs
-            
-            # Extract image tag
-            image_tag = attrs.get('Config', {}).get('Image', '')
-            if not image_tag:
-                image_tag = container.image.tags[0] if container.image.tags else container.image.id
-            
-            # Extract port mappings
-            port_mapping = {}
-            if 'NetworkSettings' in attrs:
-                ports = attrs['NetworkSettings'].get('Ports', {})
+            if source_env not in ['dev', 'staging', 'prod']:
+                return {'error': 'source_env must be dev, staging, or prod'}, 400
+
+            def extract_deployment_from_attrs(attrs: dict) -> dict:
+                image_tag = (attrs.get('Config', {}) or {}).get('Image', '') or ''
+                if not image_tag:
+                    image_tag = attrs.get('Image', '') or ''
+
+                port_mapping = {}
+                ports = (attrs.get('NetworkSettings', {}) or {}).get('Ports', {}) or {}
                 for container_port, host_bindings in ports.items():
                     if host_bindings:
-                        port_num = container_port.split('/')[0]
-                        host_port = host_bindings[0].get('HostPort', '')
+                        port_num = str(container_port).split('/')[0]
+                        host_port = (host_bindings[0] or {}).get('HostPort', '') if isinstance(host_bindings, list) else ''
                         if host_port:
                             port_mapping[port_num] = host_port
-            
-            # Extract environment variables
-            environment = {}
-            env_list = attrs.get('Config', {}).get('Env', [])
-            for env_var in env_list:
-                if '=' in env_var:
-                    key, value = env_var.split('=', 1)
-                    environment[key] = value
-            
-            # Extract volumes
-            volumes = {}
-            mounts = attrs.get('Mounts', [])
-            for mount in mounts:
-                source = mount.get('Source', '')
-                destination = mount.get('Destination', '')
-                volume_name = mount.get('Name', '')
-                
-                if destination:
-                    if volume_name:
-                        volumes[volume_name] = destination
-                    elif source and not source.startswith('/var/lib/docker/volumes/'):
-                        volumes[source] = destination
-            
-            # Extract restart policy
-            restart_policy = 'no'
-            host_config = attrs.get('HostConfig', {})
-            restart_policy_config = host_config.get('RestartPolicy', {})
-            if restart_policy_config:
-                restart_policy = restart_policy_config.get('Name', 'no')
-            
-            # Extract network mode
-            network_mode = host_config.get('NetworkMode', 'bridge')
-            if network_mode == 'default':
-                network_mode = 'bridge'
-            
-            # Extract resource limits
-            cpu_limit = None
-            memory_limit = None
-            if 'NanoCpus' in host_config:
-                cpu_limit = str(host_config['NanoCpus'] / 1000000000)
-            if 'Memory' in host_config and host_config['Memory'] > 0:
-                memory_mb = host_config['Memory'] / (1024 * 1024)
-                if memory_mb >= 1024:
-                    memory_limit = f"{int(memory_mb / 1024)}Gi"
-                else:
-                    memory_limit = f"{int(memory_mb)}Mi"
-            
-            # Create deployment config
-            deployment_config = {
-                'deployment': {
+
+                environment = {}
+                env_list = (attrs.get('Config', {}) or {}).get('Env', []) or []
+                for env_var in env_list:
+                    if isinstance(env_var, str) and '=' in env_var:
+                        key, value = env_var.split('=', 1)
+                        environment[key] = value
+
+                volumes = {}
+                mounts = attrs.get('Mounts', []) or []
+                for mount in mounts:
+                    source = mount.get('Source', '')
+                    destination = mount.get('Destination', '')
+                    volume_name = mount.get('Name', '')
+                    if destination:
+                        if volume_name:
+                            volumes[volume_name] = destination
+                        elif source and not str(source).startswith('/var/lib/docker/volumes/'):
+                            volumes[source] = destination
+
+                host_config = attrs.get('HostConfig', {}) or {}
+                restart_policy = 'no'
+                if isinstance(host_config, dict):
+                    restart_policy = (host_config.get('RestartPolicy') or {}).get('Name', 'no')
+
+                network_mode = host_config.get('NetworkMode', 'bridge') if isinstance(host_config, dict) else 'bridge'
+                if network_mode == 'default':
+                    network_mode = 'bridge'
+
+                cpu_limit = None
+                memory_limit = None
+                if isinstance(host_config, dict) and 'NanoCpus' in host_config:
+                    try:
+                        cpu_limit = str(host_config['NanoCpus'] / 1000000000)
+                    except Exception:
+                        pass
+                if isinstance(host_config, dict) and host_config.get('Memory', 0) and host_config.get('Memory', 0) > 0:
+                    try:
+                        memory_mb = host_config['Memory'] / (1024 * 1024)
+                        memory_limit = f"{int(memory_mb / 1024)}Gi" if memory_mb >= 1024 else f"{int(memory_mb)}Mi"
+                    except Exception:
+                        pass
+
+                deployment = {
                     'image_tag': image_tag,
                     'container_name': container_name,
                     'port_mapping': port_mapping,
@@ -3706,12 +3254,56 @@ class PrepareContainerConfig(Resource):
                     'health_check_timeout': 30,
                     'health_check_retries': 10
                 }
-            }
+                if cpu_limit:
+                    deployment['cpu_limit'] = cpu_limit
+                if memory_limit:
+                    deployment['memory_limit'] = memory_limit
+                return deployment
             
-            if cpu_limit:
-                deployment_config['deployment']['cpu_limit'] = cpu_limit
-            if memory_limit:
-                deployment_config['deployment']['memory_limit'] = memory_limit
+            # Inspect the running container on the SOURCE environment server (not target).
+            source_server_id = resolve_server_id_for_env(source_env)
+            source_server_config = get_server_config_by_id(source_server_id)
+
+            attrs = None
+            if source_server_id == 'local':
+                pilot = get_dockerpilot()
+                client = pilot.client
+                try:
+                    container = client.containers.get(container_name)
+                except Exception as e:
+                    if 'NotFound' in str(type(e).__name__):
+                        return {'error': f'Container {container_name} not found on source env {source_env} (local)'}, 404
+                    raise
+                attrs = container.attrs
+                # Fill image tag if missing
+                if not (attrs.get('Config', {}) or {}).get('Image'):
+                    try:
+                        image = container.image
+                        tags = getattr(image, 'tags', None) or []
+                        attrs.setdefault('Config', {})['Image'] = tags[0] if tags else getattr(image, 'id', '')
+                    except Exception:
+                        pass
+            else:
+                import json as _json
+                try:
+                    out = execute_docker_command_via_ssh(
+                        source_server_config,
+                        f"inspect {container_name}",
+                        check_exit_status=True,
+                    )
+                    inspected = _json.loads(out)
+                    attrs = inspected[0] if isinstance(inspected, list) and inspected else inspected
+                except Exception as e:
+                    return {'error': f'Container {container_name} not found or inspect failed on source env {source_env} ({source_server_id}): {e}'}, 404
+            
+            deployment = extract_deployment_from_attrs(attrs or {})
+            
+            # Create deployment config
+            deployment_config = {
+                'deployment': {
+                    **deployment
+                }
+            }
             
             # Environment-specific resource adjustments
             if target_env == 'dev':
@@ -3731,7 +3323,7 @@ class PrepareContainerConfig(Resource):
                         deployment_config['deployment']['memory_limit'] = f"{max(512, mem_mb * 0.5)}Mi"
             
             # Save configuration
-            # image_tag is already extracted above
+            image_tag = deployment.get('image_tag')
             saved_config_path = save_deployment_config(
                 container_name,
                 deployment_config,
@@ -3743,7 +3335,7 @@ class PrepareContainerConfig(Resource):
                 'success': True,
                 'message': f'Konfiguracja utworzona dla środowiska {format_env_name(target_env)}',
                 'container_name': container_name,
-                'image_tag': image_tag,
+                'image_tag': deployment.get('image_tag'),
                 'config_path': str(saved_config_path),
                 'config': deployment_config
             }
@@ -3832,6 +3424,41 @@ class ImportDeploymentConfig(Resource):
         except Exception as e:
             app.logger.error(f"Failed to import deployment config: {e}")
             return {'error': str(e)}, 500
+
+
+class EnvServersMap(Resource):
+    """GET/PUT environment -> server_id mapping (dev/staging/prod each map to a server)."""
+    def get(self):
+        try:
+            cfg = load_env_servers_config()
+            env_servers = cfg.get("env_servers", {}) if isinstance(cfg, dict) else {}
+            return {"success": True, "env_servers": env_servers}
+        except Exception as e:
+            app.logger.error(f"Failed to load env servers map: {e}")
+            return {"success": False, "error": str(e), "env_servers": {}}, 500
+
+    def put(self):
+        try:
+            data = request.get_json() or {}
+            env_servers = data.get("env_servers")
+            if env_servers is not None and not isinstance(env_servers, dict):
+                return {"success": False, "error": "env_servers must be an object"}, 400
+            if env_servers is None:
+                env_servers = {}
+            cfg = load_env_servers_config()
+            if not isinstance(cfg, dict):
+                cfg = {}
+            cfg["env_servers"] = env_servers
+            if not save_env_servers_config(cfg):
+                return {"success": False, "error": "Failed to save config"}, 500
+            # Invalidate environment status cache so next GET uses new mapping
+            global _environment_status_cache
+            _environment_status_cache["data"] = None
+            _environment_status_cache["timestamp"] = None
+            return {"success": True, "env_servers": env_servers}
+        except Exception as e:
+            app.logger.error(f"Failed to save env servers map: {e}")
+            return {"success": False, "error": str(e)}, 500
 
 
 # ==================== SSH SERVER MANAGEMENT ====================
@@ -4758,109 +4385,42 @@ class ContainerMigrate(Resource):
                         update_progress('failed', 0, error_msg)
                         return {'error': error_msg}, 500
                 else:
-                    # Source is remote, target is local - need to download and load image locally
-                    update_progress('transferring', 50, 'Downloading image from remote source...')
+                    # Source is remote, target is local. Image was already downloaded in Step 2 into image_export_path.
+                    # Just load it locally (no second download).
+                    update_progress('loading', 70, 'Loading image on local server...')
                     check_cancel()
                     
-                    # Download image tar from remote source via SCP
-                    import paramiko
-                    from io import BytesIO
-                    ssh = paramiko.SSHClient()
-                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    
                     try:
-                        # Connect to source server
-                        if source_server.get('auth_type') == 'password':
-                            ssh.connect(
-                                source_server.get('hostname'),
-                                port=source_server.get('port', 22),
-                                username=source_server.get('username'),
-                                password=source_server.get('password'),
-                                timeout=30
-                            )
-                        elif source_server.get('auth_type') == 'key':
-                            from io import StringIO
-                            key_file = StringIO(source_server.get('private_key'))
-                            try:
-                                key = paramiko.RSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                            except:
-                                key_file.seek(0)
-                                try:
-                                    key = paramiko.DSSKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                                except:
-                                    key_file.seek(0)
-                                    key = paramiko.ECDSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                            
-                            ssh.connect(
-                                source_server.get('hostname'),
-                                port=source_server.get('port', 22),
-                                username=source_server.get('username'),
-                                pkey=key,
-                                timeout=30
-                            )
+                        if not image_export_path or not os.path.exists(image_export_path.name):
+                            raise Exception('Image tar not available (export from remote may have failed)')
                         
-                        # Download tar file via SFTP
-                        sftp = ssh.open_sftp()
-                        remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                        result = subprocess.run(
+                            ['docker', 'load', '-i', image_export_path.name],
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+                        if result.returncode != 0:
+                            raise Exception(f"Failed to load image: {result.stderr}")
                         
-                        # Create local temp file for download
-                        import tempfile
-                        local_tar_path = tempfile.NamedTemporaryFile(delete=False, suffix='.tar')
-                        local_tar_path.close()
+                        load_output = result.stdout
+                        app.logger.info(f"Image load output: {load_output}")
                         
-                        try:
-                            sftp.get(remote_tar_path, local_tar_path.name)
-                            sftp.close()
-                            ssh.close()
-                            
-                            # Clean up remote tar
-                            execute_command_via_ssh(source_server, f"rm -f {remote_tar_path}", check_exit_status=False)
-                            
-                            # Load image locally
-                            update_progress('loading', 70, 'Loading image on local server...')
-                            check_cancel()
-                            
-                            result = subprocess.run(
-                                ['docker', 'load', '-i', local_tar_path.name],
-                                capture_output=True,
-                                text=True,
-                                timeout=300
-                            )
-                            if result.returncode != 0:
-                                raise Exception(f"Failed to load image: {result.stderr}")
-                            
-                            load_output = result.stdout
-                            app.logger.info(f"Image load output: {load_output}")
-                            
-                            # Verify image was loaded
-                            if 'Loaded image:' in load_output:
-                                for line in load_output.split('\n'):
-                                    if 'Loaded image:' in line:
-                                        loaded_tag = line.split('Loaded image:')[1].strip()
-                                        if loaded_tag:
-                                            app.logger.info(f"Image loaded with tag: {loaded_tag}")
-                                            if export_image_tag not in loaded_tag and container_name in loaded_tag:
-                                                export_image_tag = loaded_tag
-                                            break
-                            
-                            # Clean up local tar
-                            if os.path.exists(local_tar_path.name):
-                                os.unlink(local_tar_path.name)
-                                
-                        except Exception as e:
-                            if os.path.exists(local_tar_path.name):
-                                os.unlink(local_tar_path.name)
-                            raise
+                        # Verify image was loaded
+                        if 'Loaded image:' in load_output:
+                            for line in load_output.split('\n'):
+                                if 'Loaded image:' in line:
+                                    loaded_tag = line.split('Loaded image:')[1].strip()
+                                    if loaded_tag:
+                                        app.logger.info(f"Image loaded with tag: {loaded_tag}")
+                                        if export_image_tag not in loaded_tag and container_name in loaded_tag:
+                                            export_image_tag = loaded_tag
+                                        break
                     except Exception as e:
-                        error_msg = f'Failed to download and load image from remote source: {str(e)}'
-                        app.logger.error(f"Migration error during image download: {error_msg}", exc_info=True)
+                        error_msg = f'Failed to load image from remote export: {str(e)}'
+                        app.logger.error(f"Migration error during image load: {error_msg}", exc_info=True)
                         update_progress('failed', 0, error_msg)
                         return {'error': error_msg}, 500
-                    finally:
-                        try:
-                            ssh.close()
-                        except:
-                            pass
             else:
                 # Target is remote server
                 update_progress('transferring', 50, f'Transferring image to target server {target_server.get("hostname")}...')
@@ -6707,6 +6267,7 @@ api.add_resource(DeploymentProgress, '/api/environment/progress')
 api.add_resource(EnvironmentStatus, '/api/environment/status')
 api.add_resource(PrepareContainerConfig, '/api/environment/prepare-config')
 api.add_resource(ImportDeploymentConfig, '/api/environment/import-config')
+api.add_resource(EnvServersMap, '/api/environment/servers-map')
 api.add_resource(StatusCheck, '/api/status')
 api.add_resource(ContainerList, '/api/containers')
 api.add_resource(DockerImages, '/api/docker/images')

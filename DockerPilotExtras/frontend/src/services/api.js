@@ -51,15 +51,18 @@ export const environmentAPI = {
     container_name: containerName
   }),
   getStatus: () => api.get('/environment/status'),
-  prepareConfig: (containerName, targetEnv) => api.post('/environment/prepare-config', { 
+  prepareConfig: (containerName, targetEnv, sourceEnv = null) => api.post('/environment/prepare-config', { 
     container_name: containerName, 
-    target_env: targetEnv 
+    target_env: targetEnv,
+    source_env: sourceEnv
   }),
   importConfig: (configFilePath, targetEnv, containerName = null) => api.post('/environment/import-config', {
     config_file_path: configFilePath,
     target_env: targetEnv,
     container_name: containerName  // Optional - if provided, will override container_name from file
-  })
+  }),
+  getEnvServersMap: () => api.get('/environment/servers-map'),
+  updateEnvServersMap: (envServers) => api.put('/environment/servers-map', { env_servers: envServers })
 }
 
 // Status API

@@ -61,6 +61,10 @@ function Environments() {
   const [migrationStarted, setMigrationStarted] = useState(false) // Migration polling guard
   const migrationProgressRef = useRef(null)
   const migratingContainerRef = useRef(null)
+  const [envServersMap, setEnvServersMap] = useState({}) // env -> server_id (dev/staging/prod)
+  const [loadingEnvServersMap, setLoadingEnvServersMap] = useState(true)
+  const [savingEnvServersMap, setSavingEnvServersMap] = useState(false)
+  const [envServersMapDraft, setEnvServersMapDraft] = useState({}) // local draft before Save
 
   useEffect(() => {
     migrationProgressRef.current = migrationProgress
@@ -140,7 +144,25 @@ function Environments() {
     
     checkActiveDeployments()
   }, [selectedServer]) // Reload when server changes
-  
+
+  useEffect(() => {
+    const load = async () => {
+      setLoadingEnvServersMap(true)
+      try {
+        const res = await environmentAPI.getEnvServersMap()
+        if (res.data.success && res.data.env_servers) {
+          setEnvServersMap(res.data.env_servers)
+          setEnvServersMapDraft(res.data.env_servers)
+        }
+      } catch (e) {
+        console.error('Failed to load env servers map:', e)
+      } finally {
+        setLoadingEnvServersMap(false)
+      }
+    }
+    load()
+  }, [])
+
   // Poll progress when promoting container
   useEffect(() => {
     if (!promotingContainer) {
@@ -584,8 +606,16 @@ function Environments() {
     }
   }
 
+  const getTargetServerDisplay = (env) => {
+    const serverId = envServersMap[env] || 'local'
+    if (serverId === 'local') return 'Local'
+    const s = (servers || []).find((x) => x.id === serverId)
+    return s ? (s.name || s.hostname || serverId) : serverId
+  }
+
   const handlePromote = async (fromEnv, toEnv) => {
-    if (!window.confirm(`Are you sure you want to promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?`)) {
+    const targetServer = getTargetServerDisplay(toEnv)
+    if (!window.confirm(`Promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?\n\nTarget server: ${targetServer}`)) {
       return
     }
 
@@ -743,7 +773,7 @@ function Environments() {
     
     setPreparingConfig(true)
     try {
-      const response = await environmentAPI.prepareConfig(containerName, selectedEnv)
+      const response = await environmentAPI.prepareConfig(containerName, selectedEnv, selectedEnv)
       if (response.data.success) {
         setMessage({ 
           type: 'success', 
@@ -889,6 +919,24 @@ function Environments() {
     }
   }
 
+  const handlePrepareConfigForEnv = async (containerName) => {
+    if (!selectedEnv) return
+    setLoading({ ...loading, [`prepare_${containerName}`]: true })
+    setMessage(null)
+    try {
+      const res = await environmentAPI.prepareConfig(containerName, selectedEnv, selectedEnv)
+      if (res.data.success) {
+        setMessage({ type: 'success', text: `Configuration for ${containerName} prepared for ${selectedEnv.toUpperCase()}.` })
+      } else {
+        setMessage({ type: 'error', text: res.data.error || 'Failed to prepare config' })
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: e.response?.data?.error || 'Failed to prepare config' })
+    } finally {
+      setLoading((prev) => ({ ...prev, [`prepare_${containerName}`]: false }))
+    }
+  }
+
   const handleStageSingleContainer = async (containerName) => {
     console.log(`[handleStageSingleContainer] Called for ${containerName}`)
     // Determine target environment based on current environment
@@ -906,7 +954,7 @@ function Environments() {
     
     const targetEnv = envFlow[selectedEnv]
     if (!targetEnv) {
-      setMessage({ type: 'error', text: 'Cannot promote from PROD (highest environment)' })
+      setMessage({ type: 'error', text: 'Cannot promote from PROD (highest environment). Use "Prepare config" to generate deployment-prod.yml.' })
       return
     }
     
@@ -1113,9 +1161,13 @@ function Environments() {
   const continuePromotion = async (containerName, selectedEnv, targetEnv, sourceLabel, targetLabel, skipBackup) => {
     console.log(`[continuePromotion] Called for ${containerName}`, { selectedEnv, targetEnv, skipBackup })
     
-    // Final confirmation
+    // Final confirmation (include target server when env->server mapping is used)
+    const targetServerDisplay = envServersMap[targetEnv] ? getTargetServerDisplay(targetEnv) : null
     if (!skipBackup) {
-      const confirmed = window.confirm(`Are you sure you want to promote container ${containerName} from ${sourceLabel} to ${targetLabel}?`)
+      const msg = targetServerDisplay
+        ? `Promote container ${containerName} from ${sourceLabel} to ${targetLabel}?\n\nTarget server: ${targetServerDisplay}`
+        : `Are you sure you want to promote container ${containerName} from ${sourceLabel} to ${targetLabel}?`
+      const confirmed = window.confirm(msg)
       console.log(`[continuePromotion] User confirmed: ${confirmed}`)
       if (!confirmed) {
         console.log(`[continuePromotion] User cancelled, returning`)
@@ -1127,7 +1179,7 @@ function Environments() {
     try {
       console.log(`[continuePromotion] Preparing config for ${containerName} to ${targetEnv}`)
       // First, prepare config for target environment
-      const prepareResponse = await environmentAPI.prepareConfig(containerName, targetEnv)
+      const prepareResponse = await environmentAPI.prepareConfig(containerName, targetEnv, selectedEnv)
       console.log(`[continuePromotion] Prepare config response:`, prepareResponse.data)
       
       if (!prepareResponse.data.success) {
@@ -1488,13 +1540,22 @@ function Environments() {
                 }}></div>
                 <h3 style={{ 
                   color: env.color, 
-                  marginBottom: '0.5rem',
+                  marginBottom: '0.25rem',
                   textShadow: `0 0 10px ${env.color}60`,
                   position: 'relative',
                   zIndex: 1
                 }}>
                   {env.label}
                 </h3>
+                {(() => {
+                  const envData = getEnvironmentData(env.name)
+                  const serverLabel = envData?.server_label || (envData?.server_id === 'local' ? 'Local' : envData?.server_id) || '—'
+                  return (
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem', position: 'relative', zIndex: 1 }}>
+                      Server: {serverLabel}
+                    </p>
+                  )
+                })()}
                 <p style={{ 
                   color: 'var(--text-secondary)', 
                   fontSize: '0.9rem',
@@ -1607,23 +1668,76 @@ function Environments() {
       </div>
 
       <div className="card">
-        <h3 className="card-title">Environment Configuration</h3>
-        <div style={{ 
-          padding: '1rem',
-          backgroundColor: '#f5f5f5',
-          borderRadius: '4px',
-          fontFamily: 'monospace',
-          fontSize: '0.9rem'
-        }}>
-          <p>Environment configuration is managed by DockerPilot.</p>
-          <p>Use the buttons above to promote between environments.</p>
-          <p style={{ marginTop: '1rem', color: '#666' }}>
-            Promotion uses command: <code>dockerpilot promote &lt;from_env&gt; &lt;to_env&gt;</code>
-          </p>
-          <p style={{ marginTop: '1rem', color: '#666' }}>
-            <strong>💡 Tip:</strong> Click an environment tile (DEV/Pre-Prod/PROD) to prepare container configs.
-          </p>
-        </div>
+        <h3 className="card-title">Environment → Server mapping</h3>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          Each environment (DEV / Pre-Prod / PROD) can run on a different server. Promotion deploys to the server assigned to the target environment.
+        </p>
+        {loadingEnvServersMap ? (
+          <p style={{ color: 'var(--text-tertiary)' }}>Loading mapping...</p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+              {environments.map((env) => (
+                <div key={env.name} style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: '600', minWidth: '100px', color: env.color }}>{env.label}</span>
+                  <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                  <select
+                    value={envServersMapDraft[env.name] ?? 'local'}
+                    onChange={(e) => setEnvServersMapDraft((prev) => ({ ...prev, [env.name]: e.target.value || 'local' }))}
+                    style={{
+                      padding: '0.4rem 0.75rem',
+                      borderRadius: '4px',
+                      border: '1px solid var(--border-color)',
+                      backgroundColor: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
+                      minWidth: '180px'
+                    }}
+                  >
+                    <option value="local">Local</option>
+                    {(servers || []).map((s) => (
+                      <option key={s.id} value={s.id}>{s.name || s.hostname || s.id}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                setSavingEnvServersMap(true)
+                try {
+                  const res = await environmentAPI.updateEnvServersMap(envServersMapDraft)
+                  if (res.data.success) {
+                    setEnvServersMap(res.data.env_servers || envServersMapDraft)
+                    setMessage({ type: 'success', text: 'Environment → server mapping saved.' })
+                    await loadEnvironmentsStatus()
+                  } else {
+                    setMessage({ type: 'error', text: res.data.error || 'Failed to save' })
+                  }
+                } catch (e) {
+                  setMessage({ type: 'error', text: e.response?.data?.error || 'Failed to save mapping' })
+                } finally {
+                  setSavingEnvServersMap(false)
+                }
+              }}
+              disabled={savingEnvServersMap}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: savingEnvServersMap ? '#888' : '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: savingEnvServersMap ? 'not-allowed' : 'pointer',
+                fontWeight: '600'
+              }}
+            >
+              {savingEnvServersMap ? 'Saving...' : 'Save mapping'}
+            </button>
+            <p style={{ marginTop: '1rem', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+              💡 Click an environment tile (DEV/Pre-Prod/PROD) to prepare configs or promote a single container.
+            </p>
+          </>
+        )}
       </div>
 
       {/* Container Selection Modal */}
@@ -1827,21 +1941,40 @@ function Environments() {
                             >
                               {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
                             </button>
-                            <button
-                              onClick={() => handleStageSingleContainer(container.name)}
-                              disabled={promotingContainer === container.name}
-                              style={{
-                                padding: '0.5rem 1rem',
-                                backgroundColor: promotingContainer === container.name ? '#6c757d' : '#ffc107',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: promotingContainer === container.name ? 'not-allowed' : 'pointer',
-                                fontWeight: '600'
-                              }}
-                            >
-                              {promotingContainer === container.name ? 'Promoting...' : `🚀 ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
-                            </button>
+                            {selectedEnv === 'prod' ? (
+                              <button
+                                onClick={() => handlePrepareConfigForEnv(container.name)}
+                                disabled={loading[`prepare_${container.name}`]}
+                                style={{
+                                  padding: '0.5rem 1rem',
+                                  backgroundColor: loading[`prepare_${container.name}`] ? '#6c757d' : '#ffc107',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: loading[`prepare_${container.name}`] ? 'not-allowed' : 'pointer',
+                                  fontWeight: '600'
+                                }}
+                                title="Generate deployment-prod.yml for this container"
+                              >
+                                {loading[`prepare_${container.name}`] ? 'Preparing...' : '📋 Prepare config'}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleStageSingleContainer(container.name)}
+                                disabled={promotingContainer === container.name}
+                                style={{
+                                  padding: '0.5rem 1rem',
+                                  backgroundColor: promotingContainer === container.name ? '#6c757d' : '#ffc107',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: promotingContainer === container.name ? 'not-allowed' : 'pointer',
+                                  fontWeight: '600'
+                                }}
+                              >
+                                {promotingContainer === container.name ? 'Promoting...' : `🚀 ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
+                              </button>
+                            )}
                             
                             {promotingContainer === container.name && (
                               <button
