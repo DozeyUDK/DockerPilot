@@ -30,11 +30,12 @@ export const environmentAPI = {
     to_env: toEnv,
     skip_backup: skipBackup 
   }),
-  promoteSingle: (fromEnv, toEnv, containerName, skipBackup = false) => api.post('/environment/promote-single', {
+  promoteSingle: (fromEnv, toEnv, containerName, skipBackup = false, includeData = true) => api.post('/environment/promote-single', {
     from_env: fromEnv,
     to_env: toEnv,
     container_name: containerName,
-    skip_backup: skipBackup
+    skip_backup: skipBackup,
+    include_data: includeData
   }),
   getProgress: (containerName) => api.get('/environment/progress', {
     params: { container_name: containerName }
@@ -126,4 +127,3 @@ export const serversAPI = {
 export const healthCheck = () => api.get('/health')
 
 export default api
-

@@ -1859,7 +1859,7 @@ class EnvironmentPromoteSingle(Resource):
             to_env = data.get('to_env')
             container_name = data.get('container_name')
             skip_backup = data.get('skip_backup', False)
-            include_data = data.get('include_data', False)
+            include_data = data.get('include_data', True)
             stop_source = data.get('stop_source', False)
             
             if not from_env or not to_env or not container_name:
@@ -4775,6 +4775,25 @@ class ContainerMigrate(Resource):
                 )
             except Exception as e:
                 app.logger.warning(f"Failed to check/remove existing container: {e}")
+
+            # Step 4.5: Migrate mounted data (bind mounts + named volumes) when requested
+            if include_data:
+                update_progress('migrating_data', 84, 'Migrating mount data to target server...')
+                check_cancel()
+                try:
+                    self._migrate_mount_data_between_servers(
+                        container_name=container_name,
+                        container_config=container_config,
+                        source_server=source_server if source_server_id != 'local' else None,
+                        target_server=target_server if target_server_id != 'local' else None,
+                        check_cancel=check_cancel,
+                        update_progress=update_progress,
+                    )
+                except Exception as e:
+                    error_msg = f"Data migration failed: {str(e)}"
+                    app.logger.error(error_msg, exc_info=True)
+                    update_progress('failed', 0, error_msg)
+                    return {'error': error_msg}, 500
             
             # Step 5: Pre-flight checks before creating container
             update_progress('validating', 85, 'Validating target server compatibility...')
@@ -5306,6 +5325,7 @@ class ContainerMigrate(Resource):
             'port_mapping': {},
             'environment': {},
             'volumes': {},
+            'mounts': [],
             'restart_policy': 'no',
             'network': 'bridge',
             'cpu_limit': None,
@@ -5365,7 +5385,7 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes (skip host bind mounts during migration)
+        # Extract volumes and mount metadata (both bind mounts and named volumes)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
             mount_type = mount.get('Type', '')
@@ -5374,8 +5394,16 @@ class ContainerMigrate(Resource):
             volume_name = mount.get('Name', '')
             if not destination:
                 continue
+            config['mounts'].append({
+                'type': mount_type,
+                'source': source,
+                'destination': destination,
+                'name': volume_name,
+                'mode': mount.get('Mode', ''),
+            })
             if mount_type == 'bind':
-                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                if source:
+                    config['volumes'][source] = destination
                 continue
             if mount_type == 'volume':
                 volume_source = volume_name or source
@@ -5412,6 +5440,7 @@ class ContainerMigrate(Resource):
             'port_mapping': {},
             'environment': {},
             'volumes': {},
+            'mounts': [],
             'restart_policy': 'no',
             'network': 'bridge',
             'cpu_limit': None,
@@ -5472,7 +5501,7 @@ class ContainerMigrate(Resource):
                 key, value = env_var.split('=', 1)
                 config['environment'][key] = value
         
-        # Extract volumes (skip host bind mounts during migration)
+        # Extract volumes and mount metadata (both bind mounts and named volumes)
         mounts = attrs.get('Mounts', [])
         for mount in mounts:
             mount_type = mount.get('Type', '')
@@ -5481,8 +5510,16 @@ class ContainerMigrate(Resource):
             volume_name = mount.get('Name', '')
             if not destination:
                 continue
+            config['mounts'].append({
+                'type': mount_type,
+                'source': source,
+                'destination': destination,
+                'name': volume_name,
+                'mode': mount.get('Mode', ''),
+            })
             if mount_type == 'bind':
-                config['skipped_bind_mounts'].append({'source': source, 'destination': destination})
+                if source:
+                    config['volumes'][source] = destination
                 continue
             if mount_type == 'volume':
                 volume_source = volume_name or source
@@ -5511,6 +5548,284 @@ class ContainerMigrate(Resource):
         config['privileged'] = host_config.get('Privileged', False)
         
         return config
+
+    def _open_ssh_client_for_transfer(self, server_config):
+        """Open SSH client for SFTP transfers."""
+        import paramiko
+        from io import StringIO
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        hostname = server_config.get('hostname')
+        port = server_config.get('port', 22)
+        username = server_config.get('username')
+        auth_type = server_config.get('auth_type', 'password')
+
+        if auth_type == 'password':
+            ssh.connect(
+                hostname,
+                port=port,
+                username=username,
+                password=server_config.get('password'),
+                timeout=30,
+            )
+        elif auth_type == 'key':
+            key_content = server_config.get('private_key')
+            if not key_content:
+                raise ValueError('Private key required for key authentication')
+            key_passphrase = server_config.get('key_passphrase')
+            key_file = StringIO(key_content)
+            try:
+                key = paramiko.RSAKey.from_private_key(
+                    key_file, password=key_passphrase if key_passphrase else None
+                )
+            except Exception:
+                key_file.seek(0)
+                try:
+                    key = paramiko.DSSKey.from_private_key(
+                        key_file, password=key_passphrase if key_passphrase else None
+                    )
+                except Exception:
+                    key_file.seek(0)
+                    key = paramiko.ECDSAKey.from_private_key(
+                        key_file, password=key_passphrase if key_passphrase else None
+                    )
+            ssh.connect(hostname, port=port, username=username, pkey=key, timeout=30)
+        elif auth_type == '2fa':
+            password = server_config.get('password', '')
+            totp_code = server_config.get('totp_code', '')
+            ssh.connect(
+                hostname,
+                port=port,
+                username=username,
+                password=password + totp_code,
+                timeout=30,
+            )
+        else:
+            raise ValueError(f"Unsupported auth_type: {auth_type}")
+
+        return ssh
+
+    def _download_file_from_server(self, server_config, remote_path: str, local_path: str):
+        """Download file from remote server via SFTP."""
+        ssh = self._open_ssh_client_for_transfer(server_config)
+        try:
+            sftp = ssh.open_sftp()
+            try:
+                sftp.get(remote_path, local_path)
+            finally:
+                sftp.close()
+        finally:
+            ssh.close()
+
+    def _upload_file_to_server(self, server_config, local_path: str, remote_path: str):
+        """Upload file to remote server via SFTP."""
+        ssh = self._open_ssh_client_for_transfer(server_config)
+        try:
+            sftp = ssh.open_sftp()
+            try:
+                sftp.put(local_path, remote_path)
+            finally:
+                sftp.close()
+        finally:
+            ssh.close()
+
+    def _migrate_mount_data_between_servers(
+        self,
+        container_name: str,
+        container_config: dict,
+        source_server,
+        target_server,
+        check_cancel,
+        update_progress,
+    ):
+        """Migrate mount data (bind mounts + named volumes) from source to target server."""
+        import shlex
+        import tempfile
+        import time
+
+        mounts = container_config.get('mounts') or []
+        if not mounts:
+            # Fallback for older configs without mount metadata.
+            mounts = []
+            for source, destination in (container_config.get('volumes') or {}).items():
+                mount_type = 'bind' if str(source).startswith('/') else 'volume'
+                mounts.append(
+                    {
+                        'type': mount_type,
+                        'source': source,
+                        'destination': destination,
+                        'name': source if mount_type == 'volume' else '',
+                    }
+                )
+
+        if not mounts:
+            app.logger.info("No mounts detected for data migration")
+            return
+
+        # Skip dangerous/system bind mounts.
+        bind_skip_prefixes = (
+            '/proc',
+            '/sys',
+            '/dev',
+            '/run',
+            '/var/run',
+            '/etc/hosts',
+            '/etc/hostname',
+            '/etc/resolv.conf',
+            '/etc/localtime',
+            '/etc/timezone',
+            '/var/run/docker.sock',
+        )
+
+        transferable = []
+        for mount in mounts:
+            mount_type = (mount.get('type') or '').strip()
+            source = (mount.get('source') or '').strip()
+            name = (mount.get('name') or '').strip()
+            destination = (mount.get('destination') or '').strip()
+            if not destination:
+                continue
+            if mount_type == 'bind':
+                if not source:
+                    continue
+                if any(source.startswith(prefix) for prefix in bind_skip_prefixes):
+                    app.logger.info(f"Skipping system bind mount during data migration: {source} -> {destination}")
+                    continue
+                transferable.append(mount)
+            elif mount_type == 'volume':
+                if name or source:
+                    transferable.append(mount)
+
+        if not transferable:
+            app.logger.info("No transferable mounts for data migration")
+            return
+
+        total = len(transferable)
+        app.logger.info(f"Migrating data for {total} mount(s) of container {container_name}")
+
+        for idx, mount in enumerate(transferable, start=1):
+            check_cancel()
+            mount_type = (mount.get('type') or '').strip()
+            mount_source = (mount.get('source') or '').strip()
+            mount_name = (mount.get('name') or '').strip()
+            destination = (mount.get('destination') or '').strip()
+            effective_volume = mount_name or mount_source
+
+            stage_msg = f"Migrating data [{idx}/{total}] {mount_type}:{destination}"
+            stage_progress = 84 + int((idx - 1) * 5 / max(total, 1))
+            update_progress('migrating_data', stage_progress, stage_msg)
+
+            ts = int(time.time())
+            safe_container = re.sub(r'[^a-zA-Z0-9_.-]', '_', container_name)
+            local_archive = tempfile.NamedTemporaryFile(
+                delete=False, suffix=f"_{safe_container}_{idx}_{ts}.tar"
+            )
+            local_archive_path = local_archive.name
+            local_archive.close()
+
+            source_remote_archive = f"/tmp/dockerpilot_mount_{safe_container}_{idx}_{ts}.tar"
+            target_remote_archive = f"/tmp/dockerpilot_mount_{safe_container}_{idx}_{ts}.tar"
+
+            try:
+                # 1) Create archive on source side
+                if source_server is None:
+                    source_archive_path = local_archive_path
+                else:
+                    source_archive_path = source_remote_archive
+
+                if mount_type == 'bind':
+                    src_q = shlex.quote(mount_source)
+                    archive_q = shlex.quote(source_archive_path)
+                    create_cmd = (
+                        f"src={src_q}; archive={archive_q}; "
+                        "if [ -d \"$src\" ]; then "
+                        "tar -cpf \"$archive\" -C \"$src\" .; "
+                        "echo '__MOUNT_KIND__:dir'; "
+                        "elif [ -f \"$src\" ]; then "
+                        "tar -cpf \"$archive\" -C \"$(dirname \"$src\")\" \"$(basename \"$src\")\"; "
+                        "echo '__MOUNT_KIND__:file'; "
+                        "else "
+                        "echo \"Bind source path not found: $src\" >&2; exit 1; "
+                        "fi"
+                    )
+                    create_output = execute_command_via_ssh(source_server, create_cmd)
+                    bind_kind = 'file' if '__MOUNT_KIND__:file' in (create_output or '') else 'dir'
+                else:
+                    if not effective_volume:
+                        raise Exception(f"Missing volume name/source for mount {mount}")
+                    vol_q = shlex.quote(effective_volume)
+                    archive_q = shlex.quote(source_archive_path)
+                    create_cmd = (
+                        f"vol={vol_q}; archive={archive_q}; "
+                        "docker run --rm "
+                        "-v \"$vol\":/from:ro "
+                        "alpine sh -c 'cd /from && tar -cpf - .' > \"$archive\""
+                    )
+                    execute_command_via_ssh(source_server, create_cmd)
+
+                # 2) Ensure archive is local (download from source if needed)
+                if source_server is not None:
+                    self._download_file_from_server(source_server, source_archive_path, local_archive_path)
+                    execute_command_via_ssh(
+                        source_server,
+                        f"rm -f {shlex.quote(source_archive_path)}",
+                        check_exit_status=False,
+                    )
+
+                # 3) Place archive on target (upload if remote)
+                if target_server is None:
+                    target_archive_path = local_archive_path
+                else:
+                    target_archive_path = target_remote_archive
+                    self._upload_file_to_server(target_server, local_archive_path, target_archive_path)
+
+                # 4) Restore archive on target mount
+                if mount_type == 'bind':
+                    target_source = mount_source
+                    if bind_kind == 'file':
+                        target_parent = os.path.dirname(target_source) or '/'
+                        target_q = shlex.quote(target_parent)
+                    else:
+                        target_q = shlex.quote(target_source)
+                    archive_q = shlex.quote(target_archive_path)
+                    restore_cmd = (
+                        f"mkdir -p {target_q} && "
+                        f"tar -xpf {archive_q} -C {target_q}"
+                    )
+                    execute_command_via_ssh(target_server, restore_cmd)
+                else:
+                    vol_q = shlex.quote(effective_volume)
+                    archive_q = shlex.quote(target_archive_path)
+                    restore_cmd = (
+                        f"docker volume create {vol_q} >/dev/null 2>&1 || true; "
+                        f"cat {archive_q} | "
+                        "docker run --rm -i "
+                        f"-v {vol_q}:/to "
+                        "alpine sh -c 'cd /to && tar -xpf -'"
+                    )
+                    execute_command_via_ssh(target_server, restore_cmd)
+
+                app.logger.info(
+                    f"Data migration succeeded for mount {idx}/{total}: "
+                    f"type={mount_type}, source={mount_source or effective_volume}, destination={destination}"
+                )
+            finally:
+                try:
+                    if os.path.exists(local_archive_path):
+                        os.unlink(local_archive_path)
+                except Exception:
+                    pass
+                if target_server is not None:
+                    try:
+                        execute_command_via_ssh(
+                            target_server,
+                            f"rm -f {shlex.quote(target_remote_archive)}",
+                            check_exit_status=False,
+                        )
+                    except Exception:
+                        pass
     
     def _get_server_architecture(self, server_config=None):
         """Get CPU architecture of a server (local or remote)"""
