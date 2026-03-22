@@ -73,7 +73,14 @@ def dispatch_cli_args(pilot, args, parser) -> None:
             if not success:
                 sys.exit(1)
         elif args.command == 'build':
-            success = pilot.build_image_standalone(args.dockerfile_path, args.tag, args.no_cache, args.pull)
+            success = pilot.build_image_standalone(
+                args.dockerfile_path,
+                args.tag,
+                args.no_cache,
+                args.pull,
+                getattr(args, 'pull_if_missing', False),
+                getattr(args, 'generate_template', None),
+            )
             if not success:
                 sys.exit(1)
         else:

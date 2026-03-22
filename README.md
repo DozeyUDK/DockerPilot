@@ -300,6 +300,11 @@ dockerpilot container list-images --format json
 dockerpilot build /path/to/dockerfile myapp:latest --no-cache
 ```
 
+If `dockerpilot build` does not find a `Dockerfile` directly in the path you gave it, it now:
+- auto-detects a single local Dockerfile one level below the target directory
+- can pull the requested image tag instead: `dockerpilot build . mongo:latest --pull-if-missing`
+- can generate a starter Dockerfile first: `dockerpilot build . myapp:latest --generate-template python`
+
 Interactive mode:
 ```bash
 dockerpilot

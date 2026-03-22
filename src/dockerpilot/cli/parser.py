@@ -164,10 +164,20 @@ def build_cli_parser() -> argparse.ArgumentParser:
     docs_parser.add_argument('--output', '-o', default='docs', help='Output directory')
 
     build_parser = subparsers.add_parser('build', help='Build Docker image from Dockerfile')
-    build_parser.add_argument('dockerfile_path', help='Path to Dockerfile directory')
+    build_parser.add_argument('dockerfile_path', help='Path to a Dockerfile directory or Dockerfile file')
     build_parser.add_argument('tag', help='Image tag (e.g., myapp:latest)')
     build_parser.add_argument('--no-cache', action='store_true', help='Build without cache')
     build_parser.add_argument('--pull', action='store_true', default=True, help='Pull base image updates')
+    build_parser.add_argument(
+        '--pull-if-missing',
+        action='store_true',
+        help='Pull the requested image tag when no buildable Dockerfile can be found locally',
+    )
+    build_parser.add_argument(
+        '--generate-template',
+        choices=['alpine', 'nginx', 'node', 'python'],
+        help='Create a starter Dockerfile in the target directory if none exists',
+    )
 
     checklist_parser = subparsers.add_parser('checklist', help='Generate production checklist')
     checklist_parser.add_argument('--output', '-o', default='production-checklist.md', help='Output file')

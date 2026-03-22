@@ -199,7 +199,61 @@ def run_interactive_menu(pilot):
                 image_tag = Prompt.ask("Image tag (e.g., myapp:latest)")
                 no_cache = Confirm.ask("Build without cache?", default=False)
                 pull = Confirm.ask("Pull base image updates?", default=True)
-                success = pilot.build_image_standalone(dockerfile_path, image_tag, no_cache, pull)
+                pull_if_missing = False
+                generate_template = None
+                source_info = pilot.inspect_build_source(dockerfile_path)
+
+                if source_info["status"] == "multiple":
+                    pilot.console.print("[yellow]Found multiple local Dockerfile candidates:[/yellow]")
+                    indexed_choices = {}
+                    for index, candidate in enumerate(source_info["candidates"], start=1):
+                        indexed_choices[str(index)] = str(candidate)
+                        pilot.console.print(f"  {index}. {candidate}")
+
+                    choice = Prompt.ask(
+                        "Choose candidate number, or type pull / template / cancel",
+                        choices=[*indexed_choices.keys(), "pull", "template", "cancel"],
+                        default="cancel",
+                    )
+                    if choice in indexed_choices:
+                        dockerfile_path = indexed_choices[choice]
+                    elif choice == "pull":
+                        pull_if_missing = True
+                    elif choice == "template":
+                        generate_template = Prompt.ask(
+                            "Template type",
+                            choices=pilot.get_build_template_choices(),
+                            default="python",
+                        )
+                    else:
+                        pilot.console.print("[yellow]Build cancelled[/yellow]")
+                        continue
+                elif source_info["status"] in {"missing", "invalid"}:
+                    action = Prompt.ask(
+                        "No local Dockerfile is ready. Choose fallback",
+                        choices=["pull", "template", "cancel"],
+                        default="cancel",
+                    )
+                    if action == "pull":
+                        pull_if_missing = True
+                    elif action == "template":
+                        generate_template = Prompt.ask(
+                            "Template type",
+                            choices=pilot.get_build_template_choices(),
+                            default="python",
+                        )
+                    else:
+                        pilot.console.print("[yellow]Build cancelled[/yellow]")
+                        continue
+
+                success = pilot.build_image_standalone(
+                    dockerfile_path,
+                    image_tag,
+                    no_cache,
+                    pull,
+                    pull_if_missing,
+                    generate_template,
+                )
                 if not success:
                     pilot.console.print("[red]Image build failed[/red]")
             elif choice == "json":

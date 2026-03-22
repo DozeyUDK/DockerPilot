@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Optional
 import json
 import os
 import subprocess
@@ -20,6 +20,181 @@ from .models import DeploymentConfig
 
 class DeploymentServiceMixin:
     """Mixin containing deployment/build/promotion logic for DockerPilot."""
+
+    _DOCKERFILE_TEMPLATE_BODIES = {
+        "python": """FROM python:3.12-slim
+WORKDIR /app
+
+COPY requirements*.txt ./
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+
+COPY . .
+
+CMD ["python", "app.py"]
+""",
+        "node": """FROM node:22-alpine
+WORKDIR /app
+
+COPY package*.json ./
+RUN if [ -f package.json ]; then npm install; fi
+
+COPY . .
+
+CMD ["npm", "start"]
+""",
+        "nginx": """FROM nginx:alpine
+
+COPY . /usr/share/nginx/html
+""",
+        "alpine": """FROM alpine:latest
+WORKDIR /app
+
+COPY . .
+
+CMD ["sh"]
+""",
+    }
+
+    def get_build_template_choices(self) -> list[str]:
+        """Return the supported Dockerfile template names."""
+        return sorted(self._DOCKERFILE_TEMPLATE_BODIES.keys())
+
+    def inspect_build_source(self, dockerfile_path: str) -> dict[str, Any]:
+        """Inspect a build source path and report how Dockerfile resolution will behave."""
+        requested_path = Path(dockerfile_path).expanduser()
+        if not requested_path.is_absolute():
+            requested_path = Path.cwd() / requested_path
+        requested_path = requested_path.resolve(strict=False)
+
+        if requested_path.is_file():
+            if self._is_dockerfile_candidate(requested_path):
+                return {
+                    "status": "ready",
+                    "requested_path": requested_path,
+                    "context_path": requested_path.parent,
+                    "dockerfile_name": requested_path.name,
+                    "selected_path": requested_path,
+                    "auto_detected": False,
+                    "candidates": [requested_path],
+                    "message": f"Using Dockerfile file {requested_path}.",
+                }
+            return {
+                "status": "invalid",
+                "requested_path": requested_path,
+                "context_path": requested_path.parent,
+                "dockerfile_name": requested_path.name,
+                "selected_path": None,
+                "auto_detected": False,
+                "candidates": [],
+                "message": f"{requested_path} is a file, but it does not look like a Dockerfile.",
+            }
+
+        explicit_dockerfile = requested_path / "Dockerfile"
+        if explicit_dockerfile.exists():
+            return {
+                "status": "ready",
+                "requested_path": requested_path,
+                "context_path": requested_path,
+                "dockerfile_name": "Dockerfile",
+                "selected_path": explicit_dockerfile,
+                "auto_detected": False,
+                "candidates": [explicit_dockerfile],
+                "message": f"Using Dockerfile at {explicit_dockerfile}.",
+            }
+
+        candidates = self._discover_dockerfile_candidates(requested_path)
+        if len(candidates) == 1:
+            candidate = candidates[0]
+            return {
+                "status": "ready",
+                "requested_path": requested_path,
+                "context_path": candidate.parent,
+                "dockerfile_name": candidate.name,
+                "selected_path": candidate,
+                "auto_detected": True,
+                "candidates": candidates,
+                "message": f"No Dockerfile found directly in {requested_path}. Auto-detected {candidate}.",
+            }
+
+        if len(candidates) > 1:
+            return {
+                "status": "multiple",
+                "requested_path": requested_path,
+                "context_path": requested_path,
+                "dockerfile_name": None,
+                "selected_path": None,
+                "auto_detected": False,
+                "candidates": candidates,
+                "message": f"Found multiple Dockerfile candidates under {requested_path}.",
+            }
+
+        return {
+            "status": "missing",
+            "requested_path": requested_path,
+            "context_path": requested_path,
+            "dockerfile_name": None,
+            "selected_path": None,
+            "auto_detected": False,
+            "candidates": [],
+            "message": f"No Dockerfile found in {requested_path}.",
+        }
+
+    def _is_dockerfile_candidate(self, candidate: Path) -> bool:
+        """Return True if the filename matches a Dockerfile-style pattern."""
+        lowered = candidate.name.lower()
+        return lowered == "dockerfile" or lowered.startswith("dockerfile.")
+
+    def _discover_dockerfile_candidates(self, search_root: Path) -> list[Path]:
+        """Search for Dockerfile-like files in the directory and one level below it."""
+        if not search_root.exists() or not search_root.is_dir():
+            return []
+
+        candidates: list[Path] = []
+        seen: set[Path] = set()
+
+        def add_candidate(candidate: Path) -> None:
+            resolved = candidate.resolve(strict=False)
+            if resolved in seen or not candidate.is_file() or not self._is_dockerfile_candidate(candidate):
+                return
+            seen.add(resolved)
+            candidates.append(candidate)
+
+        for child in sorted(search_root.iterdir(), key=lambda item: item.name.lower()):
+            if child.is_file():
+                add_candidate(child)
+
+        for child in sorted(search_root.iterdir(), key=lambda item: item.name.lower()):
+            if not child.is_dir():
+                continue
+            for nested in sorted(child.iterdir(), key=lambda item: item.name.lower()):
+                if nested.is_file():
+                    add_candidate(nested)
+
+        return candidates
+
+    def create_dockerfile_template(self, destination: str, template_name: str) -> bool:
+        """Create a starter Dockerfile in the requested directory."""
+        template_body = self._DOCKERFILE_TEMPLATE_BODIES.get(template_name)
+        if not template_body:
+            self.console.print(f"[red]Unknown Dockerfile template: {template_name}[/red]")
+            return False
+
+        destination_path = Path(destination).expanduser()
+        if not destination_path.is_absolute():
+            destination_path = Path.cwd() / destination_path
+        if destination_path.suffix or self._is_dockerfile_candidate(destination_path):
+            destination_path = destination_path.parent
+        destination_path.mkdir(parents=True, exist_ok=True)
+
+        dockerfile_path = destination_path / "Dockerfile"
+        if dockerfile_path.exists():
+            self.console.print(f"[yellow]Dockerfile already exists at {dockerfile_path}[/yellow]")
+            return False
+
+        dockerfile_path.write_text(template_body, encoding="utf-8")
+        self.console.print(f"[green]✅ Created {template_name} Dockerfile template at {dockerfile_path}[/green]")
+        self.logger.info(f"Created Dockerfile template '{template_name}' at {dockerfile_path}")
+        return True
 
     def create_deployment_config(self, config_path: str = "deployment.yml") -> bool:
         """Create deployment configuration template from file"""
@@ -1293,29 +1468,40 @@ class DeploymentServiceMixin:
     def _build_image_enhanced(self, image_tag: str, build_config: dict) -> bool:
         """Enhanced image building with advanced features"""
         dockerfile_path = build_config.get('dockerfile_path', '.')
-        context = build_config.get('context', '.')
         no_cache = build_config.get('no_cache', False)
         pull = build_config.get('pull', True)
         build_args = build_config.get('build_args', {})
         
         try:
-            # Validate Dockerfile exists
-            dockerfile = Path(dockerfile_path) / "Dockerfile"
-            if not dockerfile.exists():
-                self.console.print(f"[bold red]❌ Dockerfile not found at {dockerfile}[/bold red]")
+            source_info = self.inspect_build_source(dockerfile_path)
+            if source_info["status"] != "ready":
+                self.console.print(f"[bold red]❌ {source_info['message']}[/bold red]")
+                if source_info["status"] == "multiple":
+                    self.console.print("[yellow]Select one of these paths explicitly:[/yellow]")
+                    for candidate in source_info["candidates"]:
+                        self.console.print(f"  - {candidate}")
                 return False
+
+            context = source_info["context_path"]
+            dockerfile = source_info["selected_path"]
+            dockerfile_name = source_info["dockerfile_name"]
+
+            if source_info["auto_detected"]:
+                self.console.print(f"[yellow]Auto-detected Dockerfile: {dockerfile}[/yellow]")
             
             # Build with enhanced logging
-            self.logger.info(f"Building image {image_tag} from {dockerfile_path}")
+            self.logger.info(f"Building image {image_tag} from {context} using {dockerfile_name}")
             
             build_kwargs = {
-                'path': context,
+                'path': str(context),
                 'tag': image_tag,
                 'rm': True,
                 'nocache': no_cache,
                 'pull': pull,
                 'buildargs': build_args
             }
+            if dockerfile_name and dockerfile_name != "Dockerfile":
+                build_kwargs['dockerfile'] = dockerfile_name
             
             # Show loading indicator during build
             with self._with_loading("Building image"):
@@ -1341,17 +1527,58 @@ class DeploymentServiceMixin:
             self.logger.error(f"Unexpected build error: {e}")
             return False
         
-    def build_image_standalone(self, dockerfile_path: str, tag: str, no_cache: bool = False, pull: bool = True) -> bool:
+    def build_image_standalone(
+        self,
+        dockerfile_path: str,
+        tag: str,
+        no_cache: bool = False,
+        pull: bool = True,
+        pull_if_missing: bool = False,
+        generate_template: Optional[str] = None,
+    ) -> bool:
         """Standalone image building function"""
+        source_info = self.inspect_build_source(dockerfile_path)
+
+        if source_info["status"] != "ready":
+            self.console.print(f"[yellow]{source_info['message']}[/yellow]")
+            if source_info["status"] == "multiple":
+                self.console.print("[yellow]Available Dockerfile candidates:[/yellow]")
+                for candidate in source_info["candidates"]:
+                    self.console.print(f"  - {candidate}")
+
+            if generate_template:
+                created = self.create_dockerfile_template(str(source_info["requested_path"]), generate_template)
+                if created:
+                    source_info = self.inspect_build_source(dockerfile_path)
+
+            if source_info["status"] != "ready" and pull_if_missing:
+                try:
+                    self.console.print(f"[cyan]Pulling image {tag} from registry...[/cyan]")
+                    self.client.images.pull(tag)
+                    self.console.print(f"[green]✅ Pulled image {tag} successfully[/green]")
+                    self.logger.info(f"Pulled image {tag} because no buildable Dockerfile was available")
+                    return True
+                except Exception as exc:
+                    self.console.print(f"[red]❌ Failed to pull image {tag}: {exc}[/red]")
+                    self.logger.error(f"Failed to pull image {tag}: {exc}")
+                    return False
+
+            if source_info["status"] != "ready":
+                self.console.print("[yellow]Hints:[/yellow]")
+                self.console.print("  - point build at a directory or file that contains a Dockerfile")
+                self.console.print(f"  - rerun with --pull-if-missing to pull {tag} from a registry instead")
+                self.console.print(f"  - rerun with --generate-template {{{', '.join(self.get_build_template_choices())}}} to create a starter Dockerfile")
+                return False
+
         build_config = {
-            'dockerfile_path': dockerfile_path,
-            'context': dockerfile_path,
+            'dockerfile_path': str(source_info["selected_path"]),
+            'context': str(source_info["context_path"]),
             'no_cache': no_cache,
             'pull': pull,
             'build_args': {}
         }
 
-        self.console.print(f"[cyan]Building image {tag} from {dockerfile_path}...[/cyan]")
+        self.console.print(f"[cyan]Building image {tag} from {source_info['context_path']}...[/cyan]")
 
         success = self._build_image_enhanced(tag, build_config)
 

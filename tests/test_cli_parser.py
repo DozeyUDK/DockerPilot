@@ -26,3 +26,15 @@ def test_parser_accepts_pipeline_create_command():
     assert args.command == "pipeline"
     assert args.pipeline_action == "create"
     assert args.type == "github"
+
+
+def test_parser_accepts_build_fallback_flags():
+    args = build_cli_parser().parse_args(
+        ["build", ".", "mongo:latest", "--pull-if-missing", "--generate-template", "python"]
+    )
+
+    assert args.command == "build"
+    assert args.dockerfile_path == "."
+    assert args.tag == "mongo:latest"
+    assert args.pull_if_missing is True
+    assert args.generate_template == "python"
