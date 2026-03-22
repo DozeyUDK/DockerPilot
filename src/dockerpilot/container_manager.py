@@ -157,7 +157,10 @@ class ContainerManager:
             
             try:
                 result = operations[operation](container_name, **kwargs)
-                progress.update(task, description=f"✅ Container {container_name} {operation}ed successfully")
+                if result:
+                    progress.update(task, description=f"✅ Container {container_name} {operation}ed successfully")
+                else:
+                    progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
                 return result
             except Exception as e:
                 progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
@@ -481,4 +484,3 @@ class ContainerManager:
             self.console.print(f"[red]Container '{container_name}' not found[/red]")
         except Exception as e:
             self.console.print(f"[red]Error fetching JSON for container '{container_name}': {e}[/red]")
-

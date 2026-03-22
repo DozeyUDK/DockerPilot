@@ -121,6 +121,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     quick_deploy_parser.add_argument('--no-cleanup', action='store_true', help='Do not remove old image')
 
     subparsers.add_parser('validate', help='Validate system requirements')
+    subparsers.add_parser('tui', help='Launch mouse-friendly terminal UI')
 
     backup_parser = subparsers.add_parser('backup', help='Backup and restore operations')
     backup_subparsers = backup_parser.add_subparsers(dest='backup_action')

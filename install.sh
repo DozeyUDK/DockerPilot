@@ -3,15 +3,26 @@
 # Docker Pilot - One-Click Installation Script
 # Supports Linux and macOS
 # Default: installs in a venv (avoids PEP 668 "externally-managed-environment" on Ubuntu/Debian 24.04+)
-# Use: ./install.sh --system  for system-wide install (e.g. if you develop the app)
+# Use:
+#   ./install.sh                -> CLI only
+#   ./install.sh --system       -> CLI only, system-wide
+#   ./install.sh --extras       -> CLI + DockerPilotExtras
+#   ./install_everything.sh     -> wrapper for full stack install
 
 set -e
 
 INSTALL_SYSTEM=false
+INSTALL_EXTRAS=false
 for arg in "$@"; do
     if [ "$arg" = "--system" ]; then
         INSTALL_SYSTEM=true
-        break
+    elif [ "$arg" = "--extras" ]; then
+        INSTALL_EXTRAS=true
+    elif [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
+        echo "Usage: ./install.sh [--system] [--extras]"
+        echo "  --system  Install DockerPilot CLI system-wide"
+        echo "  --extras  Also install DockerPilotExtras backend/frontend dependencies"
+        exit 0
     fi
 done
 
@@ -24,6 +35,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+
+if [ "$INSTALL_EXTRAS" = true ]; then
+    echo "📦 Full stack mode enabled: DockerPilot CLI + DockerPilotExtras"
+    echo ""
+fi
 
 # Check Python version
 echo "📋 Checking prerequisites..."
@@ -119,14 +135,30 @@ else
     echo -e "${YELLOW}⚠️  Try: $DOCKERPILOT_CMD --help${NC}"
 fi
 
+if [ "$INSTALL_EXTRAS" = true ]; then
+    echo ""
+    echo "🌐 Installing DockerPilotExtras..."
+    if [ ! -x "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh" ]; then
+        chmod +x "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh"
+    fi
+    "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh"
+    echo -e "${GREEN}✅ DockerPilotExtras setup completed${NC}"
+fi
+
 echo ""
 echo "🚀 Quick Start:"
 echo "   $DOCKERPILOT_CMD                    # Interactive mode"
 echo "   $DOCKERPILOT_CMD --help             # Show help"
 echo "   $DOCKERPILOT_CMD validate           # Check system"
+echo "   $DOCKERPILOT_CMD tui                # Mouse-friendly TUI"
 if [ "$INSTALL_SYSTEM" != true ]; then
     echo ""
     echo "   (venv is in: $VENV_DIR)"
+fi
+if [ "$INSTALL_EXTRAS" = true ]; then
+    echo ""
+    echo "🌐 DockerPilotExtras:"
+    echo "   cd DockerPilotExtras && .venv/bin/python loader.py"
 fi
 echo ""
 echo "📚 Documentation: README.md"
@@ -146,4 +178,3 @@ fi
 
 echo ""
 echo "🎉 Setup complete! Happy deploying!"
-

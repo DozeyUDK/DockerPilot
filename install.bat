@@ -2,11 +2,18 @@
 REM Docker Pilot - One-Click Installation Script for Windows
 REM PowerShell/CMD compatible
 
+set INSTALL_EXTRAS=0
+if /i "%~1"=="extras" set INSTALL_EXTRAS=1
+
 echo.
 echo ====================================
 echo  Docker Pilot Installation Script
 echo ====================================
 echo.
+if "%INSTALL_EXTRAS%"=="1" (
+    echo [*] Full stack mode enabled: DockerPilot CLI + DockerPilotExtras
+    echo.
+)
 
 REM Check Python
 echo [*] Checking prerequisites...
@@ -77,6 +84,16 @@ echo Quick Start:
 echo   dockerpilot                    # Interactive mode
 echo   dockerpilot --help             # Show help
 echo   dockerpilot validate           # Check system
+echo   dockerpilot tui                # Mouse-friendly TUI
+if "%INSTALL_EXTRAS%"=="1" (
+    echo.
+    echo DockerPilotExtras:
+    echo   cd DockerPilotExtras
+    echo   python -m venv .venv
+    echo   .venv\Scripts\pip install -r requirements.txt
+    echo   cd frontend ^&^& npm install ^&^& cd ..
+    echo   .venv\Scripts\python loader.py
+)
 echo.
 echo Documentation: README.md
 echo.
@@ -86,6 +103,49 @@ set /p INSTALL_GIT="Install GitPython for Git integration? (y/N): "
 if /i "%INSTALL_GIT%"=="y" (
     pip install GitPython
     echo [OK] GitPython installed
+)
+
+if "%INSTALL_EXTRAS%"=="1" (
+    echo.
+    echo [*] Installing DockerPilotExtras backend dependencies...
+    pushd DockerPilotExtras
+    python -m venv .venv
+    if errorlevel 1 (
+        echo [ERROR] Failed to create DockerPilotExtras virtual environment
+        popd
+        exit /b 1
+    )
+    .venv\Scripts\python -m pip install -r requirements.txt
+    if errorlevel 1 (
+        echo [ERROR] Failed to install DockerPilotExtras Python dependencies
+        popd
+        exit /b 1
+    )
+
+    node --version >nul 2>&1
+    if errorlevel 1 (
+        echo [WARNING] Node.js/npm not found. DockerPilotExtras frontend dependencies were not installed.
+        echo           Install Node.js 18+ and run: cd DockerPilotExtras\frontend ^&^& npm install
+    ) else (
+        npm --version >nul 2>&1
+        if errorlevel 1 (
+            echo [WARNING] npm not found. DockerPilotExtras frontend dependencies were not installed.
+            echo           Install Node.js 18+ and run: cd DockerPilotExtras\frontend ^&^& npm install
+        ) else (
+            echo [*] Installing DockerPilotExtras frontend dependencies...
+            pushd frontend
+            npm install
+            if errorlevel 1 (
+                echo [ERROR] Failed to install DockerPilotExtras frontend dependencies
+                popd
+                popd
+                exit /b 1
+            )
+            popd
+        )
+    )
+    popd
+    echo [OK] DockerPilotExtras setup completed
 )
 
 echo.

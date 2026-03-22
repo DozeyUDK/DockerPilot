@@ -7,7 +7,41 @@
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
 
-## Quick Install (One-Click)
+## Full Stack Install (CLI + DockerPilotExtras)
+
+Use this when you want the DockerPilot CLI and the optional DockerPilotExtras web panel on the same machine.
+
+### Linux/macOS
+```bash
+git clone https://github.com/DozeyUDK/DockerPilot.git
+cd DockerPilot && chmod +x install_everything.sh && ./install_everything.sh
+```
+
+### Windows (PowerShell)
+```powershell
+git clone https://github.com/DozeyUDK/DockerPilot.git
+cd DockerPilot
+powershell -ExecutionPolicy Bypass -File install.ps1 -Extras
+```
+
+### Windows (CMD)
+```cmd
+git clone https://github.com/DozeyUDK/DockerPilot.git
+cd DockerPilot && install.bat extras
+```
+
+**What full stack install does:**
+- installs DockerPilot CLI
+- installs DockerPilotExtras backend Python dependencies
+- installs DockerPilotExtras frontend dependencies with `npm install` if Node.js and npm are already available
+- leaves DockerPilotExtras frontend install as a clear warning if Node.js/npm are missing
+
+**Requirements for full stack install:**
+- Python 3.9+
+- Docker 20.10+
+- Node.js 18+ and npm for the DockerPilotExtras frontend
+
+## Quick Install (CLI Only)
 
 ### Linux/macOS
 ```bash
@@ -37,6 +71,8 @@ cd DockerPilot && install.bat
 **Install options:**
 - `./install.sh` — install in venv (recommended for most users)
 - `./install.sh --system` — install system-wide (e.g. if you develop Docker Pilot)
+- `./install.sh --extras` — install CLI plus DockerPilotExtras
+- `./install_everything.sh` — wrapper for `./install.sh --extras`
 
 **Prerequisites:**
 - Python 3.9+
@@ -68,12 +104,19 @@ pip install -e . --break-system-packages
 ```bash
 pip install -e .[git]   # Git integration for CI/CD
 pip install -e .[test]  # Development dependencies
+pip install -e .[tui]   # Mouse-friendly terminal UI
 ```
 
 **Verify installation:**
 ```bash
 dockerpilot --help
 dockerpilot validate  # Check system requirements
+```
+
+**Install DockerPilotExtras later:**
+```bash
+cd DockerPilotExtras
+chmod +x setup_extras.sh && ./setup_extras.sh
 ```
 
 ---
@@ -142,6 +185,21 @@ Select from available commands:
 - `deploy-init` - Create deployment config
 - And many more...
 
+### Mouse-Friendly TUI
+
+Install the optional TUI extra and launch the clickable terminal UI:
+
+```bash
+pip install -e .[tui]
+dockerpilot tui
+```
+
+Use the mouse to:
+- click through command groups and subcommands
+- fill arguments in a form instead of retyping flags
+- pick existing containers and images from live Docker-backed lists for target-based commands
+- run the generated command directly from the TUI
+
 ### Usage
 
 After installation, the `dockerpilot` command is available globally:
@@ -149,6 +207,9 @@ After installation, the `dockerpilot` command is available globally:
 ```bash
 # Interactive mode
 dockerpilot
+
+# Mouse-friendly TUI
+dockerpilot tui
 
 # CLI commands
 dockerpilot container list --all
@@ -162,7 +223,7 @@ dockerpilot --help
 If `pip install -e .` was used, the command is automatically available. Otherwise, you can run:
 
 ```bash
-python -m dockerpilot
+python -m dockerpilot.main
 ```
 
 ## Container Management

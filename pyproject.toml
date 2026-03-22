@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 git = ["GitPython>=3.1.0"]
 test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+tui = ["textual>=0.89.0,<1.0.0"]
 
 [project.scripts]
 dockerpilot = "dockerpilot.main:main"

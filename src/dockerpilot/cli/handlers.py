@@ -4,6 +4,7 @@ import sys
 
 from .interactive import run_interactive_menu
 from .parser import build_cli_parser
+from .tui import run_tui
 
 
 def run_cli(pilot) -> None:
@@ -15,6 +16,11 @@ def run_cli(pilot) -> None:
 
     parser = build_cli_parser()
     args = parser.parse_args()
+    dispatch_cli_args(pilot, args, parser)
+
+
+def dispatch_cli_args(pilot, args, parser) -> None:
+    """Dispatch already-parsed CLI arguments."""
     has_container_action = hasattr(args, 'container_action') and args.container_action is not None
 
     if not args.command and not has_container_action:
@@ -22,7 +28,9 @@ def run_cli(pilot) -> None:
         return
 
     try:
-        if args.command == 'container' or has_container_action:
+        if args.command == 'tui':
+            run_tui(pilot, parser)
+        elif args.command == 'container' or has_container_action:
             handle_container_cli(pilot, args)
         elif args.command == 'monitor':
             handle_monitor_cli(pilot, args)
