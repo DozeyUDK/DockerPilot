@@ -371,26 +371,29 @@ def build_python_cli_invocation(argv: List[str]) -> List[str]:
     return [sys.executable, "-m", "dockerpilot.main", *argv]
 
 
-def build_external_terminal_launch(argv: List[str]) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Build a platform-specific launcher command for a new terminal window."""
+def build_external_terminal_launches(argv: List[str]) -> List[Tuple[List[str], str]]:
+    """Build platform-specific launcher commands for a new terminal window."""
     command_argv = build_python_cli_invocation(argv)
 
     if os.name == "nt":
-        return command_argv, "Windows console"
+        return [(command_argv, "Windows console")]
 
     if sys.platform == "darwin":
         command_string = shlex.join(command_argv)
-        return [
-            "osascript",
-            "-e",
-            f'tell application "Terminal" to do script {command_string!r}',
-            "-e",
-            'tell application "Terminal" to activate',
-        ], "Terminal.app"
+        return [(
+            [
+                "osascript",
+                "-e",
+                f'tell application "Terminal" to do script {command_string!r}',
+                "-e",
+                'tell application "Terminal" to activate',
+            ],
+            "Terminal.app",
+        )]
 
     terminal_candidates = [
-        ("x-terminal-emulator", "--", "system terminal"),
         ("gnome-terminal", "--", "GNOME Terminal"),
+        ("x-terminal-emulator", "-e", "system terminal"),
         ("xfce4-terminal", "-e", "Xfce Terminal"),
         ("konsole", "-e", "Konsole"),
         ("kitty", "-e", "Kitty"),
@@ -401,48 +404,68 @@ def build_external_terminal_launch(argv: List[str]) -> Tuple[Optional[List[str]]
         ("xterm", "-e", "xterm"),
     ]
 
+    launchers: List[Tuple[List[str], str]] = []
     for executable, mode, label in terminal_candidates:
         resolved = shutil.which(executable)
         if not resolved:
             continue
         if mode == "--":
-            return [resolved, "--", *command_argv], label
-        if mode == "-e":
-            return [resolved, "-e", *command_argv], label
-        if mode == "start":
-            return [resolved, "start", "--always-new-process", *command_argv], label
+            launchers.append(([resolved, "--", *command_argv], label))
+        elif mode == "-e":
+            launchers.append(([resolved, "-e", *command_argv], label))
+        elif mode == "start":
+            launchers.append(([resolved, "start", "--always-new-process", *command_argv], label))
 
-    return None, None
+    return launchers
+
+
+def build_external_terminal_launch(argv: List[str]) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Return the preferred external terminal launcher for compatibility with existing tests."""
+    launches = build_external_terminal_launches(argv)
+    if not launches:
+        return None, None
+    return launches[0]
 
 
 def launch_external_terminal(argv: List[str]) -> Tuple[bool, str]:
     """Launch a DockerPilot command in a new terminal window."""
-    launch_command, label = build_external_terminal_launch(argv)
-    if not launch_command:
+    launches = build_external_terminal_launches(argv)
+    if not launches:
         return False, (
             "No supported terminal emulator was found. "
             "Install a terminal like gnome-terminal, xterm, kitty, or run the command manually."
         )
 
-    try:
-        if os.name == "nt":
-            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            subprocess.Popen(
-                launch_command,
-                cwd=os.getcwd(),
-                creationflags=creationflags,
-            )
-        else:
-            subprocess.Popen(
+    errors: List[str] = []
+    for launch_command, label in launches:
+        try:
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                process = subprocess.Popen(
+                    launch_command,
+                    cwd=os.getcwd(),
+                    creationflags=creationflags,
+                )
+                return True, f"Opened interactive command in {label or 'a new terminal window'}."
+
+            process = subprocess.Popen(
                 launch_command,
                 cwd=os.getcwd(),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        return True, f"Opened interactive command in {label or 'a new terminal window'}."
-    except Exception as exc:
-        return False, f"Failed to open a new terminal window: {exc}"
+            process.wait(timeout=0.4)
+            if process.returncode == 0:
+                return True, f"Opened interactive command in {label or 'a new terminal window'}."
+            errors.append(f"{label}: exit {process.returncode}")
+        except subprocess.TimeoutExpired:
+            return True, f"Opened interactive command in {label or 'a new terminal window'}."
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+
+    error_details = "; ".join(errors) if errors else "unknown error"
+    return False, f"Failed to open a new terminal window. Tried: {error_details}"
 
 
 def capture_cli_execution(
