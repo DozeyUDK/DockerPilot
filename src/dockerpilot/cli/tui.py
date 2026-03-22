@@ -10,7 +10,7 @@ import shlex
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 
 @dataclass(slots=True)
@@ -20,19 +20,19 @@ class ArgumentSpec:
     dest: str
     label: str
     help_text: str
-    option_strings: tuple[str, ...]
+    option_strings: Tuple[str, ...]
     required: bool
     positional: bool
     default: Any
-    choices: tuple[str, ...] = ()
-    nargs: str | int | None = None
-    metavar: str | None = None
+    choices: Tuple[str, ...] = ()
+    nargs: Optional[Union[str, int]] = None
+    metavar: Optional[str] = None
     is_bool: bool = False
     bool_flag_value: bool = True
     multiple: bool = False
 
     @property
-    def primary_flag(self) -> str | None:
+    def primary_flag(self) -> Optional[str]:
         """Return the preferred option flag for command serialization."""
         return self.option_strings[0] if self.option_strings else None
 
@@ -42,10 +42,10 @@ class CommandNode:
     """Recursive command tree used by the TUI."""
 
     name: str
-    path: tuple[str, ...]
+    path: Tuple[str, ...]
     help_text: str
-    arguments: list[ArgumentSpec] = field(default_factory=list)
-    children: list["CommandNode"] = field(default_factory=list)
+    arguments: List[ArgumentSpec] = field(default_factory=list)
+    children: List["CommandNode"] = field(default_factory=list)
 
     @property
     def is_leaf(self) -> bool:
@@ -91,11 +91,11 @@ def _default_value(action: argparse.Action) -> Any:
 def collect_argument_specs(
     parser: argparse.ArgumentParser,
     *,
-    exclude_dests: set[str] | None = None,
-) -> list[ArgumentSpec]:
+    exclude_dests: Optional[Set[str]] = None,
+) -> List[ArgumentSpec]:
     """Build renderable argument specs for a parser."""
     exclude = exclude_dests or set()
-    specs: list[ArgumentSpec] = []
+    specs: List[ArgumentSpec] = []
 
     for action in parser._actions:
         if _is_help_action(action) or _is_subparsers_action(action):
@@ -144,13 +144,13 @@ def collect_argument_specs(
 def build_command_tree(
     parser: argparse.ArgumentParser,
     *,
-    exclude_commands: set[str] | None = None,
-) -> list[CommandNode]:
+    exclude_commands: Optional[Set[str]] = None,
+) -> List[CommandNode]:
     """Extract command/subcommand hierarchy from argparse definitions."""
     exclude = exclude_commands or set()
-    nodes: list[CommandNode] = []
+    nodes: List[CommandNode] = []
 
-    def build_nodes(current_parser: argparse.ArgumentParser, path: tuple[str, ...]) -> list[CommandNode]:
+    def build_nodes(current_parser: argparse.ArgumentParser, path: Tuple[str, ...]) -> List[CommandNode]:
         subparser_action = next(
             (action for action in current_parser._actions if _is_subparsers_action(action)),
             None,
@@ -158,11 +158,11 @@ def build_command_tree(
         if not subparser_action:
             return []
 
-        help_by_name: dict[str, str] = {}
+        help_by_name: Dict[str, str] = {}
         for choice_action in getattr(subparser_action, "_choices_actions", []):
             help_by_name[choice_action.dest] = getattr(choice_action, "help", "") or ""
 
-        children: list[CommandNode] = []
+        children: List[CommandNode] = []
         for command_name, child_parser in subparser_action.choices.items():
             if not path and command_name in exclude:
                 continue
@@ -190,7 +190,7 @@ def build_command_tree(
     return nodes
 
 
-def split_multi_value(raw_value: Any) -> list[str]:
+def split_multi_value(raw_value: Any) -> List[str]:
     """Normalize multiline or shell-style values into argv tokens."""
     if raw_value is None:
         return []
@@ -212,9 +212,9 @@ def _should_emit_bool(spec: ArgumentSpec, value: bool) -> bool:
     return not value
 
 
-def serialize_argument_values(arguments: list[ArgumentSpec], values: dict[str, Any]) -> list[str]:
+def serialize_argument_values(arguments: List[ArgumentSpec], values: Dict[str, Any]) -> List[str]:
     """Serialize collected TUI values into CLI argv tokens."""
-    argv: list[str] = []
+    argv: List[str] = []
 
     for spec in arguments:
         value = values.get(spec.dest, spec.default)
@@ -257,13 +257,13 @@ def serialize_argument_values(arguments: list[ArgumentSpec], values: dict[str, A
 
 def build_command_argv(
     command: CommandNode,
-    values: dict[str, Any],
+    values: Dict[str, Any],
     *,
-    global_arguments: list[ArgumentSpec] | None = None,
-    global_values: dict[str, Any] | None = None,
-) -> list[str]:
+    global_arguments: Optional[List[ArgumentSpec]] = None,
+    global_values: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """Construct argv for a selected command."""
-    argv: list[str] = []
+    argv: List[str] = []
     if global_arguments:
         argv.extend(serialize_argument_values(global_arguments, global_values or {}))
     argv.extend(command.path)
@@ -271,7 +271,7 @@ def build_command_argv(
     return argv
 
 
-def infer_resource_selector(command: CommandNode, argument: ArgumentSpec) -> ResourceSelectorSpec | None:
+def infer_resource_selector(command: CommandNode, argument: ArgumentSpec) -> Optional[ResourceSelectorSpec]:
     """Infer whether an argument should use live Docker targets."""
     path = command.path
     dest = argument.dest
@@ -297,9 +297,9 @@ def infer_resource_selector(command: CommandNode, argument: ArgumentSpec) -> Res
     return None
 
 
-def format_container_targets(container_rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def format_container_targets(container_rows: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """Format container rows into human-readable selector entries."""
-    entries: list[tuple[str, str]] = []
+    entries: List[Tuple[str, str]] = []
     for row in container_rows:
         name = row.get("name") or row.get("id") or "unknown"
         state = row.get("state") or row.get("status") or "unknown"
@@ -308,10 +308,10 @@ def format_container_targets(container_rows: list[dict[str, Any]]) -> list[tuple
     return entries
 
 
-def format_image_targets(image_rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def format_image_targets(image_rows: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """Format image rows into human-readable selector entries."""
-    entries: list[tuple[str, str]] = []
-    seen: set[str] = set()
+    entries: List[Tuple[str, str]] = []
+    seen: Set[str] = set()
 
     for row in image_rows:
         for tag in row.get("tags") or []:
@@ -331,7 +331,7 @@ def selector_height(option_count: int, *, single: bool = False) -> int:
     return min(max(option_count + 1, 4), 10)
 
 
-def requires_tty_or_live_ui(command: CommandNode, values: dict[str, Any]) -> str | None:
+def requires_tty_or_live_ui(command: CommandNode, values: Dict[str, Any]) -> Optional[str]:
     """Return a reason when a command is not suitable for inline TUI execution."""
     path = command.path
 
@@ -363,10 +363,10 @@ def should_tui_require_value(command: CommandNode, argument: ArgumentSpec) -> bo
 def capture_cli_execution(
     pilot,
     parser: argparse.ArgumentParser,
-    argv: list[str],
+    argv: List[str],
     *,
-    console_width: int | None = None,
-) -> tuple[int, str]:
+    console_width: Optional[int] = None,
+) -> Tuple[int, str]:
     """Execute CLI argv and capture console/log output for rendering in the TUI."""
     buffer = io.StringIO()
     capture_console = None
@@ -380,20 +380,20 @@ def capture_cli_execution(
 
             capture_console = Console(file=buffer, force_terminal=False, width=width)
 
-    console_targets: list[Any] = [pilot]
+    console_targets: List[Any] = [pilot]
     for attr in ("container_manager", "image_manager", "monitoring_manager"):
         target = getattr(pilot, attr, None)
         if target is not None:
             console_targets.append(target)
 
-    original_consoles: dict[int, Any] = {}
+    original_consoles: Dict[int, Any] = {}
     if capture_console is not None:
         for target in console_targets:
             if hasattr(target, "console"):
                 original_consoles[id(target)] = target.console
                 target.console = capture_console
 
-    original_logger_streams: list[tuple[logging.Handler, Any]] = []
+    original_logger_streams: List[Tuple[logging.Handler, Any]] = []
     logger = getattr(pilot, "logger", None)
     if logger is not None:
         for handler in getattr(logger, "handlers", []):
@@ -428,7 +428,7 @@ except ImportError:
 
 if TEXTUAL_AVAILABLE:
 
-    class DockerPilotTUI(App[list[str] | None]):
+    class DockerPilotTUI(App):
         """Mouse-friendly command browser that emits argv for the real CLI."""
 
         CSS = """
@@ -553,11 +553,11 @@ if TEXTUAL_AVAILABLE:
             self.pilot_instance = pilot_instance
             self.global_arguments = collect_argument_specs(parser, exclude_dests={"version"})
             self.command_tree = build_command_tree(parser, exclude_commands={"tui"})
-            self.selected_command: CommandNode | None = None
-            self.global_widgets: dict[str, Any] = {}
-            self.command_widgets: dict[str, Any] = {}
-            self.selector_specs: dict[str, ResourceSelectorSpec] = {}
-            self.available_targets: dict[str, list[tuple[str, str]]] = {"container": [], "image": []}
+            self.selected_command: Optional[CommandNode] = None
+            self.global_widgets: Dict[str, Any] = {}
+            self.command_widgets: Dict[str, Any] = {}
+            self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
+            self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
             self._selection_syncing = False
             self._command_running = False
 
@@ -623,7 +623,7 @@ if TEXTUAL_AVAILABLE:
             self.query_one("#loading-screen", Vertical).add_class("hidden")
             self.query_one("#main", Horizontal).remove_class("hidden")
 
-        def _load_available_targets(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]], str]:
+        def _load_available_targets(self) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], str]:
             """Fetch live Docker targets without touching UI state."""
             try:
                 container_rows = self.pilot_instance.list_containers(show_all=True, format_output="json") or []
@@ -660,7 +660,7 @@ if TEXTUAL_AVAILABLE:
             for argument in self.global_arguments:
                 await self._mount_argument_widget(container, argument, self.global_widgets)
 
-        async def _render_command_form(self, command: CommandNode | None) -> None:
+        async def _render_command_form(self, command: Optional[CommandNode]) -> None:
             container = self.query_one("#command-form", Vertical)
             await container.remove_children()
             self.command_widgets = {}
@@ -701,8 +701,8 @@ if TEXTUAL_AVAILABLE:
             self,
             container: Vertical,
             argument: ArgumentSpec,
-            widget_store: dict[str, Any],
-            command: CommandNode | None = None,
+            widget_store: Dict[str, Any],
+            command: Optional[CommandNode] = None,
         ) -> None:
             row = Vertical(classes="arg-row")
             label_text = argument.label
@@ -793,8 +793,8 @@ if TEXTUAL_AVAILABLE:
 
             self._refresh_preview()
 
-        def _values_from_widgets(self, widget_store: dict[str, Any]) -> dict[str, Any]:
-            values: dict[str, Any] = {}
+        def _values_from_widgets(self, widget_store: Dict[str, Any]) -> Dict[str, Any]:
+            values: Dict[str, Any] = {}
             for dest, widget in widget_store.items():
                 if isinstance(widget, Checkbox):
                     values[dest] = widget.value
@@ -826,7 +826,7 @@ if TEXTUAL_AVAILABLE:
             )
             preview.update(f"$ dockerpilot {' '.join(shlex.quote(part) for part in argv)}")
 
-        def _validate_required_arguments(self) -> tuple[bool, str]:
+        def _validate_required_arguments(self) -> Tuple[bool, str]:
             if not self.selected_command or not self.selected_command.is_leaf:
                 return False, "Pick a concrete command first."
 
@@ -877,7 +877,7 @@ if TEXTUAL_AVAILABLE:
             run_button.disabled = running or not (self.selected_command and self.selected_command.is_leaf)
             refresh_button.disabled = running
 
-        def _append_result_block(self, command_text: str, return_code: int | None, output: str) -> None:
+        def _append_result_block(self, command_text: str, return_code: Optional[int], output: str) -> None:
             """Append a command result block to the output panel."""
             results = self.query_one("#results", RichLog)
             results.write(f"$ dockerpilot {command_text}")
@@ -946,7 +946,7 @@ if TEXTUAL_AVAILABLE:
                 self._set_run_state(False)
 
 
-def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: list[str]) -> int:
+def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str]) -> int:
     """Execute argv through the same CLI dispatcher used by the regular command."""
     from .handlers import dispatch_cli_args
 
@@ -959,7 +959,7 @@ def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: list[str]) ->
         return code if isinstance(code, int) else 1
 
 
-def run_tui(pilot, parser: argparse.ArgumentParser | None = None) -> None:
+def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
     """Launch the optional mouse-friendly terminal UI."""
     if not TEXTUAL_AVAILABLE:
         pilot.console.print("[red]❌ Textual is not installed.[/red]")
