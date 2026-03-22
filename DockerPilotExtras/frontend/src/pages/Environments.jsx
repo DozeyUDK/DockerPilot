@@ -2127,7 +2127,7 @@ function Environments() {
                                 fontWeight: '600',
                                 fontSize: '0.85rem'
                               }}
-                              title="Migruj kontener na inny serwer"
+                              title="Migrate container to another server"
                             >
                               {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
                             </button>
@@ -2515,13 +2515,13 @@ function Environments() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
-                  Nazwa serwera *
+                  Server name *
                 </label>
                 <input
                   type="text"
                   value={serverForm.name}
                   onChange={(e) => setServerForm({ ...serverForm, name: e.target.value })}
-                  placeholder="np. Production Server"
+                  placeholder="e.g. Production Server"
                   style={{
                     width: '100%',
                     padding: '0.5rem',
@@ -3207,7 +3207,7 @@ function Environments() {
 
             <div style={{ marginBottom: '1rem' }}>
               <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                Migruj kontener <strong>{migratingContainer}</strong> na inny serwer.
+                Migrate container <strong>{migratingContainer}</strong> to another server.
               </p>
               <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
                 Source server: <strong>{selectedServer === 'local' ? '🏠 Local' : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
@@ -3337,7 +3337,7 @@ function Environments() {
                     color: 'var(--text-secondary)',
                     fontStyle: 'italic'
                   }}>
-                    Etap: {migrationProgress.stage}
+                    Stage: {migrationProgress.stage}
                   </div>
                 </div>
               )}
@@ -3378,7 +3378,7 @@ function Environments() {
                     fontWeight: '600'
                   }}
                 >
-                  {migrationProgress && migrationProgress.stage !== 'completed' && migrationProgress.stage !== 'failed' && migrationProgress.stage !== 'cancelled' ? 'Zamknij' : 'Zamknij'}
+                  {migrationProgress && migrationProgress.stage !== 'completed' && migrationProgress.stage !== 'failed' && migrationProgress.stage !== 'cancelled' ? 'Close' : 'Close'}
                 </button>
                 {!migrationProgress && (
                   <button
