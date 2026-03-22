@@ -32,6 +32,7 @@ cd DockerPilot && install.bat extras
 
 **What full stack install does:**
 - installs DockerPilot CLI
+- installs the optional TUI dependencies, so `dockerpilot tui` works right away
 - installs DockerPilotExtras backend Python dependencies
 - installs DockerPilotExtras frontend dependencies with `npm install` if Node.js and npm are already available
 - leaves DockerPilotExtras frontend install as a clear warning if Node.js/npm are missing
@@ -65,6 +66,7 @@ cd DockerPilot && install.bat
 **What the installer does:**
 - Checks Python 3.9+ and Docker
 - Installs Docker Pilot in a **virtual environment** (default), so it works on Ubuntu/Debian 24.04+ and other distros with [PEP 668](https://peps.python.org/pep-0668/) (no "externally-managed-environment" error)
+- Installs the TUI dependency set too, so `dockerpilot tui` is available after script-based install
 - Puts `dockerpilot` in `~/.local/bin` (ensure it's in your `PATH`)
 - Verifies installation
 

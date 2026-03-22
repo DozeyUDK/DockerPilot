@@ -55,10 +55,10 @@ REM Get script directory
 set SCRIPT_DIR=%~dp0
 cd /d "%SCRIPT_DIR%"
 
-REM Install Docker Pilot (includes all dependencies)
+REM Install Docker Pilot (includes TUI dependencies)
 echo.
 echo [*] Installing Docker Pilot...
-pip install -e .
+python -m pip install -e ".[tui]"
 if errorlevel 1 (
     echo [ERROR] Failed to install Docker Pilot
     pause

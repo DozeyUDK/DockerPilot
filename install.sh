@@ -92,8 +92,8 @@ cd "$SCRIPT_DIR"
 if [ "$INSTALL_SYSTEM" = true ]; then
     # System-wide install (for developers or when you explicitly want it)
     echo ""
-    echo "📦 Installing Docker Pilot (system-wide, --break-system-packages)..."
-    pip3 install -e . --break-system-packages
+    echo "📦 Installing Docker Pilot + TUI (system-wide, --break-system-packages)..."
+    pip3 install -e ".[tui]" --break-system-packages
     DOCKERPILOT_CMD="dockerpilot"
 else
     # Default: venv (works on Ubuntu/Debian 24.04+ and other distros with PEP 668)
@@ -112,8 +112,8 @@ else
         "$VENV_DIR/bin/python" -m ensurepip --upgrade
     fi
     echo ""
-    echo "📦 Installing Docker Pilot (in venv)..."
-    "$VENV_DIR/bin/python" -m pip install -e .
+    echo "📦 Installing Docker Pilot + TUI (in venv)..."
+    "$VENV_DIR/bin/python" -m pip install -e ".[tui]"
     DOCKERPILOT_BIN="$VENV_DIR/bin/dockerpilot"
     mkdir -p "$HOME/.local/bin"
     ln -sf "$DOCKERPILOT_BIN" "$HOME/.local/bin/dockerpilot"

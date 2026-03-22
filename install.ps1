@@ -61,10 +61,10 @@ if ($LASTEXITCODE -eq 0) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
-# Install Docker Pilot (includes all dependencies)
+# Install Docker Pilot (includes TUI dependencies)
 Write-Host ""
 Write-Host "[*] Installing Docker Pilot..." -ForegroundColor Yellow
-pip install -e .
+python -m pip install -e ".[tui]"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] Failed to install Docker Pilot" -ForegroundColor Red
     Read-Host "Press Enter to exit"

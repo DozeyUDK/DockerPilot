@@ -963,7 +963,16 @@ def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
     """Launch the optional mouse-friendly terminal UI."""
     if not TEXTUAL_AVAILABLE:
         pilot.console.print("[red]❌ Textual is not installed.[/red]")
-        pilot.console.print("[yellow]Install it with: pip install 'dockerpilot[tui]'[/yellow]")
+        pilot.console.print(
+            'Install it with: python -m pip install -e ".[tui]"',
+            style="yellow",
+            markup=False,
+        )
+        pilot.console.print(
+            'Or, from PyPI: python -m pip install "dockerpilot[tui]"',
+            style="yellow",
+            markup=False,
+        )
         sys.exit(1)
 
     active_parser = parser or argparse.ArgumentParser()

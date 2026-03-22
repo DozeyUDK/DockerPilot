@@ -1,6 +1,9 @@
 """Tests for the optional DockerPilot TUI helpers."""
 
+import pytest
+
 from dockerpilot.cli.parser import build_cli_parser
+import dockerpilot.cli.tui as tui_module
 from dockerpilot.cli.tui import (
     build_command_argv,
     build_command_tree,
@@ -245,3 +248,27 @@ def test_capture_cli_execution_collects_output_from_the_regular_cli_dispatcher()
 
     assert return_code == 0
     assert "listed containers all=True format=json" in output
+
+
+def test_run_tui_missing_textual_shows_literal_install_commands(monkeypatch):
+    class FakeConsole:
+        def __init__(self):
+            self.messages = []
+
+        def print(self, *parts, **kwargs):
+            self.messages.append((" ".join(str(part) for part in parts), kwargs))
+
+    class FakePilot:
+        def __init__(self):
+            self.console = FakeConsole()
+
+    monkeypatch.setattr(tui_module, "TEXTUAL_AVAILABLE", False)
+    pilot = FakePilot()
+
+    with pytest.raises(SystemExit) as exc:
+        tui_module.run_tui(pilot)
+
+    assert exc.value.code == 1
+    messages = [message for message, _kwargs in pilot.console.messages]
+    assert any('python -m pip install -e ".[tui]"' in message for message in messages)
+    assert any('python -m pip install "dockerpilot[tui]"' in message for message in messages)
