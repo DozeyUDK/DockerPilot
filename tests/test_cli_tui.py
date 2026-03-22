@@ -5,10 +5,8 @@ import pytest
 from dockerpilot.cli.parser import build_cli_parser
 import dockerpilot.cli.tui as tui_module
 from dockerpilot.cli.tui import (
-    build_external_terminal_launch,
     build_command_argv,
     build_command_tree,
-    build_python_cli_invocation,
     capture_cli_execution,
     collect_argument_specs,
     execute_cli_argv,
@@ -16,6 +14,7 @@ from dockerpilot.cli.tui import (
     format_image_targets,
     infer_resource_selector,
     should_launch_in_external_terminal,
+    TuiCommandHandoff,
     requires_tty_or_live_ui,
     selector_height,
     should_tui_require_value,
@@ -278,30 +277,44 @@ def test_run_tui_missing_textual_shows_literal_install_commands(monkeypatch):
     assert any('python -m pip install "dockerpilot[tui]"' in message for message in messages)
 
 
-def test_build_python_cli_invocation_uses_current_python():
-    invocation = build_python_cli_invocation(["container", "exec", "web"])
+def test_run_tui_relaunches_after_terminal_handoff(monkeypatch):
+    parser = build_cli_parser()
 
-    assert invocation[0]
-    assert invocation[1:4] == ["-m", "dockerpilot.main", "container"]
-    assert invocation[-2:] == ["exec", "web"]
+    class FakeApp:
+        run_calls = 0
 
+        def __init__(self, active_parser, pilot):
+            self.active_parser = active_parser
+            self.pilot = pilot
 
-def test_build_external_terminal_launch_prefers_linux_terminal(monkeypatch):
-    monkeypatch.setattr(tui_module.os, "name", "posix")
-    monkeypatch.setattr(tui_module.sys, "platform", "linux")
-    monkeypatch.setattr(tui_module.shutil, "which", lambda name: "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None)
+        def run(self):
+            FakeApp.run_calls += 1
+            if FakeApp.run_calls == 1:
+                return TuiCommandHandoff(argv=["container", "exec", "web", "--command", "/bin/bash"])
+            return None
 
-    launch_command, label = build_external_terminal_launch(["container", "exec", "web"])
+    executed = []
 
-    assert label == "GNOME Terminal"
-    assert launch_command[:2] == ["/usr/bin/gnome-terminal", "--"]
-    assert launch_command[2:5] == [tui_module.sys.executable, "-m", "dockerpilot.main"]
+    def fake_execute_cli_argv(pilot, active_parser, argv):
+        executed.append((pilot, active_parser, argv))
+        return 0
 
+    class FakeConsole:
+        def __init__(self):
+            self.lines = []
 
-def test_build_external_terminal_launch_uses_windows_console(monkeypatch):
-    monkeypatch.setattr(tui_module.os, "name", "nt")
+        def print(self, *parts, **_kwargs):
+            self.lines.append(" ".join(str(part) for part in parts))
 
-    launch_command, label = build_external_terminal_launch(["container", "exec", "web"])
+    class FakePilot:
+        def __init__(self):
+            self.console = FakeConsole()
 
-    assert label == "Windows console"
-    assert launch_command[:3] == [tui_module.sys.executable, "-m", "dockerpilot.main"]
+    monkeypatch.setattr(tui_module, "DockerPilotTUI", FakeApp)
+    monkeypatch.setattr(tui_module, "execute_cli_argv", fake_execute_cli_argv)
+
+    pilot = FakePilot()
+    tui_module.run_tui(pilot, parser)
+
+    assert FakeApp.run_calls == 2
+    assert executed == [(pilot, parser, ["container", "exec", "web", "--command", "/bin/bash"])]

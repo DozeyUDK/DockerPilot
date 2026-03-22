@@ -6,10 +6,7 @@ import argparse
 import asyncio
 import io
 import logging
-import os
 import shlex
-import shutil
-import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
@@ -62,6 +59,13 @@ class ResourceSelectorSpec:
 
     resource_type: str
     mode: str
+
+
+@dataclass
+class TuiCommandHandoff:
+    """Request to temporarily leave TUI and run a command in the real terminal."""
+
+    argv: List[str]
 
 
 def _is_subparsers_action(action: argparse.Action) -> bool:
@@ -362,110 +366,8 @@ def should_tui_require_value(command: CommandNode, argument: ArgumentSpec) -> bo
 
 
 def should_launch_in_external_terminal(command: CommandNode) -> bool:
-    """Return True when a command should be launched in a separate terminal window."""
+    """Return True when a command should temporarily hand off to the real terminal."""
     return command.path == ("container", "exec")
-
-
-def build_python_cli_invocation(argv: List[str]) -> List[str]:
-    """Build a Python-based DockerPilot command invocation for external terminals."""
-    return [sys.executable, "-m", "dockerpilot.main", *argv]
-
-
-def build_external_terminal_launches(argv: List[str]) -> List[Tuple[List[str], str]]:
-    """Build platform-specific launcher commands for a new terminal window."""
-    command_argv = build_python_cli_invocation(argv)
-
-    if os.name == "nt":
-        return [(command_argv, "Windows console")]
-
-    if sys.platform == "darwin":
-        command_string = shlex.join(command_argv)
-        return [(
-            [
-                "osascript",
-                "-e",
-                f'tell application "Terminal" to do script {command_string!r}',
-                "-e",
-                'tell application "Terminal" to activate',
-            ],
-            "Terminal.app",
-        )]
-
-    terminal_candidates = [
-        ("gnome-terminal", "--", "GNOME Terminal"),
-        ("x-terminal-emulator", "-e", "system terminal"),
-        ("xfce4-terminal", "-e", "Xfce Terminal"),
-        ("konsole", "-e", "Konsole"),
-        ("kitty", "-e", "Kitty"),
-        ("alacritty", "-e", "Alacritty"),
-        ("mate-terminal", "--", "MATE Terminal"),
-        ("tilix", "--", "Tilix"),
-        ("wezterm", "start", "WezTerm"),
-        ("xterm", "-e", "xterm"),
-    ]
-
-    launchers: List[Tuple[List[str], str]] = []
-    for executable, mode, label in terminal_candidates:
-        resolved = shutil.which(executable)
-        if not resolved:
-            continue
-        if mode == "--":
-            launchers.append(([resolved, "--", *command_argv], label))
-        elif mode == "-e":
-            launchers.append(([resolved, "-e", *command_argv], label))
-        elif mode == "start":
-            launchers.append(([resolved, "start", "--always-new-process", *command_argv], label))
-
-    return launchers
-
-
-def build_external_terminal_launch(argv: List[str]) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Return the preferred external terminal launcher for compatibility with existing tests."""
-    launches = build_external_terminal_launches(argv)
-    if not launches:
-        return None, None
-    return launches[0]
-
-
-def launch_external_terminal(argv: List[str]) -> Tuple[bool, str]:
-    """Launch a DockerPilot command in a new terminal window."""
-    launches = build_external_terminal_launches(argv)
-    if not launches:
-        return False, (
-            "No supported terminal emulator was found. "
-            "Install a terminal like gnome-terminal, xterm, kitty, or run the command manually."
-        )
-
-    errors: List[str] = []
-    for launch_command, label in launches:
-        try:
-            if os.name == "nt":
-                creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-                process = subprocess.Popen(
-                    launch_command,
-                    cwd=os.getcwd(),
-                    creationflags=creationflags,
-                )
-                return True, f"Opened interactive command in {label or 'a new terminal window'}."
-
-            process = subprocess.Popen(
-                launch_command,
-                cwd=os.getcwd(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            process.wait(timeout=0.4)
-            if process.returncode == 0:
-                return True, f"Opened interactive command in {label or 'a new terminal window'}."
-            errors.append(f"{label}: exit {process.returncode}")
-        except subprocess.TimeoutExpired:
-            return True, f"Opened interactive command in {label or 'a new terminal window'}."
-        except Exception as exc:
-            errors.append(f"{label}: {exc}")
-
-    error_details = "; ".join(errors) if errors else "unknown error"
-    return False, f"Failed to open a new terminal window. Tried: {error_details}"
 
 
 def capture_cli_execution(
@@ -1021,9 +923,7 @@ if TEXTUAL_AVAILABLE:
             command_text = " ".join(shlex.quote(part) for part in argv)
 
             if should_launch_in_external_terminal(self.selected_command):
-                success, message = await asyncio.to_thread(launch_external_terminal, argv)
-                self._append_result_block(command_text, 0 if success else 1, message)
-                status.update(message)
+                self.exit(TuiCommandHandoff(argv=argv))
                 return
 
             blocking_reason = requires_tty_or_live_ui(self.selected_command, command_values)
@@ -1091,4 +991,10 @@ def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
         sys.exit(1)
 
     active_parser = parser or argparse.ArgumentParser()
-    DockerPilotTUI(active_parser, pilot).run()
+    while True:
+        result = DockerPilotTUI(active_parser, pilot).run()
+        if not isinstance(result, TuiCommandHandoff):
+            break
+
+        execute_cli_argv(pilot, active_parser, result.argv)
+        pilot.console.print()
