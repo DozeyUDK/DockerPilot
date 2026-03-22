@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 
-@dataclass(slots=True)
+@dataclass
 class ArgumentSpec:
     """Description of a parser argument rendered in the TUI."""
 
@@ -37,7 +37,7 @@ class ArgumentSpec:
         return self.option_strings[0] if self.option_strings else None
 
 
-@dataclass(slots=True)
+@dataclass
 class CommandNode:
     """Recursive command tree used by the TUI."""
 
@@ -53,7 +53,7 @@ class CommandNode:
         return not self.children
 
 
-@dataclass(slots=True)
+@dataclass
 class ResourceSelectorSpec:
     """Describe a live Docker-backed selector for an argument."""
 
