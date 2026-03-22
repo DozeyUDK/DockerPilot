@@ -598,7 +598,7 @@ class PacketSniffer:
                 logger.info("  - Python being a script wrapper (not a binary)")
                 logger.info("  - Filesystem not supporting capabilities")
                 logger.info("  - Python being on a network filesystem")
-                logger.info("Please run the script with: sudo python3 searcher.py")
+                logger.info("Please run the script with: sudo python3 tools/searcher/searcher.py")
                 
                 # Clear password since we can't use it effectively
                 self.sudo_password = None
@@ -633,7 +633,7 @@ class PacketSniffer:
                 if os.geteuid() != 0 and not self.has_capabilities:
                     error_msg = "Operation not permitted. Root privileges required."
                     if self.sudo_password:
-                        error_msg += " Setcap failed. Please restart the script with: sudo python3 searcher.py"
+                        error_msg += " Setcap failed. Please restart the script with: sudo python3 tools/searcher/searcher.py"
                     logger.error(error_msg)
                     self.sniffing = False
                     socketio.emit('status', {'status': 'error', 'message': error_msg})
@@ -781,7 +781,7 @@ def handle_sudo_password(data):
             # Password is valid but setcap failed - we'll need to use alternative method
             logger.info("Sudo password accepted, but setcap failed. Will use alternative method.")
             # Store password for later use (will be cleared after use)
-            socketio.emit('status', {'status': 'sudo_success', 'message': 'Password accepted, but capabilities could not be set. Please restart the script with: sudo python3 searcher.py'})
+            socketio.emit('status', {'status': 'sudo_success', 'message': 'Password accepted, but capabilities could not be set. Please restart the script with: sudo python3 tools/searcher/searcher.py'})
     else:
         logger.warning("Invalid sudo password")
         socketio.emit('status', {'status': 'sudo_failed', 'message': 'Invalid password'})
@@ -800,7 +800,7 @@ def check_permissions():
     """Check if script has required permissions for packet capture"""
     if os.geteuid() != 0:
         logger.warning("⚠️  WARNING: Not running as root. Packet capture may fail.")
-        logger.warning("   Run with: sudo python3 searcher.py")
+        logger.warning("   Run with: sudo python3 tools/searcher/searcher.py")
         logger.warning("   Or set capabilities: sudo setcap cap_net_raw,cap_net_admin=eip $(which python3)")
         return False
     return True
@@ -816,19 +816,19 @@ def main():
         epilog="""
 Examples:
   # Sniff on all interfaces (requires sudo)
-  sudo python3 searcher.py
+  sudo python3 tools/searcher/searcher.py
 
   # Sniff on specific interface
-  sudo python3 searcher.py -i eth0
+  sudo python3 tools/searcher/searcher.py -i eth0
 
   # Sniff with filter (TCP only)
-  sudo python3 searcher.py -f "tcp"
+  sudo python3 tools/searcher/searcher.py -f "tcp"
 
   # Sniff on specific port
-  sudo python3 searcher.py -f "port 80"
+  sudo python3 tools/searcher/searcher.py -f "port 80"
 
   # Sniff from specific IP
-  sudo python3 searcher.py -f "host 192.168.1.1"
+  sudo python3 tools/searcher/searcher.py -f "host 192.168.1.1"
 
 Note: This script requires root privileges for packet capture.
       Run with 'sudo' or set capabilities on Python interpreter.
@@ -897,4 +897,3 @@ Note: This script requires root privileges for packet capture.
 
 if __name__ == '__main__':
     main()
-

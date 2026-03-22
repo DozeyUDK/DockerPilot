@@ -1,4 +1,3 @@
-docker>=6.0.0
-requests>=2.31.0
-rich>=13.0.0
-PyYAML>=6.0
+# Compatibility shim for tooling that expects requirements.txt.
+# Runtime dependencies live in pyproject.toml.
+-e .

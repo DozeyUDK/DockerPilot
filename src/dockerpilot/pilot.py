@@ -1619,8 +1619,8 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         
         # Check Python version
         python_version = sys.version_info
-        if python_version < (3, 8):
-            self.console.print("[red]❌ Python 3.8+ required[/red]")
+        if python_version < (3, 9):
+            self.console.print("[red]❌ Python 3.9+ required[/red]")
             requirements_met = False
         else:
             self.console.print(f"[green]✓ Python {python_version.major}.{python_version.minor}[/green]")

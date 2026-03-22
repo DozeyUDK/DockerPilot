@@ -17,9 +17,9 @@ test:
   stage: test
   image: python:3.11-slim
   before_script:
-    - pip install docker pyyaml requests rich pytest pytest-cov
+    - pip install -e .[test]
   script:
-    - pytest tests/ --cov=. --cov-report=xml
+    - pytest tests/ --cov=src/dockerpilot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -52,4 +52,3 @@ deploy:
     url: http://your-app-url.com
   only:
     - main
-

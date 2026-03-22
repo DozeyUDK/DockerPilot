@@ -78,17 +78,13 @@ dockerpilot validate  # Check system requirements
 
 ---
 
-## Two Versions Available
+## Repository Layout
 
-### Full Version (Default)
-- **Advanced features**: Rolling/Blue-Green/Canary deployments, CI/CD pipelines, monitoring alerts, backup/restore  
-- **Best for**: Production, DevOps teams, advanced workflows
-
-### Lite Version
-- **Core features**: Container management, image operations, basic monitoring  
-- **Best for**: Development, learning, simple use cases
-
-**Note:** The installer installs the Full version by default. Both versions share the same `dockerpilot` command.
+- `src/dockerpilot/` - core CLI package
+- `DockerPilotExtras/` - optional web panel built on top of the CLI
+- `docs/` - user-facing guides and reference material
+- `scripts/` - maintainer and release helpers
+- `tools/` - optional standalone tools
 
 ---
 
@@ -108,7 +104,7 @@ dockerpilot validate  # Check system requirements
 
 ## Features
 
-### Core Capabilities (Both Versions)
+### Core Capabilities
 - **Container Operations**: Start, stop, restart, remove, pause, unpause, exec into containers
 - **Image Management**: List, build, and remove Docker images
 - **Real-time Monitoring**: CPU, memory, network I/O, and process tracking
@@ -116,12 +112,12 @@ dockerpilot validate  # Check system requirements
 - **Interactive Dashboard**: Live metrics with trend indicators
 - **Container Shell Access**: Execute interactive bash/sh sessions inside running containers
 
-### Advanced Deployment (Full Version Only)
+### Advanced Deployment
 - **Rolling Deployment**: Zero-downtime updates with automatic rollback
 - **Blue-Green Deployment**: Parallel environment switching for maximum safety
 - **Canary Deployment**: Gradual traffic shifting with performance monitoring
 
-### DevOps Integration (Full Version Only)
+### DevOps Integration
 - GitHub Actions, GitLab CI, and Jenkins pipeline generation
 - Environment promotion (dev -> staging -> prod)
 - Integration testing framework
@@ -143,7 +139,7 @@ Select from available commands:
 - `start` - Start a container
 - `stop` - Stop a container
 - `monitor` - Real-time monitoring
-- `deploy-init` - Create deployment config (Full version only)
+- `deploy-init` - Create deployment config
 - And many more...
 
 ### Usage
@@ -315,8 +311,6 @@ dockerpilot deploy history --limit 20
 
 ## CI/CD Integration
 
-> **Note:** CI/CD features are only available in the full version (`pilot.py`)
-
 ### Generate Pipeline Configurations
 
 **GitHub Actions:**
@@ -366,26 +360,24 @@ Available levels: DEBUG, INFO, WARNING, ERROR
 
 The tool uses several configuration files:
 
-- `deployment.yml` - Deployment configuration (Full version)
-- `alerts.yml` - Monitoring alerts (Full version)
-- `integration-tests.yml` - Test definitions (Full version)
+- `deployment.yml` - Deployment configuration
+- `alerts.yml` - Monitoring alerts
+- `integration-tests.yml` - Test definitions
 - `docker_pilot.log` - Application logs
 - `docker_metrics.json` - Performance metrics
-- `deployment_history.json` - Deployment records (Full version)
+- `deployment_history.json` - Deployment records
 
 ### Export/Import Configuration
 
 ```bash
-# Export all configs (Full version)
+# Export all configs
 dockerpilot config export --output backup.tar.gz
 
-# Import configs (Full version)
+# Import configs
 dockerpilot config import backup.tar.gz
 ```
 
 ## Advanced Features
-
-> **Note:** Advanced features are only available in the full version (`pilot.py`)
 
 ### Integration Testing
 
@@ -513,8 +505,8 @@ dockerpilot --log-level DEBUG <command>
 Check logs for detailed information:
 - `docker_pilot.log` - Main application log
 - `docker_metrics.json` - Performance data
-- `deployment_history.json` - Deployment records (Full version)
-- `integration-test-report.json` - Test results (Full version)
+- `deployment_history.json` - Deployment records
+- `integration-test-report.json` - Test results
 
 ## System Validation
 
@@ -525,30 +517,11 @@ dockerpilot validate
 ```
 
 Checks:
-- Python version (3.8+)
+- Python version (3.9+)
 - Docker connectivity
 - Required Python modules
 - Disk space
 - Docker daemon permissions
-
-## Choosing Between Full and Lite Version
-
-### Use Docker Pilot (Full Version) when you need:
-- Production-grade deployments with zero downtime
-- Advanced deployment strategies (Rolling, Blue-Green, Canary)
-- CI/CD pipeline integration
-- Environment promotion workflows
-- Integration testing
-- Monitoring alerts
-- Backup and restore capabilities
-
-### Use Docker Pilot Lite when you need:
-- Quick container management during development
-- Simple deployment scenarios
-- Lower resource footprint
-- Faster startup time
-- Learning Docker basics
-- Minimal dependencies
 
 ## Contributing
 
@@ -565,31 +538,24 @@ Detailed documentation for specific features:
 
 - **[Quick Deploy Guide](docs/quick-deploy.md)** - Rapid deployment with automatic cleanup
 - **[Multiple Containers Operations](docs/multi-container.md)** - Managing multiple containers at once
-- **[Environment Promotion Guide](GRAFANA_PROMOTION_GUIDE.md)** - Promoting containers between environments
-- **[Blue-Green Deployment](BLUE_GREEN_FIX_SUMMARY.md)** - Data migration during deployments
-- **[Sudo Setup](SUDO_SETUP.md)** - Configuring permissions for backups
-- **[Health Checks Configuration](HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
+- **[Environment Promotion Guide](docs/guides/GRAFANA_PROMOTION_GUIDE.md)** - Promoting containers between environments
+- **[Blue-Green Data Migration](docs/guides/blue-green-data-migration.md)** - Data migration during deployments
+- **[Sudo Setup](docs/guides/SUDO_SETUP.md)** - Configuring permissions for backups
+- **[Sudo Passwordless Setup](docs/guides/SUDO_PASSWORDLESS_SETUP.md)** - Running backup flows without interactive sudo
+- **[Health Checks Configuration](docs/guides/HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
+- **[Network Searcher Tool](tools/searcher/README.md)** - Optional packet sniffer helper
 
 ## Best Practices
 
 1. **Always test deployments** in non-production environments first
 2. **Use health checks** to ensure application readiness
 3. **Set resource limits** to prevent resource exhaustion
-4. **Enable monitoring alerts** for production deployments (Full version)
-5. **Create backups** before major changes (Full version)
-6. **Review deployment history** to track changes (Full version)
-7. **Use blue-green deployments** for critical production updates (Full version)
+4. **Enable monitoring alerts** for production deployments
+5. **Create backups** before major changes
+6. **Review deployment history** to track changes
+7. **Use blue-green deployments** for critical production updates
 8. **Test rollback procedures** regularly
-9. **Start with Lite version** for learning, upgrade to Full version for production
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-- Fork the repository
-- Create a feature branch
-- Make your changes
-- Submit a pull request
+9. **Start with local or staging deployments** before promoting to production
 
 ## License
 
@@ -608,6 +574,6 @@ See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
 ---
 
 **Version**: Enhanced v3  
-**Python**: 3.8+  
+**Python**: 3.9+  
 **Docker**: 20.10+  
-**Available in**: Full (`pilot.py`) and Lite (`dockerpilot-lite.py`) versions
+**Components**: CLI package and optional `DockerPilotExtras` web panel

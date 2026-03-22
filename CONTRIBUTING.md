@@ -12,8 +12,6 @@ Thank you for your interest in contributing to Docker Pilot! 🚀
 
 2. **Set up development environment**
    ```bash
-   # Install dependencies
-   pip install -r requirements.txt
    pip install -e .[test]
    ```
 
@@ -113,4 +111,3 @@ When reporting bugs or requesting features:
 - Review closed issues for similar questions
 
 Thank you for contributing! 🙏
-

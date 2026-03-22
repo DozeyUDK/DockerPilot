@@ -19,9 +19,8 @@ pipeline {
                 sh '''
                     python -m venv venv
                     source venv/bin/activate
-                    pip install -r requirements.txt
-                    pip install pytest pytest-cov
-                    pytest tests/ --cov=. --cov-report=xml
+                    pip install -e .[test]
+                    pytest tests/ --cov=src/dockerpilot --cov-report=xml
                 '''
             }
             post {
@@ -79,4 +78,3 @@ pipeline {
         }
     }
 }
-

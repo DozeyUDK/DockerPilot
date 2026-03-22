@@ -1,4 +1,4 @@
-# Blue-Green Deployment - Data Migration Fix
+# Blue-Green Deployment Data Migration
 
 ## ✅ What Was Fixed
 

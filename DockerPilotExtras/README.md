@@ -102,7 +102,7 @@ This will automatically:
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.9+
 - Node.js 16+ and npm
 - Docker 20.10+
 - DockerPilot installed and available in PATH
