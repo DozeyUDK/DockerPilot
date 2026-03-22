@@ -310,7 +310,8 @@ def test_run_tui_relaunches_after_terminal_handoff(monkeypatch):
         def __init__(self):
             self.console = FakeConsole()
 
-    monkeypatch.setattr(tui_module, "DockerPilotTUI", FakeApp)
+    monkeypatch.setattr(tui_module, "TEXTUAL_AVAILABLE", True)
+    monkeypatch.setattr(tui_module, "DockerPilotTUI", FakeApp, raising=False)
     monkeypatch.setattr(tui_module, "execute_cli_argv", fake_execute_cli_argv)
 
     pilot = FakePilot()
