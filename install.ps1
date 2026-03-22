@@ -31,6 +31,7 @@ try {
 Write-Host "[*] Checking Docker..." -ForegroundColor Yellow
 try {
     $dockerVersion = docker --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "docker-not-ready" }
     Write-Host "[OK] Docker found: $dockerVersion" -ForegroundColor Green
 } catch {
     Write-Host "[WARNING] Docker is not installed or not in PATH" -ForegroundColor Yellow
@@ -44,10 +45,10 @@ try {
 
 # Check Docker daemon
 Write-Host "[*] Checking Docker daemon..." -ForegroundColor Yellow
-try {
-    docker info | Out-Null
+docker info *> $null
+if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] Docker daemon is running" -ForegroundColor Green
-} catch {
+} else {
     Write-Host "[WARNING] Docker daemon is not running" -ForegroundColor Yellow
     Write-Host "Please start Docker Desktop and run this script again." -ForegroundColor Yellow
     $continue = Read-Host "Continue anyway? (y/N)"
@@ -76,10 +77,10 @@ Write-Host ""
 
 # Verify installation
 Write-Host "[*] Verifying installation..." -ForegroundColor Yellow
-try {
-    dockerpilot --help | Out-Null
+dockerpilot --help *> $null
+if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] Docker Pilot is ready!" -ForegroundColor Green
-} catch {
+} else {
     Write-Host "[WARNING] Installation complete, but command verification failed" -ForegroundColor Yellow
     Write-Host "Try running: dockerpilot --help" -ForegroundColor White
 }

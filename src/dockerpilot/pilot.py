@@ -39,7 +39,8 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
     
     def __init__(self, config_file: str = None, log_level: LogLevel = LogLevel.INFO):
-        self.console = Console()
+        self._configure_console_streams()
+        self.console = Console(safe_box=True)
         self._show_banner()
         self.client = None
         self.config = {}
@@ -89,7 +90,7 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     
     def _show_banner(self):
         """Display ASCII banner with application information"""
-        banner = """
+        banner = r"""
   _____             _             _____ _ _       _   
  |  __ \           | |           |  __ (_) |     | |  
  | |  | | ___   ___| | _____ _ __| |__) || | ___ | |_ 
@@ -104,6 +105,18 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         self.console.print(Panel(banner, title="[bold blue]Docker Managing Tool[/bold blue]", 
                                 title_align="center", border_style="blue"))
         self.console.print(f"[dim]Author: dozey | Version: Enhanced[/dim]\n")
+
+    def _configure_console_streams(self):
+        """Improve Windows console compatibility for Unicode-rich output."""
+        if os.name != 'nt':
+            return
+
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                try:
+                    stream.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
     
     def _parse_multi_target(self, target_string: str) -> List[str]:
         """Parse comma-separated list of containers/images.
