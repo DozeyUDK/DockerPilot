@@ -255,6 +255,7 @@ DockerPilotExtras/
 
 ### Status
 - `GET /api/status` - Docker and DockerPilot status
+- `GET /api/preflight` - Setup preflight checks (Python deps, Node/npm, Docker, DockerPilot)
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
 

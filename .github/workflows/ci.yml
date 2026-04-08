@@ -55,6 +55,26 @@ jobs:
       run: |
         pytest tests/test_cli_parser.py tests/test_cli_tui.py tests/test_main.py tests/test_build_fallback.py tests/test_cli_handlers.py
 
+  extras-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[test]
+        pip install -r DockerPilotExtras/requirements.txt
+
+    - name: Run Extras tests
+      run: |
+        pytest tests/test_extras_setup_checks.py tests/test_extras_preflight.py tests/test_extras_api_preflight.py
+
   package:
     runs-on: ubuntu-latest
     steps:

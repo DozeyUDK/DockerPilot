@@ -27,6 +27,7 @@ from utils.pipeline_generator import (
     parse_env_vars,
     generate_deployment_config_for_environment
 )
+from backend.preflight import run_preflight_checks
 from dockerpilot.pilot import DockerPilotEnhanced
 from dockerpilot.models import LogLevel
 
@@ -2357,6 +2358,16 @@ class StatusCheck(Resource):
                     pass
         
         return status
+
+
+class PreflightCheck(Resource):
+    """Run setup preflight checks for DockerPilotExtras."""
+
+    def get(self):
+        base_dir = Path(__file__).resolve().parent.parent
+        result = run_preflight_checks(base_dir)
+        http_status = 200 if result.get('success') else 503
+        return result, http_status
 
 
 class ContainerList(Resource):
@@ -6697,6 +6708,7 @@ api.add_resource(PrepareContainerConfig, '/api/environment/prepare-config')
 api.add_resource(ImportDeploymentConfig, '/api/environment/import-config')
 api.add_resource(EnvServersMap, '/api/environment/servers-map')
 api.add_resource(StatusCheck, '/api/status')
+api.add_resource(PreflightCheck, '/api/preflight')
 api.add_resource(ContainerList, '/api/containers')
 api.add_resource(DockerImages, '/api/docker/images')
 api.add_resource(DockerfilePaths, '/api/docker/dockerfiles')
