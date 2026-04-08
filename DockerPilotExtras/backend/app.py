@@ -2365,9 +2365,12 @@ class EnvironmentStatus(Resource):
                 else {}
             )
             normalized_bindings = _normalize_env_container_bindings(bindings_cfg).get("env_containers", {})
-            explicit_binding_envs = {
-                env for env in environments if isinstance(raw_bindings_map.get(env), list)
-            }
+            has_any_binding = any(bool(normalized_bindings.get(env)) for env in environments)
+            explicit_binding_envs = (
+                {env for env in environments if isinstance(raw_bindings_map.get(env), list)}
+                if has_any_binding
+                else set()
+            )
 
             server_envs = {}
             for env in environments:
@@ -2464,6 +2467,7 @@ class EnvironmentStatus(Resource):
                 "debug": {
                     "env_servers": env_servers,
                     "env_container_bindings": normalized_bindings,
+                    "has_any_binding": has_any_binding,
                 },
             }
             _environment_status_cache["data"] = result
