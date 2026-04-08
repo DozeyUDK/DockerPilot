@@ -12,9 +12,17 @@ function Pipelines() {
     project_name: '',
     docker_image: 'myapp:latest',
     dockerfile: './Dockerfile',
-    stages: ['build', 'test', 'deploy'],
+    stages: ['build', 'test', 'scan', 'deploy'],
     env_vars: 'ENV=production',
+    test_commands: 'npm test\nnpm run lint',
     deploy_strategy: 'rolling',
+    image_tag_strategy: 'branch-sha',
+    enable_environments: true,
+    enable_rollback_job: true,
+    scan_severity: 'HIGH,CRITICAL',
+    scan_fail_on_findings: true,
+    smoke_test_url: '',
+    smoke_test_retries: 10,
     runner_tags: 'docker,linux',
     use_cache: true,
     agent: 'any',
@@ -417,7 +425,7 @@ function Pipelines() {
           <div className="form-group">
             <label>Build stages:</label>
             <div className="checkbox-group">
-              {['build', 'test', 'deploy'].map(stage => (
+              {['build', 'test', 'scan', 'deploy', 'smoke'].map(stage => (
                 <div key={stage} className="checkbox-item">
                   <input
                     type="checkbox"
@@ -441,6 +449,19 @@ function Pipelines() {
             />
           </div>
 
+          {formData.stages.includes('test') && (
+            <div className="form-group">
+              <label>Container test commands (one per line):</label>
+              <textarea
+                name="test_commands"
+                value={formData.test_commands}
+                onChange={handleChange}
+                rows="3"
+                placeholder="npm test&#10;npm run lint"
+              />
+            </div>
+          )}
+
           <div className="form-group">
             <label>Deployment strategy:</label>
             <select name="deploy_strategy" value={formData.deploy_strategy} onChange={handleChange}>
@@ -449,6 +470,86 @@ function Pipelines() {
               <option value="canary">Canary</option>
             </select>
           </div>
+
+          <div className="form-group">
+            <label>Image tag strategy:</label>
+            <select name="image_tag_strategy" value={formData.image_tag_strategy} onChange={handleChange}>
+              <option value="branch-sha">branch-sha (recommended)</option>
+              <option value="sha">commit-sha</option>
+              <option value="tag-or-sha">git-tag or sha</option>
+              <option value="latest">latest</option>
+              <option value="static">use tag from docker image field</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <div className="checkbox-item">
+              <input
+                type="checkbox"
+                id="enable_environments"
+                name="enable_environments"
+                checked={formData.enable_environments}
+                onChange={handleChange}
+              />
+              <label htmlFor="enable_environments">Multi-environment deploy flow (DEV → STAGING → PROD)</label>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <div className="checkbox-item">
+              <input
+                type="checkbox"
+                id="enable_rollback_job"
+                name="enable_rollback_job"
+                checked={formData.enable_rollback_job}
+                onChange={handleChange}
+              />
+              <label htmlFor="enable_rollback_job">Generate manual rollback job</label>
+            </div>
+          </div>
+
+          {formData.stages.includes('scan') && (
+            <div className="form-group">
+              <label>Security scan severity:</label>
+              <select name="scan_severity" value={formData.scan_severity} onChange={handleChange}>
+                <option value="HIGH,CRITICAL">HIGH,CRITICAL</option>
+                <option value="MEDIUM,HIGH,CRITICAL">MEDIUM,HIGH,CRITICAL</option>
+                <option value="CRITICAL">CRITICAL only</option>
+              </select>
+              <div className="checkbox-item" style={{ marginTop: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="scan_fail_on_findings"
+                  name="scan_fail_on_findings"
+                  checked={formData.scan_fail_on_findings}
+                  onChange={handleChange}
+                />
+                <label htmlFor="scan_fail_on_findings">Fail pipeline when vulnerabilities are found</label>
+              </div>
+            </div>
+          )}
+
+          {formData.stages.includes('smoke') && (
+            <div className="form-group">
+              <label>Smoke test URL (supports {'{env}'} placeholder):</label>
+              <input
+                type="text"
+                name="smoke_test_url"
+                value={formData.smoke_test_url}
+                onChange={handleChange}
+                placeholder="https://dev.example.com/health or https://{env}.example.com/health"
+              />
+              <label style={{ marginTop: '0.5rem' }}>Smoke retries:</label>
+              <input
+                type="number"
+                min="1"
+                max="60"
+                name="smoke_test_retries"
+                value={formData.smoke_test_retries}
+                onChange={handleChange}
+              />
+            </div>
+          )}
 
           {formData.type === 'gitlab' && (
             <>

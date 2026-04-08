@@ -73,7 +73,7 @@ jobs:
 
     - name: Run Extras tests
       run: |
-        pytest tests/test_extras_setup_checks.py tests/test_extras_preflight.py tests/test_extras_api_preflight.py tests/test_extras_api_status.py
+        pytest tests/test_extras_setup_checks.py tests/test_extras_preflight.py tests/test_extras_api_preflight.py tests/test_extras_api_status.py tests/test_extras_pipeline_generator.py
 
   package:
     runs-on: ubuntu-latest

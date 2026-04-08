@@ -870,6 +870,21 @@ class PipelineGenerate(Resource):
             stages = data.get('stages', ['build', 'test', 'deploy'])
             env_vars_text = data.get('env_vars', 'ENV=production')
             deploy_strategy = data.get('deploy_strategy', 'rolling')
+            image_tag_strategy = data.get('image_tag_strategy', 'branch-sha')
+            scan_severity = data.get('scan_severity', 'HIGH,CRITICAL')
+            scan_fail_on_findings = data.get('scan_fail_on_findings', True)
+            smoke_test_url = data.get('smoke_test_url')
+            enable_rollback_job = data.get('enable_rollback_job', True)
+            try:
+                smoke_test_retries = int(data.get('smoke_test_retries', 10) or 10)
+            except (TypeError, ValueError):
+                smoke_test_retries = 10
+            test_commands_data = data.get('test_commands')
+            if isinstance(test_commands_data, list):
+                test_commands = [str(cmd).strip() for cmd in test_commands_data if str(cmd).strip()]
+            else:
+                test_commands_text = str(test_commands_data or '')
+                test_commands = [line.strip() for line in test_commands_text.splitlines() if line.strip()]
             
             # Parse environment variables
             env_vars = parse_env_vars(env_vars_text)
@@ -895,7 +910,14 @@ class PipelineGenerate(Resource):
                     use_cache=use_cache,
                     registry_url=registry_url,
                     enable_environments=enable_environments,
-                    deployment_config_path=deployment_config_path
+                    deployment_config_path=deployment_config_path,
+                    test_commands=test_commands,
+                    image_tag_strategy=image_tag_strategy,
+                    scan_severity=scan_severity,
+                    scan_fail_on_findings=scan_fail_on_findings,
+                    smoke_test_url=smoke_test_url,
+                    smoke_test_retries=smoke_test_retries,
+                    enable_rollback_job=enable_rollback_job
                 )
                 filename = '.gitlab-ci.yml'
                 
@@ -915,7 +937,13 @@ class PipelineGenerate(Resource):
                     env_vars=env_vars,
                     deploy_strategy=deploy_strategy,
                     enable_environments=enable_environments,
-                    deployment_config_path=deployment_config_path
+                    deployment_config_path=deployment_config_path,
+                    test_commands=test_commands,
+                    scan_severity=scan_severity,
+                    scan_fail_on_findings=scan_fail_on_findings,
+                    smoke_test_url=smoke_test_url,
+                    smoke_test_retries=smoke_test_retries,
+                    enable_rollback_job=enable_rollback_job
                 )
                 filename = 'Jenkinsfile'
             else:
@@ -1015,6 +1043,21 @@ class PipelineIntegration(Resource):
             env_vars_text = data.get('env_vars', 'ENV=production')
             deploy_strategy = data.get('deploy_strategy', 'rolling')
             enable_environments = data.get('enable_environments', True)
+            image_tag_strategy = data.get('image_tag_strategy', 'branch-sha')
+            scan_severity = data.get('scan_severity', 'HIGH,CRITICAL')
+            scan_fail_on_findings = data.get('scan_fail_on_findings', True)
+            smoke_test_url = data.get('smoke_test_url')
+            enable_rollback_job = data.get('enable_rollback_job', True)
+            try:
+                smoke_test_retries = int(data.get('smoke_test_retries', 10) or 10)
+            except (TypeError, ValueError):
+                smoke_test_retries = 10
+            test_commands_data = data.get('test_commands')
+            if isinstance(test_commands_data, list):
+                test_commands = [str(cmd).strip() for cmd in test_commands_data if str(cmd).strip()]
+            else:
+                test_commands_text = str(test_commands_data or '')
+                test_commands = [line.strip() for line in test_commands_text.splitlines() if line.strip()]
             
             env_vars = parse_env_vars(env_vars_text)
             generator = PipelineGenerator()
@@ -1032,7 +1075,14 @@ class PipelineIntegration(Resource):
                     deploy_strategy=deploy_strategy,
                     use_cache=use_cache,
                     enable_environments=enable_environments,
-                    deployment_config_path='deployment.yml'
+                    deployment_config_path='deployment.yml',
+                    test_commands=test_commands,
+                    image_tag_strategy=image_tag_strategy,
+                    scan_severity=scan_severity,
+                    scan_fail_on_findings=scan_fail_on_findings,
+                    smoke_test_url=smoke_test_url,
+                    smoke_test_retries=smoke_test_retries,
+                    enable_rollback_job=enable_rollback_job
                 )
                 filename = '.gitlab-ci.yml'
             elif pipeline_type == 'jenkins':
@@ -1048,7 +1098,13 @@ class PipelineIntegration(Resource):
                     env_vars=env_vars,
                     deploy_strategy=deploy_strategy,
                     enable_environments=enable_environments,
-                    deployment_config_path='deployment.yml'
+                    deployment_config_path='deployment.yml',
+                    test_commands=test_commands,
+                    scan_severity=scan_severity,
+                    scan_fail_on_findings=scan_fail_on_findings,
+                    smoke_test_url=smoke_test_url,
+                    smoke_test_retries=smoke_test_retries,
+                    enable_rollback_job=enable_rollback_job
                 )
                 filename = 'Jenkinsfile'
             else:

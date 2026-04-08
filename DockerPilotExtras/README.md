@@ -90,7 +90,7 @@ This will automatically:
 ## Features
 
 - **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
-- **Deployment Management** - Visual management and execution of deployments
+- **Container CI/CD Flow** - Build, test, scan, deploy, smoke and rollback-ready templates
 - **Environment Promotion** - Workflow dev → staging → prod
 - **Status and Monitoring** - Check Docker and DockerPilot status
 
@@ -103,7 +103,7 @@ This will automatically:
 ## Requirements
 
 - Python 3.9+
-- Node.js 16+ and npm
+- Node.js 18+ and npm
 - Docker 20.10+
 - DockerPilot installed and available in PATH
 
@@ -151,16 +151,9 @@ dockerpilot --version
    - Type: GitLab CI or Jenkins
    - Project name
    - Docker Image
-   - Stages (build, test, deploy)
+   - Stages (build, test, scan, deploy, smoke)
 4. Click **"Generate Pipeline"**
 5. View preview and save/download
-
-### Deployment
-
-1. Go to **"Deployments"** tab
-2. Edit YAML configuration
-3. Select deployment strategy
-4. Click **"Execute Deployment"**
 
 ### Environment Promotion
 

@@ -1,10 +1,9 @@
 import React from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import { ServerProvider } from './contexts/ServerContext'
 import ServerSelector from './components/ServerSelector'
 import Pipelines from './pages/Pipelines'
-import Deployments from './pages/Deployments'
 import Environments from './pages/Environments'
 import Status from './pages/Status'
 import './App.css'
@@ -15,7 +14,6 @@ function Navigation() {
 
   const navItems = [
     { path: '/', label: 'CI/CD Pipelines', component: Pipelines },
-    { path: '/deployments', label: 'Deployments', component: Deployments },
     { path: '/environments', label: 'Environments', component: Environments },
     { path: '/status', label: 'Status', component: Status }
   ]
@@ -78,7 +76,7 @@ function App() {
             <main className="main-content">
               <Routes>
                 <Route path="/" element={<Pipelines />} />
-                <Route path="/deployments" element={<Deployments />} />
+                <Route path="/deployments" element={<Navigate to="/environments" replace />} />
                 <Route path="/environments" element={<Environments />} />
                 <Route path="/status" element={<Status />} />
               </Routes>
