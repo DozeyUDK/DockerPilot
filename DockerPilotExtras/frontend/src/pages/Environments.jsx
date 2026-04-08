@@ -1248,7 +1248,7 @@ function Environments() {
   })
 
   return (
-    <div>
+    <div className="environments-page">
       <style>
         {`
           @keyframes pulse {
@@ -1257,8 +1257,8 @@ function Environments() {
           }
         `}
       </style>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{ margin: 0 }}>Environment Promotion</h2>
+      <div className="page-header-row" style={{ marginBottom: '1rem' }}>
+        <h2>Environment Promotion</h2>
         <button
           onClick={() => loadEnvironmentsStatus()}
           disabled={loadingStatus}
@@ -1325,17 +1325,14 @@ function Environments() {
               {servers.map((server) => (
                 <div
                   key={server.id}
+                  className="server-list-row"
                   style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '0.75rem',
                     backgroundColor: selectedServer === server.id ? 'var(--bg-tertiary)' : 'transparent',
                     border: `1px solid ${selectedServer === server.id ? '#007bff' : 'var(--border-color)'}`,
-                    borderRadius: '4px'
+                    wordBreak: 'break-word'
                   }}
                 >
-                  <div>
+                  <div className="server-list-main">
                     <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                       {server.name}
                       {selectedServer === server.id && <span style={{ marginLeft: '0.5rem', color: '#007bff' }}>✓</span>}
@@ -1349,7 +1346,7 @@ function Environments() {
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <div className="server-list-actions">
                     <button
                       onClick={() => handleServerTest(server.id)}
                       disabled={testingServer}
@@ -1539,133 +1536,101 @@ function Environments() {
       <div className="card">
         <h3 className="card-title">Environment Promotion Workflow</h3>
         
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'center', 
-          alignItems: 'center',
-          gap: '2rem',
-          flexWrap: 'wrap',
-          padding: '2rem'
-        }}>
-          {environments.map((env, index) => (
-            <React.Fragment key={env.name}>
-              <div 
-                onClick={() => handleEnvClick(env.name)}
-                style={{
-                textAlign: 'center',
-                padding: '2rem',
-                border: `2px solid ${env.color}`,
-                borderRadius: '8px',
-                minWidth: '200px',
-                background: `linear-gradient(135deg, ${env.color}15 0%, ${env.color}25 50%, ${env.color}15 100%)`,
-                boxShadow: `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`,
-                position: 'relative',
-                overflow: 'hidden',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'scale(1.05)'
-                e.currentTarget.style.boxShadow = `0 0 30px ${env.color}60, 0 0 60px ${env.color}30, inset 0 0 30px ${env.color}15`
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'scale(1)'
-                e.currentTarget.style.boxShadow = `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`
-              }}
-              >
-                <div style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '50%',
-                  backgroundColor: env.color,
-                  margin: '0 auto 1rem',
-                  border: '2px solid #fff',
-                  boxShadow: `0 0 0 2px ${env.color}, 0 0 15px ${env.color}80`,
-                  position: 'relative',
-                  zIndex: 1
-                }}></div>
-                <h3 style={{ 
-                  color: env.color, 
-                  marginBottom: '0.25rem',
-                  textShadow: `0 0 10px ${env.color}60`,
-                  position: 'relative',
-                  zIndex: 1
-                }}>
-                  {env.label}
-                </h3>
-                {(() => {
-                  const envData = getEnvironmentData(env.name)
-                  const serverLabel = envData?.server_label || (envData?.server_id === 'local' ? 'Local' : envData?.server_id) || '—'
-                  return (
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem', position: 'relative', zIndex: 1 }}>
-                      Server: {serverLabel}
-                    </p>
-                  )
-                })()}
-                <p style={{ 
-                  color: 'var(--text-secondary)', 
-                  fontSize: '0.9rem',
-                  position: 'relative',
-                  zIndex: 1
-                }}>
-                  Image: {(() => {
+        <div className="env-workflow-scroll">
+          <div className="env-workflow-track">
+            {environments.map((env, index) => (
+              <React.Fragment key={env.name}>
+                <div
+                  className="env-stage-card"
+                  onClick={() => handleEnvClick(env.name)}
+                  style={{
+                    border: `2px solid ${env.color}`,
+                    background: `linear-gradient(135deg, ${env.color}15 0%, ${env.color}25 50%, ${env.color}15 100%)`,
+                    boxShadow: `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-4px)'
+                    e.currentTarget.style.boxShadow = `0 0 30px ${env.color}60, 0 0 60px ${env.color}30, inset 0 0 30px ${env.color}15`
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)'
+                    e.currentTarget.style.boxShadow = `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`
+                  }}
+                >
+                  <div style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '50%',
+                    backgroundColor: env.color,
+                    margin: '0 auto 1rem',
+                    border: '2px solid #fff',
+                    boxShadow: `0 0 0 2px ${env.color}, 0 0 15px ${env.color}80`,
+                    position: 'relative',
+                    zIndex: 1
+                  }}></div>
+                  <h3 style={{
+                    color: env.color,
+                    marginBottom: '0.25rem',
+                    textShadow: `0 0 10px ${env.color}60`,
+                    position: 'relative',
+                    zIndex: 1
+                  }}>
+                    {env.label}
+                  </h3>
+                  {(() => {
                     const envData = getEnvironmentData(env.name)
-                    if (loadingStatus) return 'Loading...'
-                    if (envData?.primary_image) return envData.primary_image
-                    if (envData?.images?.length > 0) return envData.images[0]
-                    return 'No image'
+                    const serverLabel = envData?.server_label || (envData?.server_id === 'local' ? 'Local' : envData?.server_id) || '—'
+                    return (
+                      <p className="env-stage-meta">
+                        Server: {serverLabel}
+                      </p>
+                    )
                   })()}
-                </p>
-                <p style={{ 
-                  color: 'var(--text-secondary)', 
-                  fontSize: '0.9rem',
-                  position: 'relative',
-                  zIndex: 1
-                }}>
-                  Status: {(() => {
+                  <p className="env-stage-value">
+                    Image: {(() => {
+                      const envData = getEnvironmentData(env.name)
+                      if (loadingStatus) return 'Loading...'
+                      if (envData?.primary_image) return envData.primary_image
+                      if (envData?.images?.length > 0) return envData.images[0]
+                      return 'No image'
+                    })()}
+                  </p>
+                  <p className="env-stage-value">
+                    Status: {(() => {
+                      const envData = getEnvironmentData(env.name)
+                      if (loadingStatus) return 'Loading...'
+                      const status = envData?.status || 'empty'
+                      return getStatusLabel(status)
+                    })()}
+                  </p>
+                  {(() => {
                     const envData = getEnvironmentData(env.name)
-                    if (loadingStatus) return 'Loading...'
-                    const status = envData?.status || 'empty'
-                    return getStatusLabel(status)
+                    if (!envData || loadingStatus) return null
+                    return (
+                      <p className="env-stage-value" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                        Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
+                      </p>
+                    )
                   })()}
-                </p>
-                {(() => {
-                  const envData = getEnvironmentData(env.name)
-                  if (!envData || loadingStatus) return null
-                  return (
-                    <p style={{ 
-                      color: 'var(--text-secondary)', 
-                      fontSize: '0.8rem',
-                      position: 'relative',
-                      zIndex: 1,
-                      marginTop: '0.5rem'
-                    }}>
-                      Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
-                    </p>
-                  )
-                })()}
-              </div>
-              
-              {index < environments.length - 1 && (
-                <div style={{ 
-                  fontSize: '2rem', 
-                  color: '#667eea',
-                  fontWeight: 'bold'
-                }}>
-                  →
                 </div>
-              )}
-            </React.Fragment>
-          ))}
+
+                {index < environments.length - 1 && (
+                  <div style={{
+                    fontSize: '1.6rem',
+                    color: '#667eea',
+                    fontWeight: 'bold',
+                    alignSelf: 'center',
+                    flex: '0 0 auto'
+                  }}>
+                    →
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
 
-        <div style={{
-          display: 'flex',
-          justifyContent: 'center',
-          gap: '1rem',
-          marginTop: '2rem',
-          flexWrap: 'wrap'
-        }}>
+        <div className="env-workflow-actions">
           {environments.slice(0, -1).map((env, index) => {
             const nextEnv = environments[index + 1]
             const key = `${env.name}-${nextEnv.name}`
