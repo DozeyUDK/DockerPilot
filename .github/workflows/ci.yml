@@ -35,6 +35,25 @@ jobs:
       run: |
         python -m compileall -q src tests
 
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[test]
+
+    - name: Run smoke tests
+      run: |
+        pytest tests/test_cli_parser.py tests/test_cli_tui.py tests/test_main.py tests/test_build_fallback.py tests/test_cli_handlers.py
+
   package:
     runs-on: ubuntu-latest
     steps:
