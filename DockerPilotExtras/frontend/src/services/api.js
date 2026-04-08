@@ -15,14 +15,6 @@ export const pipelineAPI = {
   save: (data) => api.post('/pipeline/save', data)
 }
 
-// Deployment API
-export const deploymentAPI = {
-  getConfig: () => api.get('/deployment/config'),
-  saveConfig: (config) => api.post('/deployment/config', { config }),
-  execute: (config, strategy) => api.post('/deployment/execute', { config, strategy }),
-  getHistory: () => api.get('/deployment/history')
-}
-
 // Environment API
 export const environmentAPI = {
   promote: (fromEnv, toEnv, skipBackup = false) => api.post('/environment/promote', { 

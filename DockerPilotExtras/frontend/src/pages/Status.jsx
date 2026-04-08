@@ -249,33 +249,28 @@ function Status() {
       : 'Loading preflight status...')
 
   return (
-    <div>
+    <div className="status-page">
       <h2>Status and Monitoring</h2>
 
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Connection Status</h3>
           <button className="btn btn-secondary" onClick={checkStatus} disabled={loading}>
             {loading ? 'Checking...' : 'Refresh'}
           </button>
         </div>
 
-        <div style={{
-          marginBottom: '1rem',
-          padding: '0.5rem 0.75rem',
-          borderRadius: '4px',
-          border: '1px solid var(--border-color)',
-          backgroundColor: theme === 'dark' ? 'rgba(0, 123, 255, 0.18)' : '#e7f3ff',
-          color: 'var(--text-primary)',
-          fontSize: '0.9rem'
-        }}>
+        <div
+          className="status-scope-banner"
+          style={{ backgroundColor: theme === 'dark' ? 'rgba(0, 123, 255, 0.18)' : '#e7f3ff' }}
+        >
           Scope: <strong>{statusScopeLabel}</strong>
           {status.context?.hostname && status.context.mode === 'remote' && (
             <span style={{ color: 'var(--text-secondary)' }}> ({status.context.hostname})</span>
           )}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+        <div className="status-health-grid">
           {/* Docker Status */}
           <div style={{
             padding: '1rem',
@@ -310,7 +305,7 @@ function Status() {
                   ✓ Connected
                 </div>
                 {status.docker.version && (
-                  <div style={{ 
+                  <div className="status-wrap-anywhere" style={{ 
                     color: 'var(--text-secondary)', 
                     fontSize: '0.9rem', 
                     marginTop: '0.25rem' 
@@ -327,7 +322,7 @@ function Status() {
               }}>
                 ✗ Not available
                 {status.docker.error && (
-                  <div style={{ 
+                  <div className="status-wrap-anywhere" style={{ 
                     fontSize: '0.85rem', 
                     marginTop: '0.25rem',
                     color: 'var(--text-secondary)'
@@ -373,7 +368,7 @@ function Status() {
                   ✓ Connected
                 </div>
                 {status.dockerpilot.version && (
-                  <div style={{ 
+                  <div className="status-wrap-anywhere" style={{ 
                     color: 'var(--text-secondary)', 
                     fontSize: '0.9rem', 
                     marginTop: '0.25rem' 
@@ -390,7 +385,7 @@ function Status() {
               }}>
                 ✗ Not available
                 {status.dockerpilot.error && (
-                  <div style={{ 
+                  <div className="status-wrap-anywhere" style={{ 
                     fontSize: '0.85rem', 
                     marginTop: '0.25rem',
                     color: 'var(--text-secondary)'
@@ -412,7 +407,7 @@ function Status() {
       </div>
 
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Setup Preflight</h3>
           <button className="btn btn-secondary" onClick={loadPreflight} disabled={preflightLoading}>
             {preflightLoading ? 'Checking...' : 'Refresh'}
@@ -432,7 +427,7 @@ function Status() {
           color: 'var(--text-primary)'
         }}>
           {preflight ? preflightSummaryText : 'Loading preflight status...'}
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.35rem' }}>
+          <div className="status-wrap-anywhere" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.35rem' }}>
             Preflight runs on the DockerPilotExtras host (local service dependencies).
           </div>
         </div>
@@ -451,7 +446,7 @@ function Status() {
         )}
 
         {preflightChecks.length > 0 ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+          <div className="status-preflight-grid">
             {preflightChecks.map(([checkName, checkData]) => (
               <div
                 key={checkName}
@@ -467,7 +462,7 @@ function Status() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center' }}>
-                  <strong style={{ color: 'var(--text-primary)' }}>{checkName}</strong>
+                  <strong className="status-wrap-anywhere" style={{ color: 'var(--text-primary)' }}>{checkName}</strong>
                   <span style={{
                     fontWeight: 'bold',
                     color: checkData.ok ? '#28a745' : (checkData.required ? '#dc3545' : '#856404')
@@ -475,7 +470,7 @@ function Status() {
                     {checkData.ok ? 'OK' : (checkData.required ? 'REQUIRED' : 'WARNING')}
                   </span>
                 </div>
-                <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', fontSize: '0.9rem' }}>
+                <div className="status-wrap-anywhere" style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', fontSize: '0.9rem' }}>
                   {checkData.details || 'No details'}
                 </div>
                 {checkData.minimum && (
@@ -494,7 +489,7 @@ function Status() {
       </div>
 
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Pipeline Status and Containers</h3>
           <button className="btn btn-secondary" onClick={loadContainers}>
             Refresh
@@ -503,80 +498,40 @@ function Status() {
 
         {containerSummary ? (
           containerSummary.error ? (
-            <div style={{
-              padding: '1rem',
-              backgroundColor: '#f8d7da',
-              color: '#721c24',
-              borderRadius: '4px',
-              border: '1px solid #f5c6cb'
-            }}>
+            <div className="status-alert-error">
               <strong>❌ Error:</strong> {containerSummary.error}
             </div>
           ) : containerSummary.summary ? (
             <div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: '1rem',
-                marginBottom: '1rem'
-              }}>
-                <div style={{
-                  padding: '1rem',
-                  backgroundColor: '#e7f3ff',
-                  borderRadius: '4px',
-                  border: '2px solid #007bff',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#007bff' }}>
+              <div className="status-stat-grid">
+                <div className="status-summary-card total">
+                  <div className="status-summary-value" style={{ color: '#007bff' }}>
                     {containerSummary.summary.total}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Total containers</div>
+                  <div className="status-summary-label">Total containers</div>
                 </div>
-                
-                <div style={{
-                  padding: '1rem',
-                  backgroundColor: '#d4edda',
-                  borderRadius: '4px',
-                  border: '2px solid #28a745',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>
+
+                <div className="status-summary-card running">
+                  <div className="status-summary-value" style={{ color: '#28a745' }}>
                     {containerSummary.summary.running}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Running</div>
+                  <div className="status-summary-label">Running</div>
                 </div>
-                
-                <div style={{
-                  padding: '1rem',
-                  backgroundColor: '#fff3cd',
-                  borderRadius: '4px',
-                  border: '2px solid #ffc107',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#856404' }}>
+
+                <div className="status-summary-card stopped">
+                  <div className="status-summary-value" style={{ color: '#856404' }}>
                     {containerSummary.summary.stopped}
                   </div>
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>Stopped</div>
+                  <div className="status-summary-label">Stopped</div>
                 </div>
               </div>
 
               {containerSummary.summary.total === 0 ? (
-                <div style={{
-                  padding: '1rem',
-                  textAlign: 'center',
-                  color: '#666',
-                  fontStyle: 'italic'
-                }}>
+                <div className="status-empty" style={{ fontStyle: 'italic' }}>
                   No containers
                 </div>
               ) : (
-                <div style={{
-                  padding: '0.75rem',
-                  backgroundColor: containerSummary.summary.stopped === 0 ? '#d4edda' : '#fff3cd',
-                  borderRadius: '4px',
-                  border: `1px solid ${containerSummary.summary.stopped === 0 ? '#28a745' : '#ffc107'}`,
-                  textAlign: 'center'
-                }}>
+                <div className={`status-container-result ${containerSummary.summary.stopped === 0 ? 'ok' : 'warn'}`}>
                   {containerSummary.summary.stopped === 0 ? (
                     <span style={{ color: '#155724', fontWeight: 'bold' }}>
                       ✅ All containers are running correctly
@@ -591,32 +546,15 @@ function Status() {
 
               {containerSummary.containers && containerSummary.containers.length > 0 && (
                 <div style={{ marginTop: '1rem' }}>
-                  <strong style={{ fontSize: '0.9rem', color: '#666' }}>Recent containers:</strong>
-                  <div style={{
-                    marginTop: '0.5rem',
-                    maxHeight: '200px',
-                    overflowY: 'auto',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    padding: '0.5rem'
-                  }}>
-                    {containerSummary.containers.map((container, idx) => (
+                  <strong style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Recent containers:</strong>
+                  <div className="status-container-list">
+                    {containerSummary.containers.map((container) => (
                       <div
-                        key={idx}
-                        style={{
-                          padding: '0.5rem',
-                          borderBottom: idx < containerSummary.containers.length - 1 ? '1px solid #eee' : 'none',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
-                        }}
+                        key={container.id || container.name}
+                        className="status-container-row"
                       >
-                        <span style={{ fontWeight: '500' }}>{container.name}</span>
-                        <span style={{
-                          fontSize: '0.85rem',
-                          color: container.state === 'running' ? '#28a745' : '#6c757d',
-                          fontWeight: container.state === 'running' ? 'bold' : 'normal'
-                        }}>
+                        <span className="status-container-name">{container.name}</span>
+                        <span className={`status-container-state ${container.state === 'running' ? 'running' : 'stopped'}`}>
                           {container.state === 'running' ? '● Running' : '○ Stopped'}
                         </span>
                       </div>
@@ -626,19 +564,19 @@ function Status() {
               )}
             </div>
           ) : (
-            <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
+            <p className="status-empty">
               No container data
             </p>
           )
         ) : (
-          <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
+          <p className="status-empty">
             Loading container status...
           </p>
         )}
       </div>
 
-      <div className="card" style={{ width: '100%', maxWidth: '100%', overflow: 'visible' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      <div className="card status-cli-card">
+        <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Interactive CLI</h3>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button 
@@ -652,25 +590,16 @@ function Status() {
         </div>
 
         {/* Program Switcher and Working Directory */}
-        <div style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="status-cli-controls">
+          <div className="status-cli-row">
             <label style={{ fontWeight: 'bold' }}>Program:</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div className="status-cli-program-buttons">
               <button
                 onClick={() => {
                   setCliProgram('docker')
                   setShowHelp(false)
                 }}
-                style={{
-                  padding: '0.5rem 1rem',
-                  border: '2px solid',
-                  borderColor: cliProgram === 'docker' ? '#007bff' : '#ccc',
-                  backgroundColor: cliProgram === 'docker' ? '#007bff' : 'white',
-                  color: cliProgram === 'docker' ? 'white' : '#333',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontWeight: cliProgram === 'docker' ? 'bold' : 'normal'
-                }}
+                className={`status-cli-toggle ${cliProgram === 'docker' ? 'active' : ''}`}
               >
                 Docker
               </button>
@@ -679,16 +608,7 @@ function Status() {
                   setCliProgram('dockerpilot')
                   setShowHelp(false)
                 }}
-                style={{
-                  padding: '0.5rem 1rem',
-                  border: '2px solid',
-                  borderColor: cliProgram === 'dockerpilot' ? '#007bff' : '#ccc',
-                  backgroundColor: cliProgram === 'dockerpilot' ? '#007bff' : 'white',
-                  color: cliProgram === 'dockerpilot' ? 'white' : '#333',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontWeight: cliProgram === 'dockerpilot' ? 'bold' : 'normal'
-                }}
+                className={`status-cli-toggle ${cliProgram === 'dockerpilot' ? 'active' : ''}`}
               >
                 DockerPilot
               </button>
@@ -712,21 +632,14 @@ function Status() {
           </div>
           
           {/* Working Directory Selector */}
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="status-cli-row">
             <label style={{ fontWeight: 'bold' }}>Working directory:</label>
             <input
               type="text"
               value={workingDirectory}
               onChange={(e) => setWorkingDirectory(e.target.value)}
               placeholder="Empty = default directory"
-              style={{
-                flex: 1,
-                minWidth: '200px',
-                padding: '0.5rem',
-                border: '1px solid #ccc',
-                borderRadius: '4px',
-                fontSize: '0.9rem'
-              }}
+              className="status-cli-input"
             />
             <button
               onClick={openFileBrowser}
@@ -828,18 +741,11 @@ function Status() {
         {/* CLI Output */}
         <div
           ref={cliOutputRef}
-          className="cli-output-container"
+          className="cli-output-container status-cli-output"
           style={{
             fontFamily: '"Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
-            fontSize: '0.8rem',
-            minHeight: '300px',
-            maxHeight: '600px',
             overflowY: 'auto',
             overflowX: 'auto',
-            marginBottom: '1rem',
-            width: '100%',
-            boxSizing: 'border-box',
-            lineHeight: '1.4',
             wordBreak: 'keep-all',
             overflowWrap: 'normal'
           }}
@@ -909,19 +815,8 @@ function Status() {
         </div>
 
         {/* CLI Input */}
-        <div style={{ 
-          display: 'flex', 
-          gap: '0.5rem', 
-          alignItems: 'center',
-          width: '100%'
-        }}>
-          <span style={{ 
-            color: '#4ec9b0', 
-            fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-            fontWeight: 'bold',
-            whiteSpace: 'nowrap',
-            flexShrink: 0
-          }}>
+        <div className="status-cli-row" style={{ width: '100%' }}>
+          <span className="status-cli-prompt">
             {cliProgram} $
           </span>
           <input
@@ -931,15 +826,11 @@ function Status() {
             onKeyDown={handleCliKeyPress}
             placeholder="Type command..."
             disabled={cliLoading}
+            className="status-cli-input"
             style={{
-              flex: 1,
-              padding: '0.5rem',
               fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-              fontSize: '0.9rem',
-              border: '1px solid #ccc',
-              borderRadius: '4px',
-              backgroundColor: cliLoading ? '#f5f5f5' : 'white',
-              minWidth: 0  // Allows shrinking
+              backgroundColor: cliLoading ? 'var(--bg-tertiary)' : 'var(--input-bg)',
+              minWidth: 0 // Allows shrinking
             }}
           />
           <button
