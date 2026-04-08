@@ -8,9 +8,12 @@ function Status() {
   const { theme } = useTheme()
   const [status, setStatus] = useState({
     docker: { available: false, version: null, error: null },
-    dockerpilot: { available: false, version: null, error: null }
+    dockerpilot: { available: false, version: null, error: null },
+    context: { mode: 'local', server_name: 'Local', hostname: 'localhost' }
   })
   const [containerSummary, setContainerSummary] = useState(null)
+  const [preflight, setPreflight] = useState(null)
+  const [preflightLoading, setPreflightLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cliProgram, setCliProgram] = useState('docker')
   const [cliCommand, setCliCommand] = useState('')
@@ -33,6 +36,7 @@ function Status() {
   useEffect(() => {
     checkStatus()
     loadContainers()
+    loadPreflight()
   }, [selectedServer]) // Reload when server changes
 
   const checkStatus = async () => {
@@ -58,6 +62,24 @@ function Status() {
     } catch (error) {
       console.error('Error loading containers:', error)
       setContainerSummary({ error: 'Error loading container status' })
+    }
+  }
+
+  const loadPreflight = async () => {
+    setPreflightLoading(true)
+    try {
+      const response = await statusAPI.preflight()
+      setPreflight(response.data)
+    } catch (error) {
+      setPreflight({
+        success: false,
+        checks: {},
+        required_failed: [],
+        warnings: [],
+        error: error.response?.data?.error || error.message || 'Preflight check failed'
+      })
+    } finally {
+      setPreflightLoading(false)
     }
   }
 
@@ -208,6 +230,24 @@ function Status() {
     setShowHelp(false)
   }
 
+  const statusScopeLabel = status.context?.mode === 'remote'
+    ? `Remote: ${status.context?.server_name || status.context?.hostname || 'Unknown server'}`
+    : 'Local host'
+
+  const preflightChecks = preflight?.checks ? Object.entries(preflight.checks) : []
+  const preflightSummaryColor = !preflight
+    ? '#6c757d'
+    : (preflight.success
+      ? (preflight.warnings?.length > 0 ? '#ffc107' : '#28a745')
+      : '#dc3545')
+  const preflightSummaryText = preflight?.success
+    ? (preflight?.warnings?.length > 0
+      ? `Required checks passed with ${preflight.warnings.length} warning(s)`
+      : 'All required setup checks passed')
+    : (preflight
+      ? `Missing required checks: ${(preflight.required_failed || []).join(', ') || 'unknown'}`
+      : 'Loading preflight status...')
+
   return (
     <div>
       <h2>Status and Monitoring</h2>
@@ -218,6 +258,21 @@ function Status() {
           <button className="btn btn-secondary" onClick={checkStatus} disabled={loading}>
             {loading ? 'Checking...' : 'Refresh'}
           </button>
+        </div>
+
+        <div style={{
+          marginBottom: '1rem',
+          padding: '0.5rem 0.75rem',
+          borderRadius: '4px',
+          border: '1px solid var(--border-color)',
+          backgroundColor: theme === 'dark' ? 'rgba(0, 123, 255, 0.18)' : '#e7f3ff',
+          color: 'var(--text-primary)',
+          fontSize: '0.9rem'
+        }}>
+          Scope: <strong>{statusScopeLabel}</strong>
+          {status.context?.hostname && status.context.mode === 'remote' && (
+            <span style={{ color: 'var(--text-secondary)' }}> ({status.context.hostname})</span>
+          )}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
@@ -354,6 +409,88 @@ function Status() {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 className="card-title">Setup Preflight</h3>
+          <button className="btn btn-secondary" onClick={loadPreflight} disabled={preflightLoading}>
+            {preflightLoading ? 'Checking...' : 'Refresh'}
+          </button>
+        </div>
+
+        <div style={{
+          marginBottom: '1rem',
+          padding: '0.75rem',
+          borderRadius: '4px',
+          border: `1px solid ${preflightSummaryColor}`,
+          backgroundColor: !preflight
+            ? (theme === 'dark' ? 'rgba(108, 117, 125, 0.2)' : '#f1f3f5')
+            : (theme === 'dark'
+              ? (preflight.success ? 'rgba(40, 167, 69, 0.15)' : 'rgba(220, 53, 69, 0.15)')
+              : (preflight.success ? '#d4edda' : '#f8d7da')),
+          color: 'var(--text-primary)'
+        }}>
+          {preflight ? preflightSummaryText : 'Loading preflight status...'}
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.35rem' }}>
+            Preflight runs on the DockerPilotExtras host (local service dependencies).
+          </div>
+        </div>
+
+        {preflight?.error && (
+          <div style={{
+            marginBottom: '1rem',
+            padding: '0.75rem',
+            borderRadius: '4px',
+            border: '1px solid #dc3545',
+            backgroundColor: theme === 'dark' ? 'rgba(220, 53, 69, 0.15)' : '#f8d7da',
+            color: theme === 'dark' ? '#f87171' : '#721c24'
+          }}>
+            {preflight.error}
+          </div>
+        )}
+
+        {preflightChecks.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+            {preflightChecks.map(([checkName, checkData]) => (
+              <div
+                key={checkName}
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '4px',
+                  border: `1px solid ${checkData.ok ? '#28a745' : (checkData.required ? '#dc3545' : '#ffc107')}`,
+                  backgroundColor: theme === 'dark'
+                    ? (checkData.ok
+                      ? 'rgba(40, 167, 69, 0.12)'
+                      : (checkData.required ? 'rgba(220, 53, 69, 0.15)' : 'rgba(255, 193, 7, 0.14)'))
+                    : (checkData.ok ? '#f4fff7' : (checkData.required ? '#fff3f3' : '#fff9e6'))
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center' }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>{checkName}</strong>
+                  <span style={{
+                    fontWeight: 'bold',
+                    color: checkData.ok ? '#28a745' : (checkData.required ? '#dc3545' : '#856404')
+                  }}>
+                    {checkData.ok ? 'OK' : (checkData.required ? 'REQUIRED' : 'WARNING')}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', fontSize: '0.9rem' }}>
+                  {checkData.details || 'No details'}
+                </div>
+                {checkData.minimum && (
+                  <div style={{ color: 'var(--text-tertiary)', marginTop: '0.25rem', fontSize: '0.8rem' }}>
+                    Minimum: {checkData.minimum}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ color: '#666', textAlign: 'center', padding: '1rem' }}>
+            {preflightLoading ? 'Running checks...' : 'No preflight details'}
+          </p>
+        )}
       </div>
 
       <div className="card">

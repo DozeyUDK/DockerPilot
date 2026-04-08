@@ -69,6 +69,7 @@ export const environmentAPI = {
 // Status API
 export const statusAPI = {
   check: () => api.get('/status'),
+  preflight: () => api.get('/preflight'),
   containers: () => api.get('/containers'),
   executeCommand: (program, command, workingDirectory) => api.post('/command/execute', { 
     program, 

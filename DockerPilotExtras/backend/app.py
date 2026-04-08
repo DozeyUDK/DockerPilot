@@ -16,6 +16,7 @@ import sys
 import hashlib
 import re
 import importlib.util
+import time
 
 # Add parent directory to path for utils import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -2095,268 +2096,171 @@ class EnvironmentStatus(Resource):
 
 
 
-class StatusCheck(Resource):
-    """Check Docker and DockerPilot status using DockerPilot API"""
-    def get(self):
-        status = {
-            'docker': {'available': False, 'version': None, 'error': None},
-            'dockerpilot': {'available': False, 'version': None, 'error': None}
+def _build_status_context(server_config):
+    """Return normalized status context for local/remote checks."""
+    if not server_config:
+        return {
+            'mode': 'local',
+            'server_id': 'local',
+            'server_name': 'Local',
+            'hostname': 'localhost',
         }
-        
+
+    return {
+        'mode': 'remote',
+        'server_id': server_config.get('id', 'remote'),
+        'server_name': server_config.get('name') or server_config.get('hostname') or 'Remote server',
+        'hostname': server_config.get('hostname', 'unknown'),
+    }
+
+
+def _run_remote_probe(server_config, command, attempts=2):
+    """Execute a remote probe command with small retry for transient SSH issues."""
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            output = execute_command_via_ssh(server_config, command, check_exit_status=False)
+            return (output or "").strip(), None
+        except Exception as exc:
+            last_error = str(exc)
+            app.logger.warning(
+                "Remote probe failed (attempt %s/%s): %s | command=%s",
+                attempt,
+                attempts,
+                exc,
+                command,
+            )
+            if attempt < attempts:
+                time.sleep(0.25)
+
+    return "", last_error or "unknown remote probe error"
+
+
+class StatusCheck(Resource):
+    """Check Docker and DockerPilot status using DockerPilot API."""
+
+    def get(self):
         # Check if remote server is selected
         server_config = get_selected_server_config()
-        
+        context = _build_status_context(server_config)
+        server_label = context['server_name']
+
+        status = {
+            'docker': {'available': False, 'version': None, 'error': None},
+            'dockerpilot': {'available': False, 'version': None, 'error': None},
+            'context': context,
+        }
+
         if server_config:
-            # Check Docker on remote server via SSH
-            try:
-                docker_version_output = execute_docker_command_via_ssh(server_config, "--version")
-                if docker_version_output:
-                    status['docker'] = {
-                        'available': True,
-                        'version': docker_version_output.strip()
-                    }
-                else:
-                    status['docker']['error'] = 'Could not get Docker version from remote server'
-            except Exception as e:
-                status['docker']['error'] = f'Remote server connection failed: {str(e)}'
+            docker_output, docker_error = _run_remote_probe(
+                server_config,
+                "docker --version 2>/dev/null || sudo -n docker --version 2>/dev/null || echo MISSING_DOCKER",
+            )
+            if docker_error:
+                status['docker']['error'] = f"Remote Docker check failed on {server_label}: {docker_error}"
+            elif not docker_output or "MISSING_DOCKER" in docker_output:
+                status['docker']['error'] = f"Docker not available on remote server: {server_label}"
+            else:
+                status['docker'] = {
+                    'available': True,
+                    'version': docker_output.splitlines()[0].strip(),
+                    'error': None,
+                }
+
+            dockerpilot_output, dockerpilot_error = _run_remote_probe(
+                server_config,
+                "dockerpilot --version 2>/dev/null || (command -v dockerpilot >/dev/null 2>&1 && echo DOCKERPILOT_AVAILABLE_NO_VERSION) || echo MISSING_DOCKERPILOT",
+            )
+            if dockerpilot_error:
+                status['dockerpilot']['error'] = f"Remote DockerPilot check failed on {server_label}: {dockerpilot_error}"
+            elif not dockerpilot_output or "MISSING_DOCKERPILOT" in dockerpilot_output:
+                status['dockerpilot']['error'] = f"DockerPilot not installed or not in PATH on {server_label}"
+            else:
+                version_value = dockerpilot_output.splitlines()[0].strip()
+                if "DOCKERPILOT_AVAILABLE_NO_VERSION" in version_value:
+                    version_value = "DockerPilot available (version flag unsupported)"
+                status['dockerpilot'] = {
+                    'available': True,
+                    'version': version_value,
+                    'error': None,
+                }
         else:
             # Check Docker via DockerPilot API (local)
             try:
                 pilot = get_dockerpilot()
                 if pilot.client:
-                    # Test Docker connection
                     try:
                         pilot.client.ping()
                         docker_version = pilot.client.version()
                         status['docker'] = {
                             'available': True,
-                            'version': docker_version.get('Version', 'Unknown')
+                            'version': docker_version.get('Version', 'Unknown'),
+                            'error': None,
                         }
-                    except Exception as e:
-                        status['docker']['error'] = f'Docker connection failed: {str(e)}'
+                    except Exception as exc:
+                        status['docker']['error'] = f'Docker connection failed: {str(exc)}'
                 else:
                     status['docker']['error'] = 'Docker client not initialized'
-            except Exception as e:
-                status['docker']['error'] = f'Docker check failed: {str(e)}'
+            except Exception as exc:
+                status['docker']['error'] = f'Docker check failed: {str(exc)}'
                 # Fallback to CLI check
                 try:
                     result = subprocess.run(
                         ['docker', '--version'],
                         capture_output=True,
                         text=True,
-                        timeout=5
+                        timeout=5,
                     )
                     if result.returncode == 0:
                         status['docker'] = {
                             'available': True,
-                            'version': result.stdout.strip()
+                            'version': result.stdout.strip(),
+                            'error': None,
                         }
-                except:
+                except Exception:
                     pass
-        
-        # Check DockerPilot
-        if server_config:
-            # Check DockerPilot on remote server via SSH
-            try:
-                import paramiko
-                from io import StringIO
-                
-                hostname = server_config.get('hostname')
-                port = server_config.get('port', 22)
-                username = server_config.get('username')
-                auth_type = server_config.get('auth_type', 'password')
-                
-                # Create SSH client
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                
-                # Prepare authentication
-                if auth_type == 'password':
-                    ssh.connect(hostname, port=port, username=username, password=server_config.get('password'), timeout=10)
-                elif auth_type == 'key':
-                    key_content = server_config.get('private_key')
-                    key_passphrase = server_config.get('key_passphrase')
-                    if not key_content:
-                        raise ValueError('Private key required for key authentication')
-                    
-                    # Load private key
-                    key_file = StringIO(key_content)
-                    try:
-                        key = paramiko.RSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                    except:
-                        try:
-                            key_file.seek(0)
-                            key = paramiko.DSSKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                        except:
-                            key_file.seek(0)
-                            key = paramiko.ECDSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                    
-                    ssh.connect(hostname, port=port, username=username, pkey=key, timeout=10)
-                elif auth_type == '2fa':
-                    password = server_config.get('password')
-                    totp_code = server_config.get('totp_code', '')
-                    ssh.connect(hostname, port=port, username=username, password=password + totp_code, timeout=10)
-                
-                # Check if dockerpilot command exists using 'which' or 'command -v'
-                import time
-                dockerpilot_available = False
-                version_str = 'DockerPilot Enhanced'
-                last_error = None
-                
-                # Method 1: Check if dockerpilot is in PATH using 'which'
-                try:
-                    stdin, stdout, stderr = ssh.exec_command("which dockerpilot 2>&1", timeout=5)
-                    time.sleep(0.5)  # Give it more time
-                    exit_status = stdout.channel.recv_exit_status()
-                    output = stdout.read().decode('utf-8').strip()
-                    error_output = stderr.read().decode('utf-8').strip()
-                    
-                    app.logger.info(f"DockerPilot check - which: exit={exit_status}, output='{output}', error='{error_output}'")
-                    
-                    if exit_status == 0 and output:
-                        dockerpilot_available = True
-                        app.logger.info(f"DockerPilot found at: {output}")
-                    elif exit_status != 0:
-                        # Try 'command -v' as alternative
-                        stdin, stdout, stderr = ssh.exec_command("command -v dockerpilot 2>&1", timeout=5)
-                        time.sleep(0.5)
-                        exit_status = stdout.channel.recv_exit_status()
-                        output = stdout.read().decode('utf-8').strip()
-                        error_output = stderr.read().decode('utf-8').strip()
-                        
-                        app.logger.info(f"DockerPilot check - command -v: exit={exit_status}, output='{output}', error='{error_output}'")
-                        
-                        if exit_status == 0 and output:
-                            dockerpilot_available = True
-                            app.logger.info(f"DockerPilot found at: {output}")
-                        else:
-                            last_error = f"which/command -v failed: exit={exit_status}, output='{output}', error='{error_output}'"
-                except Exception as e:
-                    last_error = f"command -v/which check exception: {str(e)}"
-                    app.logger.error(f"DockerPilot check failed: {e}")
-                
-                # Method 2: If not found by which/command -v, try direct execution
-                if not dockerpilot_available:
-                    try:
-                        # Try to execute dockerpilot directly (it might be a function or alias)
-                        stdin, stdout, stderr = ssh.exec_command("bash -c 'type dockerpilot' 2>&1", timeout=5)
-                        time.sleep(0.5)
-                        exit_status = stdout.channel.recv_exit_status()
-                        output = stdout.read().decode('utf-8').strip()
-                        
-                        app.logger.info(f"DockerPilot check - type: exit={exit_status}, output='{output}'")
-                        
-                        if exit_status == 0 and ('dockerpilot' in output.lower() or 'is' in output.lower()):
-                            dockerpilot_available = True
-                            app.logger.info(f"DockerPilot found via type: {output}")
-                    except Exception as e:
-                        app.logger.debug(f"type check failed: {e}")
-                
-                # Method 3: Try to execute dockerpilot and see if it responds (even if it shows menu)
-                if not dockerpilot_available:
-                    try:
-                        # Execute dockerpilot with timeout - if it responds (even with menu), it exists
-                        stdin, stdout, stderr = ssh.exec_command("timeout 2 bash -c 'dockerpilot' 2>&1 | head -n 5", timeout=3)
-                        time.sleep(0.8)
-                        output = stdout.read().decode('utf-8')
-                        error_output = stderr.read().decode('utf-8')
-                        combined = (output + error_output).strip()
-                        
-                        app.logger.info(f"DockerPilot check - direct exec: output='{combined[:200]}'")
-                        
-                        if combined and ('dockerpilot' in combined.lower() or 'docker' in combined.lower() or 'managing' in combined.lower()):
-                            dockerpilot_available = True
-                            app.logger.info("DockerPilot found via direct execution")
-                    except Exception as e:
-                        app.logger.debug(f"Direct execution check failed: {e}")
-                
-                # Method 4: If found, try to get version info
-                if dockerpilot_available:
-                    try:
-                        # Try to get version by running dockerpilot with timeout and capturing header
-                        stdin, stdout, stderr = ssh.exec_command("timeout 1 bash -c 'dockerpilot' 2>&1 | head -n 10", timeout=3)
-                        time.sleep(0.5)
-                        output = stdout.read().decode('utf-8')
-                        error_output = stderr.read().decode('utf-8')
-                        combined = (output + error_output).strip()
-                        
-                        # Look for version or enhanced info in output
-                        if combined:
-                            for line in combined.split('\n'):
-                                line = line.strip()
-                                if 'version' in line.lower() and ('enhanced' in line.lower() or 'dockerpilot' in line.lower()):
-                                    version_str = line
-                                    break
-                                elif 'enhanced' in line.lower() and 'dockerpilot' in line.lower():
-                                    version_str = line
-                                    break
-                                elif 'author' in line.lower() and 'dozey' in line.lower():
-                                    version_str = 'DockerPilot Enhanced'
-                                    break
-                    except Exception as e:
-                        app.logger.debug(f"Version extraction failed: {e}, using default")
-                
-                ssh.close()
-                
-                if dockerpilot_available:
-                    status['dockerpilot'] = {
-                        'available': True,
-                        'version': version_str
-                    }
-                    app.logger.info(f"DockerPilot status set to available: {version_str}")
-                else:
-                    error_msg = last_error or 'DockerPilot is not installed on remote server or not in PATH'
-                    status['dockerpilot']['error'] = error_msg
-                    app.logger.warning(f"DockerPilot not available on remote server: {error_msg}")
-                        
-            except Exception as e:
-                # DockerPilot might not be installed or not in PATH
-                error_msg = str(e).lower()
-                if 'command not found' in error_msg or 'not found' in error_msg or 'no such file' in error_msg:
-                    status['dockerpilot']['error'] = 'DockerPilot is not installed on remote server or not in PATH'
-                else:
-                    status['dockerpilot']['error'] = f'Error checking DockerPilot: {str(e)}'
-        else:
+
             # Check DockerPilot locally
             try:
                 pilot = get_dockerpilot()
                 if pilot.client:
-                    # Try to list containers to verify DockerPilot works
                     try:
-                        containers = pilot.list_containers(show_all=False, format_output='json')
-                        # Get version from __init__
+                        pilot.list_containers(show_all=False, format_output='json')
                         try:
                             from dockerpilot import __version__
                             version_str = f'DockerPilot {__version__}'
                         except ImportError:
                             version_str = 'DockerPilot Enhanced'
-                        
+
                         status['dockerpilot'] = {
                             'available': True,
-                            'version': version_str
+                            'version': version_str,
+                            'error': None,
                         }
-                    except Exception as e:
-                        status['dockerpilot']['error'] = f'DockerPilot API test failed: {str(e)}'
+                    except Exception as exc:
+                        status['dockerpilot']['error'] = f'DockerPilot API test failed: {str(exc)}'
                 else:
                     status['dockerpilot']['error'] = 'DockerPilot client not initialized'
-            except Exception as e:
-                status['dockerpilot']['error'] = f'DockerPilot check failed: {str(e)}'
+            except Exception as exc:
+                status['dockerpilot']['error'] = f'DockerPilot check failed: {str(exc)}'
                 # Fallback to CLI check
                 try:
                     result = subprocess.run(
                         ['dockerpilot', '--version'],
                         capture_output=True,
                         text=True,
-                        timeout=5
+                        timeout=5,
                     )
                     if result.returncode == 0:
                         status['dockerpilot'] = {
                             'available': True,
-                            'version': result.stdout.strip()
+                            'version': result.stdout.strip(),
+                            'error': None,
                         }
-                except:
+                except Exception:
                     pass
-        
+
         return status
 
 

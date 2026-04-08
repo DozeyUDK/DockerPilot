@@ -171,8 +171,9 @@ dockerpilot --version
 ### Status
 
 1. Go to **"Status"** tab
-2. Check Docker and DockerPilot status
-3. View container list
+2. Check Docker and DockerPilot status (local or selected remote server scope)
+3. Run **Setup Preflight** to verify local Extras dependencies (Python/Node/npm/Docker/DockerPilot)
+4. View container list
 
 ## Hosting
 
@@ -254,7 +255,7 @@ DockerPilotExtras/
 - `POST /api/environment/promote` - Promote environment
 
 ### Status
-- `GET /api/status` - Docker and DockerPilot status
+- `GET /api/status` - Docker and DockerPilot status with context (local/remote)
 - `GET /api/preflight` - Setup preflight checks (Python deps, Node/npm, Docker, DockerPilot)
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
