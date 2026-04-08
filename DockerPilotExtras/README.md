@@ -68,6 +68,17 @@ export CORS_ORIGINS="https://extras.example.com"
 
 # Ensure cookies are marked Secure when behind HTTPS
 export SESSION_COOKIE_SECURE=true
+
+# Enable web-panel authentication
+export WEB_AUTH_ENABLED=true
+export WEB_AUTH_USERNAME=admin
+export WEB_AUTH_PASSWORD=change-me-now
+
+# Optional TOTP MFA (Google/Microsoft Authenticator, Base32 secret)
+export WEB_AUTH_TOTP_SECRET=JBSWY3DPEHPK3PXP
+
+# Session inactivity timeout (minutes)
+export APP_SESSION_IDLE_MINUTES=45
 ```
 
 ### 4. Using Loader Script (Recommended)
@@ -405,7 +416,7 @@ Backend has CORS enabled by default for all sources. In production, configure `C
 - **SECRET_KEY**: Change `SECRET_KEY` in production (set via `SECRET_KEY` environment variable)
 - **CORS**: Configure `CORS_ORIGINS` to limit access (set via `CORS_ORIGINS` environment variable)
 - **HTTPS**: Use HTTPS in production
-- **Authentication**: Consider adding authentication for API endpoints
+- **Authentication**: Optional web auth with session + MFA TOTP is available (`WEB_AUTH_ENABLED=true`)
 - **Credentials**: All passwords and SSH keys are stored in user's home directory (`~/.dockerpilot_extras/`) and never hardcoded in the application
 
 ### Environment Variables
@@ -416,6 +427,23 @@ PORT=5000
 FLASK_ENV=development
 SECRET_KEY=your-secret-key-here
 CORS_ORIGINS=http://localhost:3000,http://localhost:5000
+SESSION_COOKIE_SECURE=false
+
+# Web auth (optional, disabled by default)
+WEB_AUTH_ENABLED=false
+WEB_AUTH_USERNAME=admin
+WEB_AUTH_PASSWORD=change-me
+# Prefer PBKDF2 hash in production:
+# WEB_AUTH_PASSWORD_HASH=pbkdf2_sha256$600000$your-salt$your-hex-digest
+
+# MFA TOTP (optional)
+WEB_AUTH_TOTP_SECRET=
+
+# Session inactivity timeout in minutes
+APP_SESSION_IDLE_MINUTES=45
+
+# Elevation token TTL in seconds (for privileged operations)
+ELEVATION_TOKEN_TTL_SECONDS=120
 ```
 
 ## API Documentation

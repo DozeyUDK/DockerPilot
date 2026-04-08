@@ -29,8 +29,14 @@ function Environments() {
   const [showFileBrowser, setShowFileBrowser] = useState(false) // Show file browser after container selection
   const [showSudoModal, setShowSudoModal] = useState(false) // Show sudo password modal
   const [sudoPassword, setSudoPassword] = useState('') // Sudo password input
-  const [sudoModalCallback, setSudoModalCallback] = useState(null) // Callback to execute after password is set (for useEffect tracking)
-  const sudoModalCallbackRef = useRef(null) // Ref for callback (synchronous access)
+  const sudoModalCallbackRef = useRef(null) // Ref for modal action callback
+  const [sudoModalMeta, setSudoModalMeta] = useState({
+    requiresSudo: false,
+    hasLargeMounts: false,
+    totalSizeTB: 0,
+    totalSizeGB: 0,
+    largeMounts: []
+  })
   const [privilegedPaths, setPrivilegedPaths] = useState([]) // Paths requiring sudo
   const [sudoModalContainerName, setSudoModalContainerName] = useState(null) // Container name for modal
   const [deploymentProgress, setDeploymentProgress] = useState(null) // Progress tracking for deployment
@@ -422,55 +428,20 @@ function Environments() {
     }
   }, [migratingContainer, migrationStarted])
   
-  // Debug: Monitor showSudoModal changes
-  useEffect(() => {
-    console.log('[useEffect] showSudoModal changed to:', showSudoModal)
-    if (showSudoModal) {
-      console.log('[useEffect] Modal should be visible! privilegedPaths:', privilegedPaths)
-      console.log('[useEffect] sudoModalContainerName:', sudoModalContainerName)
-      console.log('[useEffect] sudoModalCallback exists:', !!sudoModalCallback)
-      console.log('[useEffect] sudoModalCallback type:', typeof sudoModalCallback)
-      // Check if modal element exists in DOM
-      setTimeout(() => {
-        const modalElement = document.getElementById('sudo-password-modal')
-        console.log('[useEffect] Modal element in DOM:', !!modalElement)
-        if (modalElement) {
-          console.log('[useEffect] Modal element styles:', window.getComputedStyle(modalElement))
-        }
-      }, 100)
-    }
-  }, [showSudoModal, privilegedPaths, sudoModalContainerName, sudoModalCallback])
-  
-  // Debug: Monitor sudoModalCallback changes
-  useEffect(() => {
-    console.log('[useEffect] sudoModalCallback changed:', {
-      exists: !!sudoModalCallback,
-      type: typeof sudoModalCallback
+  const resetSudoModalState = () => {
+    setShowSudoModal(false)
+    setSudoPassword('')
+    setPrivilegedPaths([])
+    setSudoModalContainerName(null)
+    setSudoModalMeta({
+      requiresSudo: false,
+      hasLargeMounts: false,
+      totalSizeTB: 0,
+      totalSizeGB: 0,
+      largeMounts: []
     })
-  }, [sudoModalCallback])
-  
-  // Debug: Log when showSudoModal changes
-  useEffect(() => {
-    if (showSudoModal) {
-      console.log('[useEffect] showSudoModal changed to TRUE - modal should be visible')
-    } else {
-      console.log('[useEffect] showSudoModal changed to FALSE - modal should be hidden')
-    }
-  }, [showSudoModal])
-  
-  // Debug: Monitor showSudoModal changes
-  useEffect(() => {
-    console.log('[useEffect] showSudoModal changed to:', showSudoModal)
-    if (showSudoModal) {
-      console.log('[useEffect] Modal should be visible! privilegedPaths:', privilegedPaths)
-      console.log('[useEffect] sudoModalContainerName:', sudoModalContainerName)
-    }
-  }, [showSudoModal, privilegedPaths, sudoModalContainerName])
-  
-  // Debug: Log when showSudoModal changes
-  useEffect(() => {
-    console.log('[useEffect] showSudoModal changed to:', showSudoModal)
-  }, [showSudoModal])
+    sudoModalCallbackRef.current = null
+  }
 
   const loadEnvironmentsStatus = async () => {
     setLoadingStatus(true)
@@ -957,7 +928,6 @@ function Environments() {
   }
 
   const handleStageSingleContainer = async (containerName) => {
-    console.log(`[handleStageSingleContainer] Called for ${containerName}`)
     // Determine target environment based on current environment
     const envFlow = {
       'dev': 'staging',
@@ -980,191 +950,79 @@ function Environments() {
     const sourceLabel = envLabels[selectedEnv] || selectedEnv.toUpperCase()
     const targetLabel = envLabels[targetEnv] || targetEnv.toUpperCase()
     
-    // Check if sudo will be required for backup and get mount information
-    let skipBackup = false
     try {
       const sudoCheck = await environmentAPI.checkSudo(containerName)
-      console.log(`Sudo check for ${containerName}:`, sudoCheck.data)
-      
-      // Always show modal if backup is needed (either requires sudo OR has large mounts)
-      const requiresSudo = sudoCheck.data && sudoCheck.data.requires_sudo
-      const hasLargeMounts = sudoCheck.data && sudoCheck.data.has_large_mounts
+      const requiresSudo = Boolean(sudoCheck.data && sudoCheck.data.requires_sudo)
+      const hasLargeMounts = Boolean(sudoCheck.data && sudoCheck.data.has_large_mounts)
       const shouldShowModal = requiresSudo || hasLargeMounts
       
       if (shouldShowModal) {
-        console.log(`[handleStageSingleContainer] Showing backup modal for ${containerName}`, {
-          requiresSudo,
-          hasLargeMounts,
-          totalSizeTB: sudoCheck.data?.total_size_tb,
-          largeMounts: sudoCheck.data?.large_mounts
-        })
-        
-        // Show backup confirmation modal - set all states synchronously
-        console.log(`[handleStageSingleContainer] Setting modal state synchronously...`)
         setPrivilegedPaths(sudoCheck.data.privileged_paths || [])
         setSudoModalContainerName(containerName)
-        
-        // Store mount info for display in modal
-        setSudoPassword(JSON.stringify({
-          requires_sudo: requiresSudo,
-          has_large_mounts: hasLargeMounts,
-          total_size_tb: sudoCheck.data?.total_size_tb || 0,
-          total_size_gb: sudoCheck.data?.total_size_gb || 0,
-          large_mounts: sudoCheck.data?.large_mounts || [],
-          warning: sudoCheck.data?.warning
-        }))
-        
-        // Force state update
-        console.log(`[handleStageSingleContainer] About to set showSudoModal to true`)
+        setSudoPassword('')
+        setSudoModalMeta({
+          requiresSudo,
+          hasLargeMounts,
+          totalSizeTB: sudoCheck.data?.total_size_tb || 0,
+          totalSizeGB: sudoCheck.data?.total_size_gb || 0,
+          largeMounts: sudoCheck.data?.large_mounts || []
+        })
         setShowSudoModal(true)
-        console.log(`[handleStageSingleContainer] showSudoModal set to true`)
-        
-        // Verify state was set after a tick
-        setTimeout(() => {
-          console.log(`[handleStageSingleContainer] After setTimeout, checking showSudoModal state...`)
-          const modalElement = document.getElementById('sudo-password-modal')
-          if (modalElement) {
-            console.log(`[handleStageSingleContainer] ✅ Modal found in DOM after setTimeout!`)
-          } else {
-            console.error(`[handleStageSingleContainer] ❌ Modal NOT found in DOM after setTimeout!`)
-            // Force a re-render by toggling state
-            setShowSudoModal(false)
-            setTimeout(() => {
-              console.log(`[handleStageSingleContainer] Toggling showSudoModal back to true`)
-              setShowSudoModal(true)
-            }, 10)
-          }
-        }, 100)
-        
-        console.log(`[handleStageSingleContainer] All modal states set, showSudoModal should be true now`)
-        
-        // Verify modal appears in DOM after React re-render
-        // Use double requestAnimationFrame to ensure React has rendered
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              const modal = document.getElementById('sudo-password-modal')
-              console.log(`[handleStageSingleContainer] Checking for modal in DOM...`)
-              if (modal) {
-                console.log(`[handleStageSingleContainer] ✅ Modal found in DOM!`, modal)
-                console.log(`[handleStageSingleContainer] Modal styles:`, window.getComputedStyle(modal))
-                // Force focus on input
-                const input = modal.querySelector('input[type="password"]')
-                if (input) {
-                  input.focus()
-                  console.log(`[handleStageSingleContainer] Input focused`)
-                }
-              } else {
-                console.error(`[handleStageSingleContainer] ❌ Modal NOT found in DOM!`)
-                // Check if showSudoModal state is actually true
-                console.error(`[handleStageSingleContainer] Current showSudoModal value in closure may be stale`)
-              }
-            }, 200)
-          })
-        })
-        
-        // Set callback for when user provides password
-        // Capture variables in closure to ensure they're available when callback is called
-        const capturedContainerName = containerName
-        const capturedSelectedEnv = selectedEnv
-        const capturedTargetEnv = targetEnv
-        const capturedSourceLabel = sourceLabel
-        const capturedTargetLabel = targetLabel
-        
-        console.log(`[handleStageSingleContainer] Creating callback with captured variables:`, {
-          containerName: capturedContainerName,
-          selectedEnv: capturedSelectedEnv,
-          targetEnv: capturedTargetEnv
-        })
-        
-        const callbackFunction = async (password, shouldSkip) => {
-          console.log(`[handleStageSingleContainer] Backup modal callback called`, { 
-            hasPassword: !!password, 
-            shouldSkip,
-            containerName: capturedContainerName,
-            selectedEnv: capturedSelectedEnv,
-            targetEnv: capturedTargetEnv
-          })
-          
+        sudoModalCallbackRef.current = async (password, shouldSkip) => {
           try {
-            setShowSudoModal(false)
-            
-            // Parse mount info from sudoPassword (we stored it there temporarily)
-            let mountInfo = null
-            try {
-              mountInfo = JSON.parse(sudoPassword || '{}')
-            } catch {
-              mountInfo = {}
-            }
-            
-            setSudoPassword('')
-            
+            resetSudoModalState()
             let actualSkipBackup = false
+            const passwordValue = (password || '').trim()
+            let elevationToken = null
             
             if (shouldSkip) {
               const confirmSkip = window.confirm(
                 `⚠️ Are you sure you want to SKIP the backup?\n\n` +
                 `This means the container data WILL NOT be protected before promotion!\n\n` +
-                `Promote ${capturedContainerName} from ${capturedSourceLabel} to ${capturedTargetLabel} WITHOUT backup?`
+                `Promote ${containerName} from ${sourceLabel} to ${targetLabel} WITHOUT backup?`
               )
               if (!confirmSkip) {
-                console.log(`[handleStageSingleContainer] User cancelled skip backup`)
-                sudoModalCallbackRef.current = null
-                setSudoModalCallback(null)
                 return
               }
               actualSkipBackup = true
-            } else if (password && mountInfo.requires_sudo) {
-              console.log(`[handleStageSingleContainer] Storing sudo password...`)
-              // Store sudo password only if sudo is required
+            } else if (requiresSudo && passwordValue) {
               try {
-                const response = await environmentAPI.setSudoPassword(password)
-                console.log(`[handleStageSingleContainer] Sudo password stored:`, response.data)
+                const tokenResponse = await environmentAPI.requestElevationToken(passwordValue, {
+                  action: 'environment.promote_single',
+                  container_name: containerName,
+                  from_env: selectedEnv,
+                  to_env: targetEnv
+                })
+                elevationToken = tokenResponse?.data?.token || null
+                if (!elevationToken) {
+                  setMessage({ type: 'error', text: 'Could not create elevation token for privileged action.' })
+                  return
+                }
               } catch (error) {
-                console.error(`[handleStageSingleContainer] Error storing sudo password:`, error)
-                setMessage({ type: 'error', text: 'Error saving sudo password' })
-                sudoModalCallbackRef.current = null
-                setSudoModalCallback(null)
+                setMessage({ type: 'error', text: 'Error creating elevation token' })
                 return
               }
-            } else if (!password && mountInfo.requires_sudo) {
-              // User cancelled but sudo was required
-              console.log(`[handleStageSingleContainer] User cancelled (sudo required but no password)`)
-              setSudoModalCallback(null)
-              return
+            } else if (requiresSudo && !passwordValue) {
+              setMessage({
+                type: 'info',
+                text: 'Continuing without sudo password. Backup may skip privileged mounts if access is denied.'
+              })
             }
-            // If no sudo required and no password, just continue (user clicked Continue without password)
-            
-            // Clear callback before continuing
-            setSudoModalCallback(null)
-            
-            // Continue with promotion
-            console.log(`[handleStageSingleContainer] Continuing with promotion...`, {
-              containerName: capturedContainerName,
-              selectedEnv: capturedSelectedEnv,
-              targetEnv: capturedTargetEnv,
-              skipBackup: actualSkipBackup
-            })
-            await continuePromotion(capturedContainerName, capturedSelectedEnv, capturedTargetEnv, capturedSourceLabel, capturedTargetLabel, actualSkipBackup)
+
+            await continuePromotion(
+              containerName,
+              selectedEnv,
+              targetEnv,
+              sourceLabel,
+              targetLabel,
+              actualSkipBackup,
+              elevationToken
+            )
           } catch (error) {
-            console.error(`[handleStageSingleContainer] Error in callback:`, error)
             setMessage({ type: 'error', text: 'Processing error: ' + (error.message || 'Unknown error') })
-            setSudoModalCallback(null)
           }
         }
-        
-        console.log(`[handleStageSingleContainer] Setting sudoModalCallback...`)
-        // Set both state (for useEffect) and ref (for synchronous access)
-        sudoModalCallbackRef.current = callbackFunction
-        setSudoModalCallback(callbackFunction)
-        console.log(`[handleStageSingleContainer] sudoModalCallback set in both state and ref`)
-        
-        // Verify callback was set
-        setTimeout(() => {
-          console.log(`[handleStageSingleContainer] Verifying callback after state update...`)
-          // Note: We can't directly check state here, but we can log
-        }, 100)
-        
+
         return // Wait for user to provide password or skip
       }
     } catch (error) {
@@ -1173,11 +1031,18 @@ function Environments() {
     }
     
     // No sudo required - continue directly
-    console.log(`No sudo required for ${containerName}, continuing with promotion`)
-    await continuePromotion(containerName, selectedEnv, targetEnv, sourceLabel, targetLabel, skipBackup)
+    await continuePromotion(containerName, selectedEnv, targetEnv, sourceLabel, targetLabel, false, null)
   }
   
-  const continuePromotion = async (containerName, selectedEnv, targetEnv, sourceLabel, targetLabel, skipBackup) => {
+  const continuePromotion = async (
+    containerName,
+    selectedEnv,
+    targetEnv,
+    sourceLabel,
+    targetLabel,
+    skipBackup,
+    elevationToken = null
+  ) => {
     console.log(`[continuePromotion] Called for ${containerName}`, { selectedEnv, targetEnv, skipBackup })
     
     // Final confirmation (include target server when env->server mapping is used)
@@ -1189,6 +1054,13 @@ function Environments() {
       const confirmed = window.confirm(msg)
       console.log(`[continuePromotion] User confirmed: ${confirmed}`)
       if (!confirmed) {
+        if (elevationToken) {
+          try {
+            await environmentAPI.clearElevationTokens()
+          } catch (error) {
+            // Ignore cleanup errors
+          }
+        }
         console.log(`[continuePromotion] User cancelled, returning`)
         return
       }
@@ -1211,14 +1083,26 @@ function Environments() {
       
       // Then promote to target environment (with optional skipBackup flag)
       console.log(`Promoting ${containerName} from ${selectedEnv} to ${targetEnv}`)
-      const promoteResponse = await environmentAPI.promoteSingle(selectedEnv, targetEnv, containerName, skipBackup)
+      const promoteResponse = await environmentAPI.promoteSingle(
+        selectedEnv,
+        targetEnv,
+        containerName,
+        skipBackup,
+        true,
+        elevationToken
+      )
       console.log(`Promote response:`, promoteResponse.data)
       
-      // Clear sudo password after promotion (for security)
+      // Clear one-time elevation tokens and legacy sudo password after promotion
+      try {
+        await environmentAPI.clearElevationTokens()
+      } catch (error) {
+        // Ignore errors during cleanup
+      }
       try {
         await environmentAPI.clearSudoPassword()
       } catch (error) {
-        // Ignore errors when clearing password
+        // Ignore errors during cleanup
       }
       
       if (promoteResponse.data.success) {
@@ -2854,19 +2738,9 @@ function Environments() {
             zIndex: 999999,
             pointerEvents: 'auto'
           }}
-          onLoad={() => console.log('[Modal] Modal loaded')}
-          ref={(el) => {
-            if (el) {
-              console.log('[Modal] Modal element mounted:', el)
-            }
-          }}
           onClick={(e) => {
-            // Close modal if clicking on backdrop
             if (e.target.id === 'sudo-password-modal') {
-              console.log('[Modal] Backdrop clicked, closing modal')
-              setShowSudoModal(false)
-              setSudoPassword('')
-              setSudoModalCallback(null)
+              resetSudoModalState()
             }
           }}
         >
@@ -2877,6 +2751,8 @@ function Environments() {
               borderRadius: '8px',
               maxWidth: '500px',
               width: '90%',
+              maxHeight: '85vh',
+              overflowY: 'auto',
               boxShadow: theme === 'dark' ? '0 4px 20px rgba(0, 0, 0, 0.6)' : '0 4px 20px rgba(0, 0, 0, 0.3)',
               zIndex: 100000,
               position: 'relative',
@@ -2884,192 +2760,103 @@ function Environments() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {(() => {
-              try {
-                const mountInfo = JSON.parse(sudoPassword || '{}')
-                const requiresSudo = mountInfo.requires_sudo
-                const hasLargeMounts = mountInfo.has_large_mounts
-                const totalSizeTB = mountInfo.total_size_tb || 0
-                
-                return (
-                  <>
-                    <h2 style={{ marginTop: 0, color: requiresSudo ? '#dc3545' : '#ff9800' }}>
-                      {requiresSudo && hasLargeMounts ? '🔐 Sudo password required + ⚠️ Large disks' :
-                       requiresSudo ? '🔐 Sudo password required' :
-                       hasLargeMounts ? '⚠️ Large disks detected' :
-                       '🔐 Backup configuration'}
-                    </h2>
-                    <p style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                      {requiresSudo && hasLargeMounts ? 
-                        `Backup of container ${sudoModalContainerName || 'container'} requires administrator privileges and large disks detected (${totalSizeTB.toFixed(2)} TB). Backup may take a very long time!` :
-                       requiresSudo ?
-                        `Backup of container ${sudoModalContainerName || 'container'} requires administrator privileges. Enter sudo password:` :
-                       hasLargeMounts ?
-                        `⚠️ Large disks detected (${totalSizeTB.toFixed(2)} TB) for container ${sudoModalContainerName || 'container'}. Backup may take a very long time (hours)!` :
-                        `Backup configuration for container ${sudoModalContainerName || 'container'}:`}
-                    </p>
-                    
-                    {/* Show large mounts warning */}
-                    {hasLargeMounts && mountInfo.large_mounts && mountInfo.large_mounts.length > 0 && (
-                      <div style={{
-                        backgroundColor: theme === 'dark' ? '#3d2817' : '#fff3cd',
-                        padding: '0.75rem',
-                        borderRadius: '4px',
-                        marginBottom: '1rem',
-                        fontSize: '0.9rem',
-                        color: theme === 'dark' ? '#ff9800' : '#856404',
-                        border: `1px solid ${theme === 'dark' ? '#ff9800' : '#ffc107'}`
-                      }}>
-                        <strong>⚠️ Large disks detected (total {totalSizeTB.toFixed(2)} TB):</strong>
-                        <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem' }}>
-                          {mountInfo.large_mounts.slice(0, 3).map((mount, idx) => (
-                            <li key={idx}>
-                              {mount.path}: {mount.size_tb?.toFixed(2) || 0} TB
-                            </li>
-                          ))}
-                        </ul>
-                        <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', marginBottom: 0 }}>
-                          Backing up such large disks can take many hours. Consider skipping the backup.
-                        </p>
-                      </div>
-                    )}
-                    
-                    {/* Show privileged paths if sudo required */}
-                    {privilegedPaths.length > 0 && (
-                      <div style={{
-                        backgroundColor: theme === 'dark' ? 'rgba(255, 193, 7, 0.2)' : '#fff3cd',
-                        padding: '0.75rem',
-                        borderRadius: '4px',
-                        marginBottom: '1rem',
-                        fontSize: '0.9rem',
-                        color: 'var(--text-primary)',
-                        border: theme === 'dark' ? '1px solid rgba(255, 193, 7, 0.3)' : 'none'
-                      }}>
-                        <strong>Required paths (sudo):</strong>
-                        <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem', color: 'var(--text-primary)' }}>
-                          {privilegedPaths.slice(0, 5).map((path, idx) => (
-                            <li key={idx}>{path}</li>
-                          ))}
-                          {privilegedPaths.length > 5 && <li>... and {privilegedPaths.length - 5} more</li>}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )
-              } catch {
-                return (
-                  <>
-                    <h2 style={{ marginTop: 0, color: '#dc3545' }}>🔐 Sudo password required</h2>
-                    <p style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                      Backup of container <strong>{sudoModalContainerName || 'container'}</strong> requires administrator privileges. Enter sudo password:
-                    </p>
-                    {privilegedPaths.length > 0 && (
-                      <div style={{
-                        backgroundColor: theme === 'dark' ? 'rgba(255, 193, 7, 0.2)' : '#fff3cd',
-                        padding: '0.75rem',
-                        borderRadius: '4px',
-                        marginBottom: '1rem',
-                        fontSize: '0.9rem',
-                        color: 'var(--text-primary)',
-                        border: theme === 'dark' ? '1px solid rgba(255, 193, 7, 0.3)' : 'none'
-                      }}>
-                        <strong>Required paths:</strong>
-                        <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem', color: 'var(--text-primary)' }}>
-                          {privilegedPaths.slice(0, 5).map((path, idx) => (
-                            <li key={idx}>{path}</li>
-                          ))}
-                          {privilegedPaths.length > 5 && <li>... and {privilegedPaths.length - 5} more</li>}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )
-              }
-            })()}
-            
-            {(() => {
-              try {
-                const mountInfo = JSON.parse(sudoPassword || '{}')
-                if (mountInfo.requires_sudo) {
-                  return (
-                    <input
-                      type="password"
-                      value={(() => {
-                        try {
-                          const info = JSON.parse(sudoPassword || '{}')
-                          return info.password || ''
-                        } catch {
-                          return ''
-                        }
-                      })()}
-                      onChange={(e) => {
-                        try {
-                          const info = JSON.parse(sudoPassword || '{}')
-                          info.password = e.target.value
-                          setSudoPassword(JSON.stringify(info))
-                        } catch {
-                          // If parsing fails, just store the password
-                          setSudoPassword(JSON.stringify({ password: e.target.value, requires_sudo: true }))
-                        }
-                      }}
-                      placeholder="Enter sudo password"
-                      style={{
-                        width: '100%',
-                        padding: '0.75rem',
-                        fontSize: '1rem',
-                        border: `1px solid ${theme === 'dark' ? 'var(--input-border)' : '#ccc'}`,
-                        borderRadius: '4px',
-                        marginBottom: '1rem',
-                        boxSizing: 'border-box',
-                        backgroundColor: theme === 'dark' ? 'var(--input-bg)' : 'white',
-                        color: 'var(--text-primary)'
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          try {
-                            const info = JSON.parse(sudoPassword || '{}')
-                            if (info.password || !info.requires_sudo) {
-                              sudoModalCallback && sudoModalCallback(sudoPassword, false)
-                            }
-                          } catch {
-                            if (sudoPassword) {
-                              sudoModalCallback && sudoModalCallback(sudoPassword, false)
-                            }
-                          }
-                        }
-                      }}
-                      autoFocus
-                    />
-                  )
-                }
-              } catch {}
-              return null
-            })()}
-            
+            <h2 style={{ marginTop: 0, color: sudoModalMeta.requiresSudo ? '#dc3545' : '#ff9800' }}>
+              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ? '🔐 Sudo password required + ⚠️ Large disks' :
+               sudoModalMeta.requiresSudo ? '🔐 Sudo password required' :
+               sudoModalMeta.hasLargeMounts ? '⚠️ Large disks detected' :
+               '🔐 Backup configuration'}
+            </h2>
+            <p style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>
+              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ?
+                `Backup of container ${sudoModalContainerName || 'container'} requires administrator privileges and large disks detected (${sudoModalMeta.totalSizeTB.toFixed(2)} TB). Backup may take a very long time.` :
+               sudoModalMeta.requiresSudo ?
+                `Backup of container ${sudoModalContainerName || 'container'} may need elevated permissions. Enter sudo password or continue without it.` :
+               sudoModalMeta.hasLargeMounts ?
+                `Large disks detected (${sudoModalMeta.totalSizeTB.toFixed(2)} TB) for container ${sudoModalContainerName || 'container'}. Backup may take a very long time.` :
+                `Backup configuration for container ${sudoModalContainerName || 'container'}.`}
+            </p>
+
+            {sudoModalMeta.hasLargeMounts && sudoModalMeta.largeMounts.length > 0 && (
+              <div style={{
+                backgroundColor: theme === 'dark' ? '#3d2817' : '#fff3cd',
+                padding: '0.75rem',
+                borderRadius: '4px',
+                marginBottom: '1rem',
+                fontSize: '0.9rem',
+                color: theme === 'dark' ? '#ff9800' : '#856404',
+                border: `1px solid ${theme === 'dark' ? '#ff9800' : '#ffc107'}`
+              }}>
+                <strong>⚠️ Large disks detected (total {sudoModalMeta.totalSizeTB.toFixed(2)} TB):</strong>
+                <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem' }}>
+                  {sudoModalMeta.largeMounts.slice(0, 3).map((mount, idx) => (
+                    <li key={idx} style={{ wordBreak: 'break-all' }}>
+                      {mount.path}: {mount.size_tb?.toFixed(2) || 0} TB
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {privilegedPaths.length > 0 && (
+              <div style={{
+                backgroundColor: theme === 'dark' ? 'rgba(255, 193, 7, 0.2)' : '#fff3cd',
+                padding: '0.75rem',
+                borderRadius: '4px',
+                marginBottom: '1rem',
+                fontSize: '0.9rem',
+                color: 'var(--text-primary)',
+                border: theme === 'dark' ? '1px solid rgba(255, 193, 7, 0.3)' : 'none'
+              }}>
+                <strong>Required paths (sudo):</strong>
+                <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem', color: 'var(--text-primary)' }}>
+                  {privilegedPaths.slice(0, 5).map((path, idx) => (
+                    <li key={idx} style={{ wordBreak: 'break-all' }}>{path}</li>
+                  ))}
+                  {privilegedPaths.length > 5 && <li>... and {privilegedPaths.length - 5} more</li>}
+                </ul>
+              </div>
+            )}
+
+            {sudoModalMeta.requiresSudo && (
+              <input
+                type="password"
+                value={sudoPassword}
+                onChange={(e) => setSudoPassword(e.target.value)}
+                placeholder="Enter sudo password (optional if you want to try without it)"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  fontSize: '1rem',
+                  border: `1px solid ${theme === 'dark' ? 'var(--input-border)' : '#ccc'}`,
+                  borderRadius: '4px',
+                  marginBottom: '1rem',
+                  boxSizing: 'border-box',
+                  backgroundColor: theme === 'dark' ? 'var(--input-bg)' : 'white',
+                  color: 'var(--text-primary)'
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key !== 'Enter') return
+                  const callback = sudoModalCallbackRef.current
+                  if (!callback) return
+                  await callback(sudoPassword, false)
+                }}
+                autoFocus
+              />
+            )}
+
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button
                 onClick={async () => {
-                  console.log('[Modal] Skip backup button clicked')
-                  // Use ref for synchronous access to callback
-                  const callback = sudoModalCallbackRef.current || sudoModalCallback
-                  console.log('[Modal] sudoModalCallback from ref:', !!sudoModalCallbackRef.current)
-                  console.log('[Modal] sudoModalCallback from state:', !!sudoModalCallback)
-                  
+                  const callback = sudoModalCallbackRef.current
                   if (!callback) {
-                    console.error('[Modal] ERROR: sudoModalCallback is null! Cannot skip backup.')
                     setMessage({ type: 'error', text: 'Error: Callback is not available. Try again or refresh the page.' })
                     return
                   }
-                  
-                  if (window.confirm('Are you sure you want to skip backup? This is risky!')) {
-                    console.log('[Modal] User confirmed skip backup, calling callback')
-                    try {
-                      await callback('', true)
-                      console.log('[Modal] Skip backup callback completed')
-                    } catch (error) {
-                      console.error('[Modal] Error in skip backup callback:', error)
-                      setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
-                    }
+
+                  try {
+                    await callback('', true)
+                  } catch (error) {
+                    setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
                   }
                 }}
                 style={{
@@ -3086,11 +2873,7 @@ function Environments() {
               </button>
               <button
                 onClick={() => {
-                  console.log('[Modal] Cancel button clicked')
-                  setShowSudoModal(false)
-                  setSudoPassword('')
-                  sudoModalCallbackRef.current = null
-                setSudoModalCallback(null)
+                  resetSudoModalState()
                 }}
                 style={{
                   padding: '0.5rem 1rem',
@@ -3106,36 +2889,25 @@ function Environments() {
               </button>
               <button
                 onClick={async () => {
-                  console.log('[Modal] Continue button clicked, password length:', sudoPassword.length)
-                  // Use ref for synchronous access to callback
-                  const callback = sudoModalCallbackRef.current || sudoModalCallback
-                  console.log('[Modal] sudoModalCallback from ref:', !!sudoModalCallbackRef.current)
-                  console.log('[Modal] sudoModalCallback from state:', !!sudoModalCallback)
-                  console.log('[Modal] Using callback:', !!callback)
-                  
+                  const callback = sudoModalCallbackRef.current
                   if (!callback) {
-                    console.error('[Modal] ERROR: sudoModalCallback is null in both ref and state!')
                     setMessage({ type: 'error', text: 'Error: Callback is not available. Try again or refresh the page.' })
                     return
                   }
-                  
+
                   try {
-                    console.log('[Modal] Calling callback with password...')
                     await callback(sudoPassword, false)
-                    console.log('[Modal] Callback completed successfully')
                   } catch (error) {
-                    console.error('[Modal] Error in callback:', error)
                     setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
                   }
                 }}
-                disabled={!sudoPassword}
                 style={{
                   padding: '0.5rem 1rem',
-                  backgroundColor: sudoPassword ? '#28a745' : '#ccc',
+                  backgroundColor: '#28a745',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: sudoPassword ? 'pointer' : 'not-allowed',
+                  cursor: 'pointer',
                   fontWeight: '600'
                 }}
               >

@@ -17,6 +17,12 @@ import hashlib
 import re
 import importlib.util
 import time
+import secrets
+import threading
+import base64
+import hmac
+import struct
+import binascii
 
 # Add parent directory to path for utils import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -378,7 +384,21 @@ app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
     'SESSION_COOKIE_SECURE',
     'true' if os.environ.get('FLASK_ENV') == 'production' else 'false'
 ).lower() == 'true'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=5)
+
+APP_SESSION_IDLE_MINUTES = int(os.environ.get('APP_SESSION_IDLE_MINUTES', '45'))
+WEB_AUTH_ENABLED = os.environ.get('WEB_AUTH_ENABLED', 'false').lower() == 'true'
+WEB_AUTH_USERNAME = os.environ.get('WEB_AUTH_USERNAME', 'admin')
+WEB_AUTH_PASSWORD = os.environ.get('WEB_AUTH_PASSWORD', 'admin')
+WEB_AUTH_PASSWORD_HASH = os.environ.get('WEB_AUTH_PASSWORD_HASH', '')
+WEB_AUTH_TOTP_SECRET = os.environ.get('WEB_AUTH_TOTP_SECRET', '').strip()
+WEB_AUTH_TOTP_WINDOW = int(os.environ.get('WEB_AUTH_TOTP_WINDOW', '1'))
+
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MINUTES)
+
+# Short-lived elevation token settings (for privileged operations)
+ELEVATION_TOKEN_TTL_SECONDS = int(os.environ.get('ELEVATION_TOKEN_TTL_SECONDS', '120'))
+ELEVATION_TOKEN_MAX_TTL_SECONDS = int(os.environ.get('ELEVATION_TOKEN_MAX_TTL_SECONDS', '600'))
+ELEVATION_TOKEN_MAX_PER_SESSION = int(os.environ.get('ELEVATION_TOKEN_MAX_PER_SESSION', '16'))
 
 cors_origins_env = os.environ.get('CORS_ORIGINS')
 if cors_origins_env:
@@ -393,6 +413,172 @@ else:
 
 CORS(app, supports_credentials=True, origins=cors_origins)
 api = Api(app)
+
+if WEB_AUTH_ENABLED and not WEB_AUTH_PASSWORD_HASH and WEB_AUTH_PASSWORD == 'admin':
+    app.logger.warning(
+        "WEB_AUTH is enabled with default credentials (admin/admin). "
+        "Set WEB_AUTH_PASSWORD_HASH or WEB_AUTH_PASSWORD in production."
+    )
+
+
+def _parse_pbkdf2_hash(password_hash: str):
+    """Parse pbkdf2 hash in format: pbkdf2_sha256$iterations$salt$hexdigest."""
+    if not password_hash:
+        return None
+    parts = password_hash.split('$')
+    if len(parts) != 4 or parts[0] != 'pbkdf2_sha256':
+        return None
+    try:
+        iterations = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    return {
+        'iterations': iterations,
+        'salt': parts[2],
+        'hexdigest': parts[3],
+    }
+
+
+def _verify_password(candidate_password: str) -> bool:
+    """Verify web-panel password (PBKDF2 hash preferred, plain fallback for compatibility)."""
+    candidate = candidate_password or ''
+    parsed = _parse_pbkdf2_hash(WEB_AUTH_PASSWORD_HASH)
+    if parsed:
+        dk = hashlib.pbkdf2_hmac(
+            'sha256',
+            candidate.encode('utf-8'),
+            parsed['salt'].encode('utf-8'),
+            parsed['iterations'],
+        )
+        computed = dk.hex()
+        return hmac.compare_digest(computed, parsed['hexdigest'])
+    return hmac.compare_digest(candidate, WEB_AUTH_PASSWORD)
+
+
+def _normalize_totp_secret(secret: str) -> str:
+    return (secret or '').replace(' ', '').strip().upper()
+
+
+def _verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
+    """Validate RFC6238 TOTP code (Google/Microsoft Authenticator compatible)."""
+    normalized_secret = _normalize_totp_secret(secret)
+    if not normalized_secret:
+        return True
+    token = (code or '').strip()
+    if not token.isdigit() or len(token) not in {6, 8}:
+        return False
+    digits = len(token)
+    try:
+        secret_bytes = base64.b32decode(normalized_secret, casefold=True)
+    except (binascii.Error, ValueError):
+        return False
+
+    now_counter = int(time.time() // 30)
+    for offset in range(-max(0, window), max(0, window) + 1):
+        counter = now_counter + offset
+        if counter < 0:
+            continue
+        msg = struct.pack(">Q", counter)
+        digest = hmac.new(secret_bytes, msg, hashlib.sha1).digest()
+        idx = digest[-1] & 0x0F
+        truncated = digest[idx:idx + 4]
+        otp_int = struct.unpack(">I", truncated)[0] & 0x7FFFFFFF
+        expected = str(otp_int % (10 ** digits)).zfill(digits)
+        if hmac.compare_digest(expected, token):
+            return True
+    return False
+
+
+def _clear_auth_session():
+    for key in (
+        'auth_authenticated',
+        'auth_username',
+        'auth_last_activity_ts',
+        'auth_mfa_verified',
+    ):
+        session.pop(key, None)
+    _revoke_elevation_tokens_for_current_session()
+
+
+def _is_authenticated_session() -> bool:
+    if not WEB_AUTH_ENABLED:
+        return True
+    if not session.get('auth_authenticated'):
+        return False
+    username = session.get('auth_username')
+    if username != WEB_AUTH_USERNAME:
+        return False
+    last_ts = session.get('auth_last_activity_ts')
+    if last_ts is None:
+        return False
+    try:
+        last_ts = float(last_ts)
+    except (TypeError, ValueError):
+        return False
+
+    idle_seconds = max(1, APP_SESSION_IDLE_MINUTES) * 60
+    now_ts = time.time()
+    if now_ts - last_ts > idle_seconds:
+        _clear_auth_session()
+        return False
+
+    # Touch activity for sliding inactivity window.
+    session['auth_last_activity_ts'] = now_ts
+    session.permanent = True
+    return True
+
+
+def _auth_status_payload():
+    authed = _is_authenticated_session()
+    last_ts = session.get('auth_last_activity_ts')
+    expires_in = None
+    if authed and last_ts is not None:
+        try:
+            remaining = max(0, int(max(1, APP_SESSION_IDLE_MINUTES) * 60 - (time.time() - float(last_ts))))
+            expires_in = remaining
+        except (TypeError, ValueError):
+            expires_in = None
+
+    return {
+        'success': True,
+        'auth_enabled': WEB_AUTH_ENABLED,
+        'authenticated': bool(authed),
+        'username': session.get('auth_username') if authed else None,
+        'mfa_required': bool(WEB_AUTH_TOTP_SECRET),
+        'session_idle_minutes': APP_SESSION_IDLE_MINUTES,
+        'session_expires_in_seconds': expires_in,
+    }
+
+
+PUBLIC_API_PATHS = {
+    '/api/health',
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/auth/status',
+}
+
+
+@app.before_request
+def require_auth_for_api():
+    """Require authenticated app session for API endpoints (except public/auth endpoints)."""
+    if not WEB_AUTH_ENABLED:
+        return None
+    if request.method == 'OPTIONS':
+        return None
+
+    path = request.path or ''
+    if not path.startswith('/api/'):
+        return None
+    if path in PUBLIC_API_PATHS:
+        return None
+
+    if not _is_authenticated_session():
+        return jsonify({
+            'success': False,
+            'error': 'Authentication required',
+            'auth_required': True,
+        }), 401
+    return None
 
 # Configuration
 app.config['CONFIG_DIR'] = Path.home() / ".dockerpilot_extras"
@@ -768,6 +954,130 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
 
 # Cache for sudo requirements per server
 _docker_sudo_cache = {}
+_elevation_tokens = {}
+_elevation_tokens_lock = threading.Lock()
+
+
+def _get_or_create_elevation_session_id() -> str:
+    """Get stable session-scoped ID for token binding."""
+    session_id = session.get('elevation_session_id')
+    if not session_id:
+        session_id = secrets.token_hex(16)
+        session['elevation_session_id'] = session_id
+        session.permanent = True
+    return session_id
+
+
+def _cleanup_expired_elevation_tokens() -> int:
+    """Cleanup expired tokens from in-memory cache."""
+    now_ts = time.time()
+    removed = 0
+    with _elevation_tokens_lock:
+        expired = [key for key, entry in _elevation_tokens.items() if entry.get('expires_at_ts', 0) <= now_ts]
+        for key in expired:
+            _elevation_tokens.pop(key, None)
+            removed += 1
+    return removed
+
+
+def _issue_elevation_token(sudo_password: str, scope: dict = None, ttl_seconds: int = None) -> dict:
+    """Issue a one-time elevation token bound to current web session."""
+    if not sudo_password:
+        raise ValueError('sudo_password is required')
+
+    _cleanup_expired_elevation_tokens()
+    session_id = _get_or_create_elevation_session_id()
+    requested_ttl = int(ttl_seconds if ttl_seconds is not None else ELEVATION_TOKEN_TTL_SECONDS)
+    effective_ttl = max(30, min(requested_ttl, ELEVATION_TOKEN_MAX_TTL_SECONDS))
+    issued_at = datetime.now()
+    expires_at = issued_at + timedelta(seconds=effective_ttl)
+    token_plain = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token_plain.encode('utf-8')).hexdigest()
+    scope_data = scope if isinstance(scope, dict) else {}
+
+    entry = {
+        'session_id': session_id,
+        'sudo_password': sudo_password,
+        'scope': scope_data,
+        'issued_at_iso': issued_at.isoformat(),
+        'expires_at_iso': expires_at.isoformat(),
+        'expires_at_ts': expires_at.timestamp(),
+    }
+
+    with _elevation_tokens_lock:
+        # Limit token count per session to reduce stale privileged material in memory.
+        session_keys = [
+            key for key, value in _elevation_tokens.items()
+            if value.get('session_id') == session_id
+        ]
+        if len(session_keys) >= ELEVATION_TOKEN_MAX_PER_SESSION:
+            session_keys.sort(key=lambda key: _elevation_tokens.get(key, {}).get('expires_at_ts', 0))
+            for key in session_keys[: len(session_keys) - ELEVATION_TOKEN_MAX_PER_SESSION + 1]:
+                _elevation_tokens.pop(key, None)
+
+        _elevation_tokens[token_hash] = entry
+
+    return {
+        'token': token_plain,
+        'expires_in': effective_ttl,
+        'expires_at': entry['expires_at_iso'],
+        'scope': scope_data,
+    }
+
+
+def _consume_elevation_token(token: str, expected_action: str = None, expected_scope: dict = None) -> tuple:
+    """Validate and consume one-time elevation token."""
+    if not token or not isinstance(token, str):
+        return False, 'Missing elevation token', None
+
+    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    current_session_id = session.get('elevation_session_id')
+    now_ts = time.time()
+
+    with _elevation_tokens_lock:
+        entry = _elevation_tokens.get(token_hash)
+        if not entry:
+            return False, 'Invalid or expired elevation token', None
+
+        if entry.get('expires_at_ts', 0) <= now_ts:
+            _elevation_tokens.pop(token_hash, None)
+            return False, 'Elevation token expired', None
+
+        if not current_session_id or entry.get('session_id') != current_session_id:
+            return False, 'Elevation token does not match active session', None
+
+        scope = entry.get('scope') or {}
+        if expected_action and scope.get('action') != expected_action:
+            return False, 'Elevation token scope mismatch (action)', None
+
+        if isinstance(expected_scope, dict):
+            for key, value in expected_scope.items():
+                if value is None:
+                    continue
+                if scope.get(key) != value:
+                    return False, f"Elevation token scope mismatch ({key})", None
+
+        sudo_password = entry.get('sudo_password')
+        _elevation_tokens.pop(token_hash, None)
+
+    return True, 'ok', sudo_password
+
+
+def _revoke_elevation_tokens_for_current_session() -> int:
+    """Revoke all elevation tokens bound to current session."""
+    current_session_id = session.get('elevation_session_id')
+    if not current_session_id:
+        return 0
+    removed = 0
+    with _elevation_tokens_lock:
+        to_delete = [
+            key for key, value in _elevation_tokens.items()
+            if value.get('session_id') == current_session_id
+        ]
+        for key in to_delete:
+            _elevation_tokens.pop(key, None)
+            removed += 1
+    return removed
 
 def _check_docker_sudo_required(server_config):
     """Check if docker commands require sudo on the server (with caching)"""
@@ -1900,6 +2210,77 @@ class CancelPromotion(Resource):
             return {'error': str(e)}, 500
 
 
+class AuthStatus(Resource):
+    """Return current authentication state for DockerPilotExtras web panel."""
+
+    def get(self):
+        try:
+            return _auth_status_payload()
+        except Exception as e:
+            app.logger.error(f"Auth status failed: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
+
+class AuthLogin(Resource):
+    """Authenticate user with username/password and optional TOTP MFA."""
+
+    def post(self):
+        try:
+            if not WEB_AUTH_ENABLED:
+                return {
+                    'success': True,
+                    'message': 'Authentication disabled',
+                    'auth_enabled': False,
+                }
+
+            data = request.get_json() or {}
+            username = str(data.get('username') or '').strip()
+            password = str(data.get('password') or '')
+            totp_code = str(data.get('totp_code') or '').strip()
+
+            if not username or not password:
+                return {'success': False, 'error': 'username and password are required'}, 400
+            if username != WEB_AUTH_USERNAME:
+                return {'success': False, 'error': 'Invalid credentials'}, 401
+            if not _verify_password(password):
+                return {'success': False, 'error': 'Invalid credentials'}, 401
+            if WEB_AUTH_TOTP_SECRET and not _verify_totp_code(
+                WEB_AUTH_TOTP_SECRET,
+                totp_code,
+                window=WEB_AUTH_TOTP_WINDOW,
+            ):
+                return {'success': False, 'error': 'Invalid MFA code'}, 401
+
+            session['auth_authenticated'] = True
+            session['auth_username'] = username
+            session['auth_mfa_verified'] = bool(WEB_AUTH_TOTP_SECRET)
+            session['auth_last_activity_ts'] = time.time()
+            session.permanent = True
+
+            app.logger.info(f"Authenticated web session for user '{username}'")
+            return _auth_status_payload()
+        except Exception as e:
+            app.logger.error(f"Auth login failed: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
+
+class AuthLogout(Resource):
+    """Terminate authenticated web session."""
+
+    def post(self):
+        try:
+            _clear_auth_session()
+            return {
+                'success': True,
+                'message': 'Logged out',
+                'auth_enabled': WEB_AUTH_ENABLED,
+                'authenticated': False,
+            }
+        except Exception as e:
+            app.logger.error(f"Auth logout failed: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
+
 class CheckSudoRequired(Resource):
     """Check if backup will require sudo password"""
     def post(self):
@@ -1943,6 +2324,50 @@ class CheckSudoRequired(Resource):
             return {'error': str(e)}, 500
 
 
+class ElevationToken(Resource):
+    """Issue/revoke short-lived one-time elevation tokens."""
+
+    def post(self):
+        try:
+            data = request.get_json() or {}
+            sudo_password = str(data.get('sudo_password') or '')
+            if not sudo_password.strip():
+                return {'error': 'sudo_password is required'}, 400
+
+            scope = data.get('scope') if isinstance(data.get('scope'), dict) else {}
+            ttl_seconds = data.get('ttl_seconds')
+            if ttl_seconds is not None:
+                try:
+                    ttl_seconds = int(ttl_seconds)
+                except (TypeError, ValueError):
+                    return {'error': 'ttl_seconds must be an integer'}, 400
+
+            issued = _issue_elevation_token(
+                sudo_password=sudo_password,
+                scope=scope,
+                ttl_seconds=ttl_seconds,
+            )
+            app.logger.info(
+                f"Issued elevation token (action={scope.get('action')}, expires_in={issued['expires_in']}s)"
+            )
+            return {'success': True, **issued}
+        except Exception as e:
+            app.logger.error(f"Failed to issue elevation token: {e}")
+            return {'error': str(e)}, 500
+
+    def delete(self):
+        try:
+            revoked = _revoke_elevation_tokens_for_current_session()
+            # Legacy fallback cleanup
+            session.pop('sudo_password', None)
+            session.pop('sudo_password_timestamp', None)
+            app.logger.info(f"Revoked {revoked} elevation token(s) for current session")
+            return {'success': True, 'revoked': revoked}
+        except Exception as e:
+            app.logger.error(f"Failed to revoke elevation tokens: {e}")
+            return {'error': str(e)}, 500
+
+
 class SudoPassword(Resource):
     """Store sudo password in session for backup operations"""
     def post(self):
@@ -1958,16 +2383,30 @@ class SudoPassword(Resource):
             session['sudo_password'] = sudo_password
             session['sudo_password_timestamp'] = datetime.now().isoformat()
             
-            # Set session to expire after 5 minutes for security
+            # Keep session active using global inactivity policy.
             session.permanent = True
-            app.permanent_session_lifetime = timedelta(minutes=5)
             
             app.logger.info("Sudo password stored in session (not logged)")
             
-            return {
+            response = {
                 'success': True,
                 'message': 'Sudo password stored securely'
             }
+            # Backward-compatible enhancement: also issue one-time elevation token.
+            try:
+                issued = _issue_elevation_token(
+                    sudo_password=sudo_password,
+                    scope={'action': 'legacy.sudo_password'},
+                )
+                response.update({
+                    'elevation_token': issued.get('token'),
+                    'elevation_expires_in': issued.get('expires_in'),
+                    'deprecated': True,
+                })
+            except Exception:
+                pass
+
+            return response
             
         except Exception as e:
             app.logger.error(f"Store sudo password failed: {e}")
@@ -1976,6 +2415,7 @@ class SudoPassword(Resource):
     def delete(self):
         """Clear sudo password from session"""
         try:
+            _revoke_elevation_tokens_for_current_session()
             session.pop('sudo_password', None)
             session.pop('sudo_password_timestamp', None)
             return {'success': True, 'message': 'Sudo password cleared'}
@@ -2140,6 +2580,9 @@ class DeploymentProgress(Resource):
 class EnvironmentPromoteSingle(Resource):
     """Promote single container from one environment to another"""
     def post(self):
+        container_name = None
+        pilot = None
+        sudo_password_applied = False
         try:
             data = request.get_json()
             from_env = data.get('from_env')
@@ -2148,6 +2591,7 @@ class EnvironmentPromoteSingle(Resource):
             skip_backup = data.get('skip_backup', False)
             include_data = data.get('include_data', True)
             stop_source = data.get('stop_source', False)
+            elevation_token = (data.get('elevation_token') or '').strip()
             
             if not from_env or not to_env or not container_name:
                 return {'error': 'Missing required parameters'}, 400
@@ -2170,15 +2614,31 @@ class EnvironmentPromoteSingle(Resource):
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Get sudo password from session if available
-            sudo_password = session.get('sudo_password')
-            if sudo_password:
-                # Set sudo password in pilot instance for this request
-                pilot = get_dockerpilot()
-                pilot._sudo_password = sudo_password  # Temporary storage for this operation
-                app.logger.info("Using sudo password from session")
+            pilot = get_dockerpilot()
+            sudo_password = None
+            if elevation_token:
+                token_ok, token_message, token_password = _consume_elevation_token(
+                    elevation_token,
+                    expected_action='environment.promote_single',
+                    expected_scope={
+                        'container_name': container_name,
+                        'from_env': from_env,
+                        'to_env': to_env,
+                    },
+                )
+                if not token_ok:
+                    return {'error': token_message}, 403
+                sudo_password = token_password
+                app.logger.info("Using elevation token for privileged promotion flow")
             else:
-                pilot = get_dockerpilot()
+                # Legacy fallback for older clients
+                sudo_password = session.get('sudo_password')
+                if sudo_password:
+                    app.logger.info("Using legacy sudo password from session")
+
+            if sudo_password:
+                pilot._sudo_password = sudo_password
+                sudo_password_applied = True
             
             try:
                 # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
@@ -2312,7 +2772,6 @@ class EnvironmentPromoteSingle(Resource):
                 return {'error': str(e)}, 500
             finally:
                 # Clean up progress after 2 minutes (reduced from 5)
-                import threading
                 def cleanup_progress():
                     import time
                     time.sleep(120)  # 2 minutes
@@ -2328,6 +2787,12 @@ class EnvironmentPromoteSingle(Resource):
                 del _deployment_progress[container_name]
             app.logger.error(f"Promotion request error: {e}")
             return {'error': str(e)}, 500
+        finally:
+            if pilot is not None and sudo_password_applied:
+                try:
+                    pilot._sudo_password = None
+                except Exception:
+                    pass
 
 
 # Cache for environment status to reduce load
@@ -5723,17 +6188,10 @@ class ContainerMigrate(Resource):
                         config['port_mapping'][port_num] = host_port
                         app.logger.debug(f"Extracted port mapping: {port_num} -> {host_port}")
             
-            # Also check ExposedPorts in Config (for ports that are exposed but not bound)
-            if 'Config' in attrs:
-                exposed_ports = attrs['Config'].get('ExposedPorts', {})
-                if exposed_ports:
-                    app.logger.debug(f"Found ExposedPorts in Config: {exposed_ports}")
-                    for exposed_port in exposed_ports.keys():
-                        port_num = exposed_port.split('/')[0]
-                        # If port is exposed but not mapped, use the same port number for both
-                        if port_num not in config['port_mapping']:
-                            config['port_mapping'][port_num] = port_num
-                            app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            # NOTE:
+            # Do not auto-map Config.ExposedPorts to host ports.
+            # Exposed port means "container can listen", not "publish on host".
+            # Auto-mapping (e.g. 22 -> 22) creates false conflicts during migrations.
             # Fallback: HostConfig.PortBindings (e.g. when NetworkSettings.Ports is empty or container uses host network)
             if not config['port_mapping'] and attrs.get('HostConfig', {}).get('PortBindings'):
                 for key, bindings in attrs['HostConfig']['PortBindings'].items():
@@ -5839,17 +6297,10 @@ class ContainerMigrate(Resource):
                         config['port_mapping'][port_num] = host_port
                         app.logger.debug(f"Extracted port mapping: {port_num} -> {host_port}")
             
-            # Also check ExposedPorts in Config (for ports that are exposed but not bound)
-            if 'Config' in attrs:
-                exposed_ports = attrs['Config'].get('ExposedPorts', {})
-                if exposed_ports:
-                    app.logger.debug(f"Found ExposedPorts in Config: {exposed_ports}")
-                    for exposed_port in exposed_ports.keys():
-                        port_num = exposed_port.split('/')[0]
-                        # If port is exposed but not mapped, use the same port number for both
-                        if port_num not in config['port_mapping']:
-                            config['port_mapping'][port_num] = port_num
-                            app.logger.debug(f"Added exposed port mapping: {port_num} -> {port_num}")
+            # NOTE:
+            # Do not auto-map Config.ExposedPorts to host ports.
+            # Exposed port means "container can listen", not "publish on host".
+            # Auto-mapping (e.g. 22 -> 22) creates false conflicts during migrations.
             # Fallback: HostConfig.PortBindings (e.g. when NetworkSettings.Ports is empty or container uses host network)
             if not config['port_mapping'] and attrs.get('HostConfig', {}).get('PortBindings'):
                 for key, bindings in attrs['HostConfig']['PortBindings'].items():
@@ -6046,6 +6497,13 @@ class ContainerMigrate(Resource):
             '/etc/timezone',
             '/var/run/docker.sock',
         )
+        bind_placeholder_prefixes = (
+            '/path',
+            '/host/path',
+            '/your/path',
+            '/tmp/path',
+            '/data/path',
+        )
 
         transferable = []
         for mount in mounts:
@@ -6058,8 +6516,19 @@ class ContainerMigrate(Resource):
             if mount_type == 'bind':
                 if not source:
                     continue
+                if source == '/':
+                    app.logger.info(f"Skipping root bind mount during data migration: {source} -> {destination}")
+                    container_config.setdefault('skipped_bind_mounts', []).append(source)
+                    continue
                 if any(source.startswith(prefix) for prefix in bind_skip_prefixes):
                     app.logger.info(f"Skipping system bind mount during data migration: {source} -> {destination}")
+                    container_config.setdefault('skipped_bind_mounts', []).append(source)
+                    continue
+                if any(source == prefix or source.startswith(prefix + '/') for prefix in bind_placeholder_prefixes):
+                    app.logger.warning(
+                        f"Skipping placeholder bind mount during data migration: {source} -> {destination}"
+                    )
+                    container_config.setdefault('skipped_bind_mounts', []).append(source)
                     continue
                 transferable.append(mount)
             elif mount_type == 'volume':
@@ -6223,16 +6692,32 @@ class ContainerMigrate(Resource):
                 if mount_type == 'bind':
                     target_source = mount_source
                     if bind_kind == 'file':
-                        target_parent = os.path.dirname(target_source) or '/'
-                        target_q = shlex.quote(target_parent)
+                        restore_host_path = os.path.dirname(target_source) or '/'
                     else:
-                        target_q = shlex.quote(target_source)
+                        restore_host_path = target_source
+                    restore_host_q = shlex.quote(restore_host_path)
                     archive_q = shlex.quote(target_archive_path)
+                    # Restore bind mounts through docker to avoid direct host FS permission issues
+                    # (docker daemon can create/access host path as needed).
                     restore_cmd = (
-                        f"mkdir -p {target_q} && "
-                        f"tar -xpf {archive_q} -C {target_q}"
+                        "run --rm -i "
+                        f"-v {restore_host_q}:/to "
+                        "alpine sh -c 'cd /to && tar -xpf -' "
+                        f"< {archive_q}"
                     )
-                    execute_command_via_ssh(target_server, restore_cmd)
+                    try:
+                        execute_docker_command_via_ssh(target_server, restore_cmd)
+                    except Exception as docker_restore_err:
+                        app.logger.warning(
+                            "Bind mount docker-restore failed, trying legacy restore path "
+                            f"for {restore_host_path}: {docker_restore_err}"
+                        )
+                        target_q = shlex.quote(restore_host_path)
+                        legacy_restore_cmd = (
+                            f"mkdir -p {target_q} && "
+                            f"tar -xpf {archive_q} -C {target_q}"
+                        )
+                        execute_command_via_ssh(target_server, legacy_restore_cmd)
                 else:
                     vol_q = shlex.quote(effective_volume)
                     archive_q = shlex.quote(target_archive_path)
@@ -6773,6 +7258,8 @@ class ContainerMigrate(Resource):
     
     def _build_docker_run_command(self, config, container_name, image_tag, target_arch=None, source_arch=None):
         """Build docker run command from configuration"""
+        import shlex
+
         cmd_parts = ['run', '-d', '--name', container_name]
         
         # Helper to normalize memory limits for docker CLI (expects m/g, not Mi/Gi)
@@ -6910,24 +7397,18 @@ class ContainerMigrate(Resource):
         
         # Add command: first any extra entrypoint args (e.g. "--", "/docker-entrypoint.sh"), then Cmd
         for arg in entrypoint_args_to_append:
-            if ' ' in arg or any(c in arg for c in ['&', '|', ';', '<', '>']):
-                cmd_parts.append(f'"{arg}"')
-            else:
-                cmd_parts.append(arg)
+            cmd_parts.append(str(arg))
         if config.get('command'):
             command = config['command']
             if isinstance(command, list):
                 for cmd_part in command:
-                    if ' ' in cmd_part or any(char in cmd_part for char in ['&', '|', ';', '<', '>']):
-                        cmd_parts.append(f'"{cmd_part}"')
-                    else:
-                        cmd_parts.append(cmd_part)
+                    cmd_parts.append(str(cmd_part))
             else:
                 cmd_parts.append(str(command))
         
         # Join all parts with spaces
         # Note: This creates a shell command string, so proper quoting is important
-        return ' '.join(cmd_parts)
+        return ' '.join(shlex.quote(str(part)) for part in cmd_parts)
 
 
 class ServerSelect(Resource):
@@ -7294,6 +7775,9 @@ class StorageConfigure(Resource):
 
 # API Routes
 api.add_resource(HealthCheck, '/api/health')
+api.add_resource(AuthStatus, '/api/auth/status')
+api.add_resource(AuthLogin, '/api/auth/login')
+api.add_resource(AuthLogout, '/api/auth/logout')
 api.add_resource(PipelineGenerate, '/api/pipeline/generate')
 api.add_resource(PipelineSave, '/api/pipeline/save')
 api.add_resource(PipelineDeploymentConfig, '/api/pipeline/deployment-config')
@@ -7304,6 +7788,7 @@ api.add_resource(DeploymentHistory, '/api/deployment/history')
 api.add_resource(EnvironmentPromote, '/api/environment/promote')
 api.add_resource(CancelPromotion, '/api/environment/cancel-promotion')
 api.add_resource(CheckSudoRequired, '/api/environment/check-sudo')
+api.add_resource(ElevationToken, '/api/environment/elevation-token')
 api.add_resource(SudoPassword, '/api/environment/sudo-password')
 api.add_resource(EnvironmentPromoteSingle, '/api/environment/promote-single')
 api.add_resource(DeploymentProgress, '/api/environment/progress')

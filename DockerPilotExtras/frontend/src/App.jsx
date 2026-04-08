@@ -1,8 +1,10 @@
 import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ServerProvider } from './contexts/ServerContext'
 import ServerSelector from './components/ServerSelector'
+import Login from './pages/Login'
 import Pipelines from './pages/Pipelines'
 import Environments from './pages/Environments'
 import Status from './pages/Status'
@@ -11,6 +13,7 @@ import './App.css'
 function Navigation() {
   const location = useLocation()
   const { theme, toggleTheme } = useTheme()
+  const { authEnabled, username, logout } = useAuth()
 
   const navItems = [
     { path: '/', label: 'CI/CD Pipelines', component: Pipelines },
@@ -37,6 +40,29 @@ function Navigation() {
               </li>
             ))}
           </ul>
+          {authEnabled && username && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white' }}>
+              <span style={{ fontSize: '0.9rem', opacity: 0.9 }}>
+                {username}
+              </span>
+              <button
+                type="button"
+                onClick={logout}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  borderRadius: '4px',
+                  color: 'white',
+                  padding: '0.35rem 0.6rem',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+                title="Sign out"
+              >
+                Logout
+              </button>
+            </div>
+          )}
           <ServerSelector />
           <button
             onClick={toggleTheme}
@@ -66,24 +92,55 @@ function Navigation() {
   )
 }
 
+function AppShell() {
+  const { checking, authEnabled, authenticated } = useAuth()
+
+  if (checking) {
+    return (
+      <div className="App">
+        <main className="main-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="card" style={{ maxWidth: '420px', width: '100%', textAlign: 'center' }}>
+            <h3 className="card-title">Checking session...</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 0 }}>Please wait.</p>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  if (authEnabled && !authenticated) {
+    return (
+      <div className="App">
+        <Login />
+      </div>
+    )
+  }
+
+  return (
+    <ServerProvider>
+      <Router>
+        <div className="App">
+          <Navigation />
+          <main className="main-content">
+            <Routes>
+              <Route path="/" element={<Pipelines />} />
+              <Route path="/deployments" element={<Navigate to="/environments" replace />} />
+              <Route path="/environments" element={<Environments />} />
+              <Route path="/status" element={<Status />} />
+            </Routes>
+          </main>
+        </div>
+      </Router>
+    </ServerProvider>
+  )
+}
+
 function App() {
   return (
     <ThemeProvider>
-      <ServerProvider>
-        <Router>
-          <div className="App">
-            <Navigation />
-            <main className="main-content">
-              <Routes>
-                <Route path="/" element={<Pipelines />} />
-                <Route path="/deployments" element={<Navigate to="/environments" replace />} />
-                <Route path="/environments" element={<Environments />} />
-                <Route path="/status" element={<Status />} />
-              </Routes>
-            </main>
-          </div>
-        </Router>
-      </ServerProvider>
+      <AuthProvider>
+        <AppShell />
+      </AuthProvider>
     </ThemeProvider>
   )
 }

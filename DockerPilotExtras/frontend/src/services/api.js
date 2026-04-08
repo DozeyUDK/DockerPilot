@@ -4,6 +4,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -22,12 +23,20 @@ export const environmentAPI = {
     to_env: toEnv,
     skip_backup: skipBackup 
   }),
-  promoteSingle: (fromEnv, toEnv, containerName, skipBackup = false, includeData = true) => api.post('/environment/promote-single', {
+  promoteSingle: (
+    fromEnv,
+    toEnv,
+    containerName,
+    skipBackup = false,
+    includeData = true,
+    elevationToken = null
+  ) => api.post('/environment/promote-single', {
     from_env: fromEnv,
     to_env: toEnv,
     container_name: containerName,
     skip_backup: skipBackup,
-    include_data: includeData
+    include_data: includeData,
+    elevation_token: elevationToken || undefined
   }),
   getProgress: (containerName) => api.get('/environment/progress', {
     params: { container_name: containerName }
@@ -36,6 +45,11 @@ export const environmentAPI = {
   checkSudo: (containerName) => api.post('/environment/check-sudo', {
     container_name: containerName
   }),
+  requestElevationToken: (password, scope = {}) => api.post('/environment/elevation-token', {
+    sudo_password: password,
+    scope
+  }, { withCredentials: true }),
+  clearElevationTokens: () => api.delete('/environment/elevation-token', { withCredentials: true }),
   setSudoPassword: (password) => api.post('/environment/sudo-password', {
     sudo_password: password
   }, { withCredentials: true }),
@@ -130,6 +144,16 @@ export const serversAPI = {
     set_as_default: setAsDefault 
   }, { withCredentials: true }),
   getSelected: () => api.get('/servers/select', { withCredentials: true })
+}
+
+export const authAPI = {
+  status: () => api.get('/auth/status'),
+  login: (username, password, totpCode = '') => api.post('/auth/login', {
+    username,
+    password,
+    totp_code: totpCode
+  }),
+  logout: () => api.post('/auth/logout')
 }
 
 // Health check
