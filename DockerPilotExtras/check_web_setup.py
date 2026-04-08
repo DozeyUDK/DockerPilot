@@ -5,6 +5,7 @@ Checks if all requirements are met before running the web application
 """
 
 import sys
+import os
 import subprocess
 from pathlib import Path
 
@@ -22,6 +23,8 @@ def check_python_version():
 def check_python_dependencies():
     """Check required Python packages"""
     required = ['flask', 'flask_cors', 'flask_restful', 'yaml']
+    if (os.environ.get('DP_STORAGE_BACKEND') or '').strip().lower() == 'postgres':
+        required.append('psycopg')
     missing = []
     
     for package in required:

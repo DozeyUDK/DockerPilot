@@ -29,6 +29,19 @@ from utils.pipeline_generator import (
     generate_deployment_config_for_environment
 )
 from backend.preflight import run_preflight_checks
+from backend.storage import (
+    DEFAULT_POSTGRES_AUTO_CREATE_SCHEMA,
+    DEFAULT_POSTGRES_SCHEMA,
+    DEFAULT_POSTGRES_TABLE_PREFIX,
+    FileStateStore,
+    StorageError,
+    build_postgres_dsn,
+    create_store,
+    resolve_storage_config,
+    save_storage_config,
+    sanitize_postgres_config,
+    test_postgres_connection,
+)
 from dockerpilot.pilot import DockerPilotEnhanced
 from dockerpilot.models import LogLevel
 
@@ -390,6 +403,75 @@ app.config['DEPLOYMENTS_DIR'] = app.config['CONFIG_DIR'] / "deployments"
 app.config['DEPLOYMENTS_DIR'].mkdir(exist_ok=True)
 app.config['SERVERS_DIR'] = app.config['CONFIG_DIR'] / "servers"
 app.config['SERVERS_DIR'].mkdir(exist_ok=True)
+
+_storage_runtime_config = {}
+_state_store = None
+_storage_init_warning = None
+
+
+def _build_file_store() -> FileStateStore:
+    return FileStateStore(
+        config_dir=app.config['CONFIG_DIR'],
+        servers_dir=app.config['SERVERS_DIR'],
+    )
+
+
+def init_state_store(runtime_config: dict = None) -> tuple:
+    """Initialize storage backend and fallback to file mode on errors."""
+    global _state_store, _storage_runtime_config, _storage_init_warning
+    cfg = runtime_config or resolve_storage_config(app.config['CONFIG_DIR'])
+    try:
+        _state_store = create_store(
+            config_dir=app.config['CONFIG_DIR'],
+            servers_dir=app.config['SERVERS_DIR'],
+            resolved_cfg=cfg,
+        )
+        _storage_runtime_config = cfg
+        _storage_init_warning = None
+        return True, None
+    except Exception as exc:
+        _storage_init_warning = str(exc)
+        app.logger.error(
+            f"Failed to initialize storage backend '{cfg.get('backend', 'unknown')}': {exc}. "
+            "Falling back to file storage."
+        )
+        fallback_cfg = {"backend": "file", "postgres": {}}
+        _state_store = _build_file_store()
+        _storage_runtime_config = fallback_cfg
+        return False, str(exc)
+
+
+def get_state_store():
+    if _state_store is None:
+        init_state_store()
+    return _state_store
+
+
+def get_storage_status() -> dict:
+    store = get_state_store()
+    mode = getattr(store, "mode", "file")
+    healthy = False
+    schema_version = None
+    error = None
+    try:
+        healthy = bool(store.is_healthy())
+        schema_version = store.schema_version()
+    except Exception as exc:
+        error = str(exc)
+    return {
+        "backend": mode,
+        "healthy": healthy,
+        "schema_version": schema_version,
+        "warning": _storage_init_warning,
+        "error": error,
+        "config": {
+            "backend": _storage_runtime_config.get("backend", "file"),
+            "postgres": sanitize_postgres_config(_storage_runtime_config.get("postgres", {})),
+        },
+    }
+
+
+init_state_store()
 
 # DockerPilot instance cache (per server)
 _dockerpilot_instances = {}  # {server_id: DockerPilotEnhanced instance}
@@ -1315,23 +1397,14 @@ class DeploymentExecute(Resource):
                 )
                 
                 if result.returncode == 0:
-                    # Save to history
-                    history_path = app.config['CONFIG_DIR'] / 'deployment_history.json'
-                    history = []
-                    if history_path.exists():
-                        with open(history_path, 'r', encoding='utf-8') as f:
-                            history = json.load(f)
-                    
-                    history.append({
+                    # Save to history via state store
+                    append_deployment_history_data({
                         'timestamp': datetime.now().isoformat(),
                         'strategy': strategy,
                         'status': 'success',
                         'output': result.stdout,
                         'config_path': str(config_path)
-                    })
-                    
-                    with open(history_path, 'w', encoding='utf-8') as f:
-                        json.dump(history[-50:], f, indent=2)  # Keep last 50
+                    }, max_entries=50)
                     
                     return {
                         'success': True,
@@ -1359,16 +1432,7 @@ class DeploymentExecute(Resource):
 class DeploymentHistory(Resource):
     """Get deployment history"""
     def get(self):
-        history_path = app.config['CONFIG_DIR'] / 'deployment_history.json'
-        if history_path.exists():
-            try:
-                with open(history_path, 'r', encoding='utf-8') as f:
-                    history = json.load(f)
-                return {'history': history}
-            except:
-                pass
-        
-        return {'history': []}
+        return {'history': get_deployment_history_data(limit=50)}
 
 
 def find_all_deployment_configs_for_env(env: str) -> list:
@@ -1410,34 +1474,175 @@ def get_env_servers_config_path() -> Path:
 
 
 def load_env_servers_config() -> dict:
-    """Load environment to server mapping.
-
-    Format:
-      {
-        "env_servers": { "dev": "serverA", "staging": "serverB", "prod": "serverC" }
-      }
-    """
-    config_path = get_env_servers_config_path()
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f) or {}
-        except Exception as e:
-            app.logger.error(f"Failed to load environments config: {e}")
-    return {"env_servers": {}}
+    """Load environment->server mapping via configured state store."""
+    try:
+        config = get_state_store().load_env_servers_config() or {}
+        config.setdefault("env_servers", {})
+        return config
+    except Exception as e:
+        app.logger.error(f"Failed to load environments config: {e}")
+        return {"env_servers": {}}
 
 
 def save_env_servers_config(config: dict) -> bool:
-    """Save environment->server mapping to file."""
-    config_path = get_env_servers_config_path()
+    """Save environment->server mapping via configured state store."""
     try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        return True
+        return bool(get_state_store().save_env_servers_config(config))
     except Exception as e:
         app.logger.error(f"Failed to save environments config: {e}")
         return False
+
+
+def get_deployment_history_data(limit: int = 50) -> list:
+    """Load deployment history via configured state store."""
+    try:
+        return list(get_state_store().get_deployment_history(limit=limit))
+    except TypeError:
+        # File store compatibility (older signature without limit)
+        try:
+            history = list(get_state_store().get_deployment_history())
+            return history[-limit:]
+        except Exception as e:
+            app.logger.error(f"Failed to load deployment history: {e}")
+            return []
+    except Exception as e:
+        app.logger.error(f"Failed to load deployment history: {e}")
+        return []
+
+
+def append_deployment_history_data(entry: dict, max_entries: int = 50) -> bool:
+    """Append deployment history entry via configured state store."""
+    try:
+        return bool(get_state_store().append_deployment_history(entry, max_entries=max_entries))
+    except TypeError:
+        # File store compatibility for older method signatures.
+        try:
+            history = get_deployment_history_data(limit=max_entries)
+            history.append(dict(entry))
+            return bool(get_state_store().replace_deployment_history(history[-max_entries:], max_entries=max_entries))
+        except Exception as e:
+            app.logger.error(f"Failed to append deployment history: {e}")
+            return False
+    except Exception as e:
+        app.logger.error(f"Failed to append deployment history: {e}")
+        return False
+
+
+def load_env_container_bindings() -> dict:
+    """Load environment->containers bindings via configured state store."""
+    try:
+        config = get_state_store().load_env_container_bindings() or {}
+        config.setdefault("env_containers", {})
+        return config
+    except Exception as e:
+        app.logger.error(f"Failed to load env container bindings: {e}")
+        return {"env_containers": {}}
+
+
+def save_env_container_bindings(config: dict) -> bool:
+    """Save environment->containers bindings via configured state store."""
+    try:
+        return bool(get_state_store().save_env_container_bindings(config))
+    except Exception as e:
+        app.logger.error(f"Failed to save env container bindings: {e}")
+        return False
+
+
+def _normalize_env_container_bindings(config: dict) -> dict:
+    envs = ['dev', 'staging', 'prod']
+    cfg = config if isinstance(config, dict) else {}
+    src_map = cfg.get("env_containers", {}) if isinstance(cfg.get("env_containers", {}), dict) else {}
+    normalized = {}
+    for env in envs:
+        values = src_map.get(env, [])
+        if not isinstance(values, list):
+            values = []
+        deduped = []
+        seen = set()
+        for name in values:
+            if not isinstance(name, str):
+                continue
+            clean = name.strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            deduped.append(clean)
+        normalized[env] = deduped
+    return {"env_containers": normalized, "updated_at": datetime.now().isoformat()}
+
+
+def move_container_binding(container_name: str, from_env: str, to_env: str) -> bool:
+    if not container_name:
+        return False
+    data = load_env_container_bindings()
+    normalized = _normalize_env_container_bindings(data)
+    env_containers = normalized["env_containers"]
+    for env in env_containers:
+        env_containers[env] = [name for name in env_containers[env] if name != container_name]
+    if to_env in env_containers:
+        env_containers[to_env].append(container_name)
+    saved = save_env_container_bindings(_normalize_env_container_bindings(normalized))
+    if saved and '_environment_status_cache' in globals():
+        _environment_status_cache["data"] = None
+        _environment_status_cache["timestamp"] = None
+    return saved
+
+
+def move_many_container_bindings(container_names: list, from_env: str, to_env: str) -> bool:
+    data = load_env_container_bindings()
+    normalized = _normalize_env_container_bindings(data)
+    env_containers = normalized["env_containers"]
+    unique_names = []
+    seen = set()
+    for name in container_names or []:
+        if isinstance(name, str) and name.strip() and name not in seen:
+            seen.add(name)
+            unique_names.append(name)
+    for container_name in unique_names:
+        for env in env_containers:
+            env_containers[env] = [existing for existing in env_containers[env] if existing != container_name]
+        if to_env in env_containers:
+            env_containers[to_env].append(container_name)
+    saved = save_env_container_bindings(_normalize_env_container_bindings(normalized))
+    if saved and '_environment_status_cache' in globals():
+        _environment_status_cache["data"] = None
+        _environment_status_cache["timestamp"] = None
+    return saved
+
+
+def load_legacy_file_state_snapshot() -> dict:
+    """Load state snapshot directly from legacy JSON files."""
+    file_store = _build_file_store()
+    return {
+        "servers_config": file_store.load_servers_config(),
+        "env_servers_config": file_store.load_env_servers_config(),
+        "deployment_history": file_store.get_deployment_history(),
+        "env_container_bindings": file_store.load_env_container_bindings(),
+    }
+
+
+def migrate_legacy_file_state_to_store(target_store) -> dict:
+    """Copy legacy file state into target store. Returns migration counters."""
+    snapshot = load_legacy_file_state_snapshot()
+    servers_cfg = snapshot.get("servers_config", {}) or {"servers": [], "default_server": "local"}
+    env_cfg = snapshot.get("env_servers_config", {}) or {"env_servers": {}}
+    history = list(snapshot.get("deployment_history", []) or [])
+    env_container_bindings = snapshot.get("env_container_bindings", {}) or {"env_containers": {}}
+
+    target_store.save_servers_config(servers_cfg)
+    target_store.save_env_servers_config(env_cfg)
+    target_store.replace_deployment_history(history, max_entries=50)
+    target_store.save_env_container_bindings(_normalize_env_container_bindings(env_container_bindings))
+
+    return {
+        "servers": len(servers_cfg.get("servers", [])),
+        "env_mappings": len((env_cfg.get("env_servers") or {}).keys()),
+        "history_entries": min(len(history), 50),
+        "env_container_bindings": sum(
+            len(v)
+            for v in _normalize_env_container_bindings(env_container_bindings).get("env_containers", {}).values()
+        ),
+    }
 
 
 def resolve_server_id_for_env(env: str) -> str:
@@ -1632,6 +1837,12 @@ class EnvironmentPromote(Resource):
                 except Exception as e:
                     app.logger.error(f"Error promoting {container_name}: {e}")
                     results['failed'].append(container_name)
+
+            if results['success']:
+                try:
+                    move_many_container_bindings(results['success'], from_env, to_env)
+                except Exception as binding_err:
+                    app.logger.warning(f"Failed to update env container bindings after promotion: {binding_err}")
             
             # Return summary
             if results['failed']:
@@ -1974,40 +2185,72 @@ class EnvironmentPromoteSingle(Resource):
                 # Source/target servers are resolved from env->server mapping.
                 source_server_id = resolve_server_id_for_env(from_env)
                 target_server_id = resolve_server_id_for_env(to_env)
+
                 if source_server_id == target_server_id:
-                    raise ValueError(f"Source and target servers are the same ({source_server_id}). Update environment mapping.")
-
-                _deployment_progress[container_name] = {
-                    'stage': 'migrating',
-                    'progress': 20,
-                    'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
-                    'timestamp': datetime.now().isoformat()
-                }
-
-                # Reuse the existing migration implementation by calling the migrate resource in a test request context.
-                with app.test_request_context(
-                    '/api/containers/migrate',
-                    method='POST',
-                    json={
-                        'container_name': container_name,
+                    _deployment_progress[container_name] = {
+                        'stage': 'deploying',
+                        'progress': 30,
+                        'message': (
+                            f'Promoting {container_name} on shared server '
+                            f'({format_env_name(from_env)} -> {format_env_name(to_env)})...'
+                        ),
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    deployment_dir = find_active_deployment_dir(container_name)
+                    if not deployment_dir:
+                        raise FileNotFoundError(f"No active deployment directory found for {container_name}")
+                    config_path = deployment_dir / f'deployment-{from_env}.yml'
+                    if not config_path.exists():
+                        config_path = deployment_dir / 'deployment.yml'
+                    if not config_path.exists():
+                        raise FileNotFoundError(
+                            f"Deployment config not found for {container_name} and env {from_env}"
+                        )
+                    success = promote_config_to_server(
+                        target_server_id,
+                        str(config_path),
+                        from_env,
+                        to_env,
+                        bool(skip_backup),
+                    )
+                    body = {
+                        'mode': 'same-server',
+                        'config_path': str(config_path),
                         'source_server_id': source_server_id,
                         'target_server_id': target_server_id,
-                        'include_data': bool(include_data),
-                        'stop_source': bool(stop_source),
-                    },
-                ):
-                    migrate_result = ContainerMigrate().post()
-
-                # Flask-RESTful resources may return (dict, status) tuples
-                if isinstance(migrate_result, tuple) and len(migrate_result) >= 2:
-                    body, status = migrate_result[0], migrate_result[1]
-                    if status >= 400:
-                        success = False
-                    else:
-                        success = True
+                    }
                 else:
-                    body = migrate_result
-                    success = True
+                    _deployment_progress[container_name] = {
+                        'stage': 'migrating',
+                        'progress': 20,
+                        'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
+                        'timestamp': datetime.now().isoformat()
+                    }
+
+                    # Reuse the existing migration implementation by calling the migrate resource in a test request context.
+                    with app.test_request_context(
+                        '/api/containers/migrate',
+                        method='POST',
+                        json={
+                            'container_name': container_name,
+                            'source_server_id': source_server_id,
+                            'target_server_id': target_server_id,
+                            'include_data': bool(include_data),
+                            'stop_source': bool(stop_source),
+                        },
+                    ):
+                        migrate_result = ContainerMigrate().post()
+
+                    # Flask-RESTful resources may return (dict, status) tuples
+                    if isinstance(migrate_result, tuple) and len(migrate_result) >= 2:
+                        body, status = migrate_result[0], migrate_result[1]
+                        if status >= 400:
+                            success = False
+                        else:
+                            success = True
+                    else:
+                        body = migrate_result
+                        success = True
                 
                 # Wait a moment for final progress callback from pilot
                 import time
@@ -2018,6 +2261,12 @@ class EnvironmentPromoteSingle(Resource):
                 current_stage = current_progress.get('stage', '')
                 
                 if success:
+                    try:
+                        move_container_binding(container_name, from_env, to_env)
+                    except Exception as binding_err:
+                        app.logger.warning(
+                            f"Failed to update env container binding for {container_name}: {binding_err}"
+                        )
                     # Only set 'completed' if pilot didn't already do it via callback
                     if current_stage != 'completed':
                         _deployment_progress[container_name] = {
@@ -2104,18 +2353,86 @@ class EnvironmentStatus(Resource):
         
         try:
             environments = ['dev', 'staging', 'prod']
+            env_priority = {'dev': 0, 'staging': 1, 'prod': 2}
             env_status = {}
             # Each environment shows data from the server mapped to that env (env_servers).
             env_servers_cfg = load_env_servers_config()
             env_servers = env_servers_cfg.get("env_servers", {}) if isinstance(env_servers_cfg, dict) else {}
+            bindings_cfg = load_env_container_bindings()
+            raw_bindings_map = (
+                bindings_cfg.get("env_containers", {})
+                if isinstance(bindings_cfg.get("env_containers", {}), dict)
+                else {}
+            )
+            normalized_bindings = _normalize_env_container_bindings(bindings_cfg).get("env_containers", {})
+            explicit_binding_envs = {
+                env for env in environments if isinstance(raw_bindings_map.get(env), list)
+            }
+
+            server_envs = {}
+            for env in environments:
+                sid = env_servers.get(env, "local")
+                server_envs.setdefault(sid, []).append(env)
+
+            server_primary_env = {}
+            for sid, env_list in server_envs.items():
+                sorted_envs = sorted(env_list, key=lambda env_name: env_priority.get(env_name, 99))
+                server_primary_env[sid] = sorted_envs[0] if sorted_envs else "dev"
+            server_has_explicit_bindings = {
+                sid: any(env in explicit_binding_envs for env in env_list)
+                for sid, env_list in server_envs.items()
+            }
 
             for env in environments:
                 server_id = env_servers.get(env, "local")
                 server_config = get_server_config_by_id(server_id)
                 containers, images = _get_containers_and_images_for_server(server_config)
-                running = [c for c in containers if c.get("state") == "running"]
-                stopped = [c for c in containers if c.get("state") != "running"]
-                env_images = list(images)[:5]
+                bound_names = {
+                    name for name in normalized_bindings.get(env, [])
+                    if isinstance(name, str) and name.strip()
+                }
+                scope_mode = "legacy-server"
+                filtered_containers = containers
+
+                if bound_names:
+                    filtered_containers = [c for c in containers if c.get("name") in bound_names]
+                    scope_mode = "bindings"
+                elif env in explicit_binding_envs:
+                    filtered_containers = []
+                    scope_mode = "bindings-empty"
+                elif len(server_envs.get(server_id, [])) > 1:
+                    if server_has_explicit_bindings.get(server_id, False):
+                        filtered_containers = []
+                        scope_mode = "shared-server-unassigned"
+                    else:
+                        primary_env = server_primary_env.get(server_id, env)
+                        if env != primary_env:
+                            filtered_containers = []
+                            scope_mode = "shared-server-default-empty"
+                        else:
+                            filtered_containers = containers
+                            scope_mode = "shared-server-default-primary"
+                else:
+                    inferred_configs = find_all_deployment_configs_for_env(env)
+                    inferred_names = {
+                        item.get("container_name")
+                        for item in inferred_configs
+                        if item.get("container_name")
+                    }
+                    if inferred_names:
+                        filtered_containers = [c for c in containers if c.get("name") in inferred_names]
+                        scope_mode = "inferred-configs"
+
+                running = [c for c in filtered_containers if c.get("state") == "running"]
+                stopped = [c for c in filtered_containers if c.get("state") != "running"]
+                env_images = []
+                for container in filtered_containers:
+                    tag = container.get("image")
+                    if tag and tag not in env_images:
+                        env_images.append(tag)
+                if not env_images:
+                    env_images = list(images)[:5]
+                env_images = env_images[:5]
                 primary_image = env_images[0] if env_images else None
                 # Server label for UI (name or hostname)
                 server_label = "Local"
@@ -2124,23 +2441,30 @@ class EnvironmentStatus(Resource):
 
                 env_status[env] = {
                     "containers": {
-                        "total": len(containers),
+                        "total": len(filtered_containers),
                         "running": len(running),
                         "stopped": len(stopped),
-                        "list": containers[:5],
-                        "all": containers,
+                        "list": filtered_containers[:5],
+                        "all": filtered_containers,
+                        "host_total": len(containers),
                     },
                     "images": env_images,
-                    "status": "active" if running else ("inactive" if containers else "empty"),
+                    "status": "active" if running else ("inactive" if filtered_containers else "empty"),
                     "primary_image": primary_image,
                     "server_id": server_id,
                     "server_label": server_label,
+                    "scope_mode": scope_mode,
+                    "bindings_count": len(bound_names),
+                    "bindings_explicit": env in explicit_binding_envs,
                 }
 
             result = {
                 "success": True,
                 "environments": env_status,
-                "debug": {"env_servers": env_servers},
+                "debug": {
+                    "env_servers": env_servers,
+                    "env_container_bindings": normalized_bindings,
+                },
             }
             _environment_status_cache["data"] = result
             _environment_status_cache["timestamp"] = current_time
@@ -3450,6 +3774,36 @@ class EnvServersMap(Resource):
             return {"success": False, "error": str(e)}, 500
 
 
+class EnvContainerBindings(Resource):
+    """GET/PUT explicit environment -> container bindings."""
+    def get(self):
+        try:
+            cfg = _normalize_env_container_bindings(load_env_container_bindings())
+            return {"success": True, "env_containers": cfg.get("env_containers", {})}
+        except Exception as e:
+            app.logger.error(f"Failed to load env container bindings: {e}")
+            return {"success": False, "error": str(e), "env_containers": {}}, 500
+
+    def put(self):
+        try:
+            data = request.get_json() or {}
+            env_containers = data.get("env_containers")
+            if env_containers is None or not isinstance(env_containers, dict):
+                return {"success": False, "error": "env_containers must be an object"}, 400
+            normalized = _normalize_env_container_bindings({"env_containers": env_containers})
+            if not save_env_container_bindings(normalized):
+                return {"success": False, "error": "Failed to save container bindings"}, 500
+
+            global _environment_status_cache
+            _environment_status_cache["data"] = None
+            _environment_status_cache["timestamp"] = None
+
+            return {"success": True, "env_containers": normalized.get("env_containers", {})}
+        except Exception as e:
+            app.logger.error(f"Failed to save env container bindings: {e}")
+            return {"success": False, "error": str(e)}, 500
+
+
 # ==================== SSH SERVER MANAGEMENT ====================
 
 try:
@@ -3468,24 +3822,20 @@ def get_servers_config_path():
     return app.config['SERVERS_DIR'] / 'servers.json'
 
 def load_servers_config():
-    """Load servers configuration from file"""
-    config_path = get_servers_config_path()
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            app.logger.error(f"Failed to load servers config: {e}")
-            return {'servers': [], 'default_server': 'local'}
-    return {'servers': [], 'default_server': 'local'}
+    """Load servers configuration via configured state store."""
+    try:
+        config = get_state_store().load_servers_config() or {}
+        config.setdefault('servers', [])
+        config.setdefault('default_server', 'local')
+        return config
+    except Exception as e:
+        app.logger.error(f"Failed to load servers config: {e}")
+        return {'servers': [], 'default_server': 'local'}
 
 def save_servers_config(config):
-    """Save servers configuration to file"""
-    config_path = get_servers_config_path()
+    """Save servers configuration via configured state store."""
     try:
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        return True
+        return bool(get_state_store().save_servers_config(config))
     except Exception as e:
         app.logger.error(f"Failed to save servers config: {e}")
         return False
@@ -6648,6 +6998,296 @@ class ServerSelect(Resource):
             }
 
 
+def _parse_env_list(env_list):
+    env_map = {}
+    for item in env_list or []:
+        if isinstance(item, str) and '=' in item:
+            key, value = item.split('=', 1)
+            env_map[key] = value
+    return env_map
+
+
+def discover_local_postgres(container_name: str = 'postgres-dozeyserver') -> dict:
+    """Inspect local Docker container and infer PostgreSQL connection params."""
+    try:
+        import docker
+    except ImportError as exc:
+        return {'success': False, 'error': f'Docker SDK not available: {exc}'}
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        return {'success': False, 'error': f'Container {container_name} not found'}
+    except Exception as exc:
+        return {'success': False, 'error': f'Failed to inspect container: {exc}'}
+
+    container.reload()
+    attrs = container.attrs or {}
+    env_map = _parse_env_list((attrs.get('Config') or {}).get('Env') or [])
+    ports = ((attrs.get('NetworkSettings') or {}).get('Ports') or {}).get('5432/tcp') or []
+    host_port = None
+    if ports and isinstance(ports, list) and ports[0]:
+        host_port = ports[0].get('HostPort')
+
+    postgres_cfg = {
+        'host': '127.0.0.1',
+        'port': int(host_port) if host_port else 5432,
+        'database': env_map.get('POSTGRES_DB', 'postgres'),
+        'user': env_map.get('POSTGRES_USER', 'postgres'),
+        'password': env_map.get('POSTGRES_PASSWORD', ''),
+        'sslmode': 'prefer',
+        'schema': DEFAULT_POSTGRES_SCHEMA,
+        'table_prefix': DEFAULT_POSTGRES_TABLE_PREFIX,
+        'auto_create_schema': DEFAULT_POSTGRES_AUTO_CREATE_SCHEMA,
+        'container_name': container_name,
+    }
+
+    return {
+        'success': True,
+        'container': {
+            'name': container.name,
+            'status': container.status,
+            'image': str(container.image.tags[0] if container.image.tags else container.image.id),
+            'id': container.id,
+        },
+        'postgres': postgres_cfg,
+        'postgres_sanitized': sanitize_postgres_config(postgres_cfg),
+    }
+
+
+def ensure_local_postgres_container(
+    container_name: str,
+    image: str,
+    host_port: int,
+    database: str,
+    user: str,
+    password: str,
+    volume_name: str = None,
+):
+    try:
+        import docker
+    except ImportError as exc:
+        raise RuntimeError(f'Docker SDK not available: {exc}') from exc
+
+    client = docker.from_env()
+    created = False
+    try:
+        container = client.containers.get(container_name)
+        if container.status != 'running':
+            container.start()
+            container.reload()
+    except docker.errors.NotFound:
+        env = {
+            'POSTGRES_DB': database,
+            'POSTGRES_USER': user,
+            'POSTGRES_PASSWORD': password,
+        }
+        volumes = None
+        if volume_name:
+            volumes = {volume_name: {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
+        container = client.containers.run(
+            image=image,
+            name=container_name,
+            detach=True,
+            restart_policy={'Name': 'unless-stopped'},
+            environment=env,
+            ports={'5432/tcp': int(host_port)},
+            volumes=volumes,
+        )
+        created = True
+    return container, created
+
+
+class StorageStatus(Resource):
+    """Storage backend status and schema info."""
+    def get(self):
+        status = get_storage_status()
+        status['success'] = True
+        return status
+
+
+class StorageTestPostgres(Resource):
+    """Test PostgreSQL connectivity and optionally apply schema."""
+    def post(self):
+        try:
+            data = request.get_json() or {}
+            postgres_cfg = data.get('postgres') or {}
+            if not postgres_cfg:
+                return {'success': False, 'error': 'Missing postgres configuration'}, 400
+            ensure_schema = bool(data.get('ensure_schema', True))
+            result = test_postgres_connection(postgres_cfg, ensure_schema=ensure_schema)
+            status_code = 200 if result.get('success') else 400
+            return result, status_code
+        except Exception as exc:
+            return {'success': False, 'error': str(exc)}, 500
+
+
+class StorageDiscoverLocalPostgres(Resource):
+    """Discover local PostgreSQL container settings."""
+    def get(self):
+        container_name = request.args.get('container_name', 'postgres-dozeyserver')
+        result = discover_local_postgres(container_name=container_name)
+        if result.get('success'):
+            result['postgres'] = sanitize_postgres_config(result.get('postgres', {}))
+        return result, (200 if result.get('success') else 404)
+
+
+class StorageBootstrapLocalPostgres(Resource):
+    """Create/start local PostgreSQL container and optionally configure storage backend."""
+    def post(self):
+        try:
+            data = request.get_json() or {}
+            container_name = data.get('container_name', 'postgres-dozeyserver')
+            image = data.get('image', 'postgres:16-alpine')
+            host_port = int(data.get('host_port', 5432))
+            database = data.get('database', 'dockerpilot_extras')
+            user = data.get('user', 'dockerpilot')
+            password = data.get('password', 'dockerpilot_change_me')
+            schema = data.get('schema', DEFAULT_POSTGRES_SCHEMA)
+            table_prefix = data.get('table_prefix', DEFAULT_POSTGRES_TABLE_PREFIX)
+            auto_create_schema = bool(data.get('auto_create_schema', True))
+            volume_name = data.get('volume_name') or f'{container_name}-data'
+            configure_storage = bool(data.get('configure_storage', True))
+            migrate_from_file = bool(data.get('migrate_from_file', True))
+
+            container, created = ensure_local_postgres_container(
+                container_name=container_name,
+                image=image,
+                host_port=host_port,
+                database=database,
+                user=user,
+                password=password,
+                volume_name=volume_name,
+            )
+
+            postgres_cfg = {
+                'host': '127.0.0.1',
+                'port': host_port,
+                'database': database,
+                'user': user,
+                'password': password,
+                'sslmode': 'prefer',
+                'schema': schema,
+                'table_prefix': table_prefix,
+                'auto_create_schema': auto_create_schema,
+                'container_name': container_name,
+            }
+
+            # Wait for DB readiness.
+            deadline = time.time() + int(data.get('wait_seconds', 45))
+            last_error = None
+            while time.time() < deadline:
+                test_result = test_postgres_connection(postgres_cfg, ensure_schema=False)
+                if test_result.get('success'):
+                    last_error = None
+                    break
+                last_error = test_result.get('error')
+                time.sleep(2)
+            if last_error:
+                return {
+                    'success': False,
+                    'error': f'Container started but PostgreSQL not ready yet: {last_error}',
+                    'container_name': container_name,
+                    'created': created,
+                }, 500
+
+            migration_info = {}
+            if configure_storage:
+                runtime_cfg = {'backend': 'postgres', 'postgres': postgres_cfg}
+                target_store = create_store(
+                    config_dir=app.config['CONFIG_DIR'],
+                    servers_dir=app.config['SERVERS_DIR'],
+                    resolved_cfg=runtime_cfg,
+                )
+                if migrate_from_file:
+                    migration_info = migrate_legacy_file_state_to_store(target_store)
+                save_storage_config(app.config['CONFIG_DIR'], runtime_cfg)
+                init_state_store(runtime_cfg)
+
+            return {
+                'success': True,
+                'created': created,
+                'container': {
+                    'name': container.name,
+                    'status': container.status,
+                    'id': container.id,
+                },
+                'postgres': sanitize_postgres_config(postgres_cfg),
+                'storage_configured': configure_storage,
+                'migration': migration_info,
+            }
+        except Exception as exc:
+            return {'success': False, 'error': str(exc)}, 500
+
+
+class StorageConfigure(Resource):
+    """Configure active state backend (file/postgres) and run migration if requested."""
+    def post(self):
+        try:
+            data = request.get_json() or {}
+            backend = str(data.get('backend', '')).strip().lower()
+            persist = bool(data.get('persist', True))
+            migrate_from_file = bool(data.get('migrate_from_file', True))
+
+            if backend not in {'file', 'postgres'}:
+                return {'success': False, 'error': "backend must be 'file' or 'postgres'"}, 400
+
+            if backend == 'file':
+                runtime_cfg = {'backend': 'file', 'postgres': {}}
+                if persist:
+                    save_storage_config(app.config['CONFIG_DIR'], runtime_cfg)
+                init_state_store(runtime_cfg)
+                return {
+                    'success': True,
+                    'message': 'Switched to file storage',
+                    'storage': get_storage_status(),
+                }
+
+            postgres_cfg = data.get('postgres') or {}
+            if not postgres_cfg and data.get('container_name'):
+                discovery = discover_local_postgres(container_name=str(data.get('container_name')))
+                if discovery.get('success'):
+                    postgres_cfg = discovery.get('postgres') or {}
+            if not postgres_cfg:
+                return {'success': False, 'error': 'Missing postgres config for backend=postgres'}, 400
+
+            if 'schema' in data and data.get('schema'):
+                postgres_cfg['schema'] = data.get('schema')
+            if 'table_prefix' in data and data.get('table_prefix') is not None:
+                postgres_cfg['table_prefix'] = data.get('table_prefix')
+            if 'tables' in data and isinstance(data.get('tables'), dict):
+                postgres_cfg['tables'] = data.get('tables')
+            if 'auto_create_schema' in data:
+                postgres_cfg['auto_create_schema'] = bool(data.get('auto_create_schema'))
+
+            runtime_cfg = {'backend': 'postgres', 'postgres': postgres_cfg}
+            target_store = create_store(
+                config_dir=app.config['CONFIG_DIR'],
+                servers_dir=app.config['SERVERS_DIR'],
+                resolved_cfg=runtime_cfg,
+            )
+            migration_info = {}
+            if migrate_from_file:
+                migration_info = migrate_legacy_file_state_to_store(target_store)
+
+            if persist:
+                save_storage_config(app.config['CONFIG_DIR'], runtime_cfg)
+            init_state_store(runtime_cfg)
+
+            return {
+                'success': True,
+                'message': 'PostgreSQL storage configured',
+                'storage': get_storage_status(),
+                'dsn_preview': build_postgres_dsn(sanitize_postgres_config(postgres_cfg)),
+                'migration': migration_info,
+            }
+        except StorageError as exc:
+            return {'success': False, 'error': str(exc)}, 400
+        except Exception as exc:
+            return {'success': False, 'error': str(exc)}, 500
+
+
 # API Routes
 api.add_resource(HealthCheck, '/api/health')
 api.add_resource(PipelineGenerate, '/api/pipeline/generate')
@@ -6667,6 +7307,7 @@ api.add_resource(EnvironmentStatus, '/api/environment/status')
 api.add_resource(PrepareContainerConfig, '/api/environment/prepare-config')
 api.add_resource(ImportDeploymentConfig, '/api/environment/import-config')
 api.add_resource(EnvServersMap, '/api/environment/servers-map')
+api.add_resource(EnvContainerBindings, '/api/environment/container-bindings')
 api.add_resource(StatusCheck, '/api/status')
 api.add_resource(PreflightCheck, '/api/preflight')
 api.add_resource(ContainerList, '/api/containers')
@@ -6676,6 +7317,11 @@ api.add_resource(FileBrowser, '/api/files/browse')
 api.add_resource(ExecuteCommand, '/api/command/execute')
 api.add_resource(GetCommandHelp, '/api/command/help')
 api.add_resource(DockerPilotCommands, '/api/dockerpilot/commands')
+api.add_resource(StorageStatus, '/api/storage/status')
+api.add_resource(StorageTestPostgres, '/api/storage/test-postgres')
+api.add_resource(StorageDiscoverLocalPostgres, '/api/storage/discover-local-postgres')
+api.add_resource(StorageBootstrapLocalPostgres, '/api/storage/bootstrap-local-postgres')
+api.add_resource(StorageConfigure, '/api/storage/configure')
 api.add_resource(ServerList, '/api/servers')
 api.add_resource(ServerCreate, '/api/servers/create')
 api.add_resource(ServerUpdate, '/api/servers/<string:server_id>')

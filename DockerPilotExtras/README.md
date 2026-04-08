@@ -99,6 +99,110 @@ This will automatically:
 - **Backend**: Flask (Python) - REST API
 - **Frontend**: React + Vite - Single Page Application
 - **Integration**: DockerPilot CLI
+- **State Storage**: file JSON (legacy/default) or PostgreSQL (single source of truth)
+
+## State Storage (Single Source Of Truth)
+
+DockerPilot Extras now supports PostgreSQL as persistent state backend for:
+- servers configuration
+- environment → server mapping
+- deployment history
+
+Default mode is still file-based (`~/.dockerpilot_extras/*.json`), but you can switch to PostgreSQL.
+
+### PostgreSQL schema (versioned)
+
+Schema is managed with migration metadata + checksum validation to avoid silent table drift.
+
+Tables:
+- `dp_schema_migrations` - migration version/checksum history
+- `dp_servers` - servers and auth payload (JSONB for secrets/metadata)
+- `dp_settings` - global settings (for example `default_server`)
+- `dp_env_servers` - environment mapping (`dev/staging/prod` → `server_id`)
+- `dp_deployment_history` - deployment execution history
+
+If migration checksum doesn't match expected schema version, backend refuses to continue in PostgreSQL mode.
+
+### Configure storage backend
+
+Using environment variables:
+
+```bash
+export DP_STORAGE_BACKEND=postgres
+export DP_POSTGRES_HOST=127.0.0.1
+export DP_POSTGRES_PORT=5432
+export DP_POSTGRES_DB=dockerpilot_extras
+export DP_POSTGRES_USER=postgres
+export DP_POSTGRES_PASSWORD=your-password
+export DP_POSTGRES_SSLMODE=prefer
+export DP_POSTGRES_SCHEMA=DockerPilot
+export DP_POSTGRES_TABLE_PREFIX=dp_
+export DP_POSTGRES_AUTO_CREATE_SCHEMA=false
+python run_dev.py
+```
+
+PostgreSQL layout controls:
+- `schema` (default: `DockerPilot`)
+- `table_prefix` (default: `dp_`)
+- `tables` (optional explicit names per role)
+- `auto_create_schema` (default: `false`; set `true` only when account can create schema)
+
+This allows using a restricted DB account (DevOps/AppOps) without full DBA privileges.
+
+Or using API:
+- `POST /api/storage/configure` with `{"backend":"postgres","postgres":{...},"migrate_from_file":true}`
+- `POST /api/storage/configure` with `{"backend":"file"}` to switch back
+
+Example with explicit schema and table prefix:
+```bash
+curl -X POST http://localhost:5000/api/storage/configure \
+  -H "Content-Type: application/json" \
+  -d '{
+    "backend":"postgres",
+    "postgres":{
+      "host":"127.0.0.1",
+      "port":5432,
+      "database":"dockerpilot_extras",
+      "user":"postgres",
+      "password":"secret",
+      "schema":"DockerPilot",
+      "table_prefix":"dp_",
+      "auto_create_schema":true
+    },
+    "migrate_from_file":true
+  }'
+```
+
+### Use existing local container (`postgres-dozeyserver`)
+
+1. Discover runtime params:
+```bash
+curl http://localhost:5000/api/storage/discover-local-postgres?container_name=postgres-dozeyserver
+```
+
+2. Configure PostgreSQL storage:
+```bash
+curl -X POST http://localhost:5000/api/storage/configure \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"postgres","container_name":"postgres-dozeyserver","migrate_from_file":true}'
+```
+
+### Bootstrap PostgreSQL container next to app
+
+```bash
+curl -X POST http://localhost:5000/api/storage/bootstrap-local-postgres \
+  -H "Content-Type: application/json" \
+  -d '{
+    "container_name":"postgres-dozeyserver",
+    "image":"postgres:16-alpine",
+    "host_port":5432,
+    "database":"dockerpilot_extras",
+    "user":"dockerpilot",
+    "password":"change-me-now",
+    "configure_storage":true,
+    "migrate_from_file":true
+  }'
+```
 
 ## Requirements
 
@@ -160,6 +264,7 @@ dockerpilot --version
 1. Go to **"Environments"** tab
 2. Use promotion buttons: DEV → STAGING → PROD
 3. Confirm promotion
+4. If DEV and Pre-Prod share one server, UI uses environment-scoped assignments to avoid duplicate full-host container lists.
 
 ### Status
 
@@ -246,12 +351,21 @@ DockerPilotExtras/
 
 ### Environment
 - `POST /api/environment/promote` - Promote environment
+- `GET /api/environment/container-bindings` - Get explicit environment → container assignment map
+- `PUT /api/environment/container-bindings` - Update explicit environment → container assignment map
 
 ### Status
 - `GET /api/status` - Docker and DockerPilot status with context (local/remote)
 - `GET /api/preflight` - Setup preflight checks (Python deps, Node/npm, Docker, DockerPilot)
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
+
+### Storage
+- `GET /api/storage/status` - Active storage backend and health/schema info
+- `POST /api/storage/test-postgres` - Test PostgreSQL connectivity
+- `GET /api/storage/discover-local-postgres` - Inspect existing local PostgreSQL container
+- `POST /api/storage/bootstrap-local-postgres` - Create/start local PostgreSQL container
+- `POST /api/storage/configure` - Switch storage backend (`file`/`postgres`) and migrate state
 
 ## Troubleshooting
 

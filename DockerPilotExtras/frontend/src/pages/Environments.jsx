@@ -675,6 +675,18 @@ function Environments() {
     return colors[status] || '#6c757d'
   }
 
+  const getScopeHint = (envData) => {
+    const mode = envData?.scope_mode
+    if (!mode) return null
+    if (mode === 'bindings') return 'View scope: explicitly assigned containers'
+    if (mode === 'bindings-empty') return 'View scope: no containers assigned'
+    if (mode === 'shared-server-default-primary') return 'View scope: shared server fallback (primary env)'
+    if (mode === 'shared-server-default-empty') return 'View scope: shared server fallback (no assignment yet)'
+    if (mode === 'shared-server-unassigned') return 'View scope: not assigned on this shared server'
+    if (mode === 'inferred-configs') return 'View scope: inferred from deployment config'
+    return 'View scope: full server view'
+  }
+
   const handleEnvClick = async (envName) => {
     setSelectedEnv(envName)
     setShowContainerModal(true)
@@ -1606,10 +1618,20 @@ function Environments() {
                   {(() => {
                     const envData = getEnvironmentData(env.name)
                     if (!envData || loadingStatus) return null
+                    const hostTotal = envData.containers?.host_total || envData.containers?.total || 0
+                    const scopeHint = getScopeHint(envData)
                     return (
-                      <p className="env-stage-value" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
-                        Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
-                      </p>
+                      <>
+                        <p className="env-stage-value" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                          Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
+                          {hostTotal !== (envData.containers?.total || 0) && ` (host: ${hostTotal})`}
+                        </p>
+                        {scopeHint && (
+                          <p className="env-stage-value" style={{ fontSize: '0.75rem', opacity: 0.85 }}>
+                            {scopeHint}
+                          </p>
+                        )}
+                      </>
                     )
                   })()}
                 </div>
@@ -1682,6 +1704,9 @@ function Environments() {
         <h3 className="card-title">Environment → Server mapping</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
           Each environment (DEV / Pre-Prod / PROD) can run on a different server. Promotion deploys to the server assigned to the target environment.
+        </p>
+        <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          When multiple environments share one server, containers are shown per environment assignment (not full host duplicates).
         </p>
         {loadingEnvServersMap ? (
           <p style={{ color: 'var(--text-tertiary)' }}>Loading mapping...</p>

@@ -55,7 +55,10 @@ export const environmentAPI = {
     container_name: containerName  // Optional - if provided, will override container_name from file
   }),
   getEnvServersMap: () => api.get('/environment/servers-map'),
-  updateEnvServersMap: (envServers) => api.put('/environment/servers-map', { env_servers: envServers })
+  updateEnvServersMap: (envServers) => api.put('/environment/servers-map', { env_servers: envServers }),
+  getContainerBindings: () => api.get('/environment/container-bindings'),
+  updateContainerBindings: (envContainers) =>
+    api.put('/environment/container-bindings', { env_containers: envContainers })
 }
 
 // Status API
@@ -83,6 +86,19 @@ export const statusAPI = {
   cancelMigration: (containerName) => api.post('/containers/cancel-migration', {
     container_name: containerName
   })
+}
+
+// Storage API
+export const storageAPI = {
+  status: () => api.get('/storage/status'),
+  testPostgres: (postgres, ensureSchema = true) =>
+    api.post('/storage/test-postgres', { postgres, ensure_schema: ensureSchema }),
+  discoverLocalPostgres: (containerName = 'postgres-dozeyserver') =>
+    api.get('/storage/discover-local-postgres', { params: { container_name: containerName } }),
+  bootstrapLocalPostgres: (payload = {}) =>
+    api.post('/storage/bootstrap-local-postgres', payload),
+  configure: (payload = {}) =>
+    api.post('/storage/configure', payload)
 }
 
 // Docker API
