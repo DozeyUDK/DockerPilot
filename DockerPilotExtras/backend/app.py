@@ -5610,11 +5610,18 @@ class ContainerMigrate(Resource):
                 app.logger.warning(f"Failed to check/remove existing container: {e}")
 
             # Step 4.5: Migrate mounted data (bind mounts + named volumes) when requested
+            migration_summary = {
+                'migrated': [],
+                'skipped': [],
+                'total_migrated': 0,
+                'total_skipped': 0,
+                'total_transferable': 0,
+            }
             if include_data:
                 update_progress('migrating_data', 84, 'Migrating mount data to target server...')
                 check_cancel()
                 try:
-                    self._migrate_mount_data_between_servers(
+                    migration_summary = self._migrate_mount_data_between_servers(
                         container_name=container_name,
                         container_config=container_config,
                         source_server=source_server if source_server_id != 'local' else None,
@@ -5622,6 +5629,84 @@ class ContainerMigrate(Resource):
                         check_cancel=check_cancel,
                         update_progress=update_progress,
                     )
+
+                    skipped_mounts = migration_summary.get('skipped', []) if isinstance(migration_summary, dict) else []
+                    source_mounts = container_config.get('mounts') or []
+                    volume_destinations = [
+                        (m.get('destination') or '').rstrip('/')
+                        for m in source_mounts
+                        if (m.get('type') or '').strip() == 'volume' and (m.get('destination') or '').strip()
+                    ]
+
+                    # Remove skipped bind mounts from runtime config to avoid masking migrated volume data.
+                    skipped_bind_sources = {
+                        (item.get('source') or '').strip()
+                        for item in skipped_mounts
+                        if (item.get('type') or '').strip() == 'bind' and (item.get('source') or '').strip()
+                    }
+                    if skipped_bind_sources:
+                        for skipped_source in skipped_bind_sources:
+                            if skipped_source in (container_config.get('volumes') or {}):
+                                container_config['volumes'].pop(skipped_source, None)
+                        container_config['mounts'] = [
+                            m for m in source_mounts
+                            if not (
+                                (m.get('type') or '').strip() == 'bind'
+                                and (m.get('source') or '').strip() in skipped_bind_sources
+                            )
+                        ]
+
+                    def _starts_with_path(path_value: str, prefix: str) -> bool:
+                        normalized = (path_value or '').rstrip('/')
+                        base = (prefix or '').rstrip('/')
+                        return normalized == base or normalized.startswith(base + '/')
+
+                    critical_data_prefixes = (
+                        '/database',
+                        '/data',
+                        '/var/lib',
+                        '/hadr',
+                        '/bitnami',
+                        '/usr/share/elasticsearch/data',
+                        '/kafka',
+                    )
+
+                    risky_skips = []
+                    for skipped in skipped_mounts:
+                        destination = (skipped.get('destination') or '').rstrip('/')
+                        reason = skipped.get('reason') or 'unknown'
+                        overlaps_volume = any(_starts_with_path(destination, vol_dest) for vol_dest in volume_destinations if vol_dest)
+                        is_critical_destination = any(_starts_with_path(destination, critical) for critical in critical_data_prefixes)
+                        if overlaps_volume or is_critical_destination or reason in ('placeholder_path', 'missing_source'):
+                            risky_skips.append({
+                                'source': skipped.get('source', ''),
+                                'destination': destination,
+                                'reason': reason,
+                                'overlaps_volume': overlaps_volume,
+                            })
+
+                    if risky_skips:
+                        preview = ', '.join(
+                            f"{item.get('source') or '<unknown>'}->{item.get('destination') or '<unknown>'} ({item.get('reason')})"
+                            for item in risky_skips[:4]
+                        )
+                        error_msg = (
+                            "Stateful data migration blocked: one or more critical bind mounts were skipped or unresolved. "
+                            f"Refusing to continue to avoid false-success empty container. Affected mounts: {preview}"
+                        )
+                        app.logger.error(error_msg)
+                        update_progress('failed', 0, error_msg)
+                        return {'error': error_msg, 'data_migration': migration_summary}, 400
+
+                    if skipped_mounts:
+                        app.logger.warning(
+                            f"Data migration skipped {len(skipped_mounts)} non-critical mount(s) for {container_name}: {skipped_mounts}"
+                        )
+                        update_progress(
+                            'migrating_data',
+                            89,
+                            f"Skipped {len(skipped_mounts)} non-critical mount(s); continuing migration."
+                        )
                 except Exception as e:
                     error_msg = f"Data migration failed: {str(e)}"
                     app.logger.error(error_msg, exc_info=True)
@@ -6121,7 +6206,8 @@ class ContainerMigrate(Resource):
                 'message': f'Container {container_name} migrated successfully from {source_server_id} to {target_server_id}',
                 'container_name': container_name,
                 'source_server': source_server_id,
-                'target_server': target_server_id
+                'target_server': target_server_id,
+                'data_migration': migration_summary if include_data else None,
             }
             
         except Exception as e:
@@ -6464,6 +6550,23 @@ class ContainerMigrate(Resource):
         import tempfile
         import time
 
+        summary = {
+            'migrated': [],
+            'skipped': [],
+            'total_migrated': 0,
+            'total_skipped': 0,
+            'total_transferable': 0,
+        }
+
+        def record_skip(mount: dict, reason: str):
+            summary['skipped'].append({
+                'type': (mount.get('type') or '').strip(),
+                'source': (mount.get('source') or '').strip(),
+                'name': (mount.get('name') or '').strip(),
+                'destination': (mount.get('destination') or '').strip(),
+                'reason': reason,
+            })
+
         mounts = container_config.get('mounts') or []
         if not mounts:
             # Fallback for older configs without mount metadata.
@@ -6481,7 +6584,7 @@ class ContainerMigrate(Resource):
 
         if not mounts:
             app.logger.info("No mounts detected for data migration")
-            return
+            return summary
 
         # Skip dangerous/system bind mounts.
         bind_skip_prefixes = (
@@ -6512,34 +6615,45 @@ class ContainerMigrate(Resource):
             name = (mount.get('name') or '').strip()
             destination = (mount.get('destination') or '').strip()
             if not destination:
+                record_skip(mount, 'missing_destination')
                 continue
             if mount_type == 'bind':
                 if not source:
+                    record_skip(mount, 'missing_source')
                     continue
                 if source == '/':
                     app.logger.info(f"Skipping root bind mount during data migration: {source} -> {destination}")
                     container_config.setdefault('skipped_bind_mounts', []).append(source)
+                    record_skip(mount, 'root_path')
                     continue
                 if any(source.startswith(prefix) for prefix in bind_skip_prefixes):
                     app.logger.info(f"Skipping system bind mount during data migration: {source} -> {destination}")
                     container_config.setdefault('skipped_bind_mounts', []).append(source)
+                    record_skip(mount, 'system_path')
                     continue
                 if any(source == prefix or source.startswith(prefix + '/') for prefix in bind_placeholder_prefixes):
                     app.logger.warning(
                         f"Skipping placeholder bind mount during data migration: {source} -> {destination}"
                     )
                     container_config.setdefault('skipped_bind_mounts', []).append(source)
+                    record_skip(mount, 'placeholder_path')
                     continue
                 transferable.append(mount)
             elif mount_type == 'volume':
                 if name or source:
                     transferable.append(mount)
+                else:
+                    record_skip(mount, 'missing_volume_name')
+            else:
+                record_skip(mount, f"unsupported_type:{mount_type or 'unknown'}")
 
         if not transferable:
             app.logger.info("No transferable mounts for data migration")
-            return
+            summary['total_skipped'] = len(summary['skipped'])
+            return summary
 
         total = len(transferable)
+        summary['total_transferable'] = total
         app.logger.info(f"Migrating data for {total} mount(s) of container {container_name}")
 
         for idx, mount in enumerate(transferable, start=1):
@@ -6594,6 +6708,7 @@ class ContainerMigrate(Resource):
 
             source_remote_archive = f"/tmp/dockerpilot_mount_{safe_container}_{idx}_{ts}.tar"
             target_remote_archive = f"/tmp/dockerpilot_mount_{safe_container}_{idx}_{ts}.tar"
+            archive_size_bytes = 0
 
             try:
                 # 1) Create archive on source side
@@ -6660,6 +6775,12 @@ class ContainerMigrate(Resource):
                         f"rm -f {shlex.quote(source_archive_path)}",
                         check_exit_status=False,
                     )
+
+                if os.path.exists(local_archive_path):
+                    try:
+                        archive_size_bytes = os.path.getsize(local_archive_path)
+                    except Exception:
+                        archive_size_bytes = 0
 
                 # 3) Place archive on target (upload if remote)
                 if target_server is None:
@@ -6734,6 +6855,14 @@ class ContainerMigrate(Resource):
                     f"Data migration succeeded for mount {idx}/{total}: "
                     f"type={mount_type}, source={mount_source or effective_volume}, destination={destination}"
                 )
+                summary['migrated'].append({
+                    'type': mount_type,
+                    'source': mount_source,
+                    'name': mount_name,
+                    'effective_volume': effective_volume,
+                    'destination': destination,
+                    'archive_size_bytes': archive_size_bytes,
+                })
             finally:
                 try:
                     if os.path.exists(local_archive_path):
@@ -6749,6 +6878,9 @@ class ContainerMigrate(Resource):
                         )
                     except Exception:
                         pass
+        summary['total_migrated'] = len(summary['migrated'])
+        summary['total_skipped'] = len(summary['skipped'])
+        return summary
     
     def _get_server_architecture(self, server_config=None):
         """Get CPU architecture of a server (local or remote)"""
