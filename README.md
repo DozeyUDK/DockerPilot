@@ -150,7 +150,7 @@ chmod +x setup_extras.sh && ./setup_extras.sh
 ## Features
 
 ### Core Capabilities
-- **Container Operations**: Start, stop, restart, remove, pause, unpause, exec into containers
+- **Container Operations**: Start, stop, restart, remove, rename, pause, unpause, exec into containers
 - **Image Management**: List, build, and remove Docker images
 - **Real-time Monitoring**: CPU, memory, network I/O, and process tracking
 - **Health Checks**: Automated container health validation

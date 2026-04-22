@@ -38,3 +38,12 @@ def test_parser_accepts_build_fallback_flags():
     assert args.tag == "mongo:latest"
     assert args.pull_if_missing is True
     assert args.generate_template == "python"
+
+
+def test_parser_accepts_container_rename_command():
+    args = build_cli_parser().parse_args(["container", "rename", "myapp", "myapp-v2"])
+
+    assert args.command == "container"
+    assert args.container_action == "rename"
+    assert args.name == "myapp"
+    assert args.new_name == "myapp-v2"

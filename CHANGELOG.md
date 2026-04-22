@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Initial release of Docker Pilot
-- Container management operations (start, stop, restart, remove, pause, unpause)
+- Container management operations (start, stop, restart, remove, rename, pause, unpause)
 - Image management (list, build, remove)
 - Real-time monitoring dashboard with CPU, memory, network metrics
 - Advanced deployment strategies:

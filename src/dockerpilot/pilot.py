@@ -538,6 +538,13 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
             return False
         return self.container_manager.update_restart_policy(container_name, policy)
     
+    def rename_container(self, container_name: str, new_name: str) -> bool:
+        """Rename a container."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
+        return self.container_manager.rename_container(container_name, new_name)
+    
     def run_new_container(self, image_name: str, name: str, ports: dict = None, 
                         command: str = None, environment: dict = None,
                         volumes: dict = None, restart_policy: str = 'unless-stopped',

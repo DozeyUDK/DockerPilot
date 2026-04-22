@@ -142,23 +142,45 @@ class ContainerManager:
             'remove': self._remove_container,
             'pause': self._pause_container,
             'unpause': self._unpause_container,
+            'rename': self._rename_container,
         }
         
         if operation not in operations:
             self.console.print(f"[bold red]❌ Unknown operation: {operation}[/bold red]")
             return False
+
+        progress_verbs = {
+            "start": "Starting",
+            "stop": "Stopping",
+            "restart": "Restarting",
+            "remove": "Removing",
+            "pause": "Pausing",
+            "unpause": "Unpausing",
+            "rename": "Renaming",
+        }
+        success_verbs = {
+            "start": "started",
+            "stop": "stopped",
+            "restart": "restarted",
+            "remove": "removed",
+            "pause": "paused",
+            "unpause": "unpaused",
+            "rename": "renamed",
+        }
         
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=self.console
         ) as progress:
-            task = progress.add_task(f"{operation.title()}ing container {container_name}...", total=None)
+            verb_ing = progress_verbs.get(operation, f"{operation.title()}ing")
+            verb_past = success_verbs.get(operation, f"{operation}ed")
+            task = progress.add_task(f"{verb_ing} container {container_name}...", total=None)
             
             try:
                 result = operations[operation](container_name, **kwargs)
                 if result:
-                    progress.update(task, description=f"✅ Container {container_name} {operation}ed successfully")
+                    progress.update(task, description=f"✅ Container {container_name} {verb_past} successfully")
                 else:
                     progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
                 return result
@@ -181,6 +203,10 @@ class ContainerManager:
         except docker.errors.APIError as e:
             self.console.print(f"[bold red]Docker API error during update:[/bold red] {e}")
             return False
+    
+    def rename_container(self, container_name: str, new_name: str) -> bool:
+        """Rename a container."""
+        return self.container_operation('rename', container_name, new_name=new_name)
     
     def run_new_container(self, image_name: str, name: str, ports: dict = None, 
                          command: str = None, environment: dict = None, 
@@ -408,6 +434,14 @@ class ContainerManager:
             container = self.client.containers.get(container_name)
             container.unpause()
             self.logger.info(f"Container {container_name} unpaused successfully")
+            return True
+    
+    def _rename_container(self, container_name: str, new_name: str, **kwargs) -> bool:
+        """Rename container."""
+        with self._error_handler("rename container", container_name):
+            container = self.client.containers.get(container_name)
+            container.rename(new_name)
+            self.logger.info(f"Container {container_name} renamed to {new_name} successfully")
             return True
     
     def _wait_for_container_status(self, container_name: str, expected_status: str, timeout: int = 30) -> bool:

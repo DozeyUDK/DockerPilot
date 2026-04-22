@@ -159,6 +159,12 @@ def test_infer_resource_selector_marks_container_and_image_target_commands():
     assert remove_image_selector.resource_type == "image"
     assert remove_image_selector.mode == "multi"
 
+    rename_node = _find_leaf(commands, ["container", "rename"])
+    rename_name = next(argument for argument in rename_node.arguments if argument.dest == "name")
+    rename_selector = infer_resource_selector(rename_node, rename_name)
+    assert rename_selector.resource_type == "container"
+    assert rename_selector.mode == "single"
+
 
 def test_target_formatters_include_state_and_size_metadata():
     containers = format_container_targets(

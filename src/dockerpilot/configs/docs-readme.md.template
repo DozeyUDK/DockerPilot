@@ -5,7 +5,7 @@ Professional Docker Container Management Tool with Advanced Deployment Capabilit
 ## Features
 
 ### Container Management
-- List, start, stop, restart, remove containers
+- List, start, stop, restart, remove, rename containers
 - Real-time monitoring with resource usage metrics
 - Interactive dashboard with trend indicators
 - Container health checks and status monitoring

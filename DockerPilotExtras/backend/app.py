@@ -1521,11 +1521,17 @@ def resolve_server_id_for_env(env: str) -> str:
 
 
 def _get_containers_and_images_for_server(server_config) -> tuple:
-    """Get containers and images list for one server (local or remote). Returns (containers, images)."""
+    """Get containers and images list for one server (local or remote).
+
+    Returns (containers, images, host_error). host_error is set when Docker inventory
+    could not be read (typically SSH unreachable); omitted when data was returned.
+    """
     if server_config is None:
         server_config = {'id': 'local'}
     containers = []
     images = []
+    container_error = None
+    image_error = None
     try:
         out = execute_docker_command_via_ssh(
             server_config,
@@ -1546,6 +1552,7 @@ def _get_containers_and_images_for_server(server_config) -> tuple:
                 })
     except Exception as e:
         app.logger.warning(f"Failed to get containers for server {server_config.get('id', '?')}: {e}")
+        container_error = str(e)
     try:
         out = execute_docker_command_via_ssh(
             server_config,
@@ -1563,7 +1570,18 @@ def _get_containers_and_images_for_server(server_config) -> tuple:
                     images.append(tag)
     except Exception as e:
         app.logger.warning(f"Failed to get images for server {server_config.get('id', '?')}: {e}")
-    return containers, images
+        image_error = str(e)
+
+    host_error = None
+    if container_error or image_error:
+        if not containers and not images:
+            if container_error and image_error and container_error == image_error:
+                host_error = container_error
+            else:
+                host_error = "; ".join(
+                    msg for msg in (container_error, image_error) if msg
+                )
+    return containers, images, host_error
 
 
 def get_server_config_by_id(server_id: str):

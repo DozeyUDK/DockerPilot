@@ -17,7 +17,7 @@ def build_environment_status(
     for env in environments:
         server_id = env_servers.get(env, "local")
         server_config = get_server_config_by_id(server_id)
-        containers, images = get_containers_and_images_for_server(server_config)
+        containers, images, host_error = get_containers_and_images_for_server(server_config)
 
         running = [c for c in containers if c.get("state") == "running"]
         stopped = [c for c in containers if c.get("state") != "running"]
@@ -36,6 +36,11 @@ def build_environment_status(
         if server_id != "local" and server_config:
             server_label = server_config.get("name") or server_config.get("hostname") or server_id
 
+        if host_error and not containers and not images:
+            lifecycle_status = "unavailable"
+        else:
+            lifecycle_status = "active" if running else ("inactive" if containers else "empty")
+
         env_status[env] = {
             "containers": {
                 "total": len(containers),
@@ -46,10 +51,11 @@ def build_environment_status(
                 "host_total": len(containers),
             },
             "images": env_images,
-            "status": "active" if running else ("inactive" if containers else "empty"),
+            "status": lifecycle_status,
             "primary_image": primary_image,
             "server_id": server_id,
             "server_label": server_label,
+            "host_error": host_error,
             "scope_mode": "server-full",
             "bindings_count": 0,
             "bindings_explicit": False,

@@ -1,5 +1,6 @@
 """Deployment and promotion services extracted from DockerPilotEnhanced."""
 
+from dataclasses import fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -18,42 +19,33 @@ from rich.table import Table
 from .models import DeploymentConfig
 
 
+def _load_dockerfile_template_bodies() -> dict[str, str]:
+    """Load embedded Dockerfile starter bodies shipped next to this module."""
+    path = Path(__file__).with_name("dockerfile_template_bodies.yaml")
+    if not path.is_file():
+        raise FileNotFoundError(f"Dockerfile templates data file not found: {path}")
+    with path.open(encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Expected a mapping in {path.name}, got {type(raw).__name__}"
+        )
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Template {key!r} in {path.name} must be a string, got {type(value).__name__}"
+            )
+        out[str(key)] = value
+    return out
+
+
 class DeploymentServiceMixin:
     """Mixin containing deployment/build/promotion logic for DockerPilot."""
 
-    _DOCKERFILE_TEMPLATE_BODIES = {
-        "python": """FROM python:3.12-slim
-WORKDIR /app
-
-COPY requirements*.txt ./
-RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
-
-COPY . .
-
-CMD ["python", "app.py"]
-""",
-        "node": """FROM node:22-alpine
-WORKDIR /app
-
-COPY package*.json ./
-RUN if [ -f package.json ]; then npm install; fi
-
-COPY . .
-
-CMD ["npm", "start"]
-""",
-        "nginx": """FROM nginx:alpine
-
-COPY . /usr/share/nginx/html
-""",
-        "alpine": """FROM alpine:latest
-WORKDIR /app
-
-COPY . .
-
-CMD ["sh"]
-""",
-    }
+    _DOCKERFILE_TEMPLATE_BODIES = _load_dockerfile_template_bodies()
 
     def get_build_template_choices(self) -> list[str]:
         """Return the supported Dockerfile template names."""
@@ -219,25 +211,102 @@ CMD ["sh"]
             self.logger.error(f"Failed to create config template: {e}")
             return False
 
+    def _deployment_config_from_dict(self, deployment: dict) -> DeploymentConfig:
+        """Build DeploymentConfig from raw dict while safely ignoring unknown keys."""
+        deployment = deployment or {}
+        if not isinstance(deployment, dict):
+            raise ValueError("deployment config must be a dictionary")
+
+        normalized = dict(deployment)
+        for key in ("volumes", "port_mapping", "environment", "build_args"):
+            if normalized.get(key) is None or not isinstance(normalized.get(key), dict):
+                normalized[key] = {}
+
+        model_fields = {field.name for field in fields(DeploymentConfig)}
+        extra_keys = sorted(k for k in normalized.keys() if k not in model_fields)
+        if extra_keys:
+            self.logger.warning(f"Ignoring unsupported deployment config field(s): {', '.join(extra_keys)}")
+
+        filtered = {k: v for k, v in normalized.items() if k in model_fields}
+        return DeploymentConfig(**filtered)
+
+    def _resolve_runtime_network(self, requested_network: Optional[str]) -> Optional[str]:
+        """Return safe network name for container start, falling back to bridge if missing."""
+        if requested_network is None:
+            return "bridge"
+
+        network = str(requested_network).strip()
+        if not network:
+            return "bridge"
+        if network in {"bridge", "host", "none"}:
+            return network
+
+        try:
+            self.client.networks.get(network)
+            return network
+        except docker.errors.NotFound:
+            self.logger.warning(
+                f"Docker network '{network}' not found on current host. Falling back to 'bridge'."
+            )
+            return "bridge"
+        except Exception as exc:
+            self.logger.warning(
+                f"Could not validate docker network '{network}' ({exc}). Falling back to 'bridge'."
+            )
+            return "bridge"
+
+    def _ensure_image_from_existing_container(self, image_tag: str, container_name: Optional[str]) -> bool:
+        """Try to satisfy image requirement by aliasing image used by existing container."""
+        if not container_name:
+            return False
+
+        try:
+            container = self.client.containers.get(container_name)
+        except docker.errors.NotFound:
+            return False
+        except Exception as exc:
+            self.logger.debug(f"Could not inspect container {container_name} for image fallback: {exc}")
+            return False
+
+        source_image = container.image
+        if not source_image:
+            return False
+
+        if image_tag in (source_image.tags or []):
+            self.logger.info(f"Using image {image_tag} from existing container {container_name}")
+            return True
+
+        if "@" in image_tag:
+            # Digest references cannot be re-tagged with Docker tag semantics.
+            self.logger.info(
+                f"Using digest image from existing container {container_name} (skipping local retag for {image_tag})"
+            )
+            return True
+
+        if ":" in image_tag and image_tag.rfind(":") > image_tag.rfind("/"):
+            repository, tag = image_tag.rsplit(":", 1)
+        else:
+            repository, tag = image_tag, "latest"
+        try:
+            source_image.tag(repository, tag=tag)
+            self.logger.info(
+                f"Tagged existing container image {container.id[:12]} as {repository}:{tag} for deployment fallback"
+            )
+            return True
+        except Exception as exc:
+            self.logger.warning(
+                f"Could not tag image from container {container_name} as {image_tag}: {exc}"
+            )
+            return False
+
     def deploy_from_config(self, config_path: str, deployment_type: str = "rolling") -> bool:
         """Deploy using configuration file"""
         try:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            # Normalize deployment config to ensure all fields are in correct format
             deployment = config['deployment']
-            # Ensure volumes is a dict
-            if 'volumes' not in deployment or not isinstance(deployment.get('volumes'), dict):
-                deployment['volumes'] = {}
-            # Ensure port_mapping is a dict
-            if 'port_mapping' not in deployment or not isinstance(deployment.get('port_mapping'), dict):
-                deployment['port_mapping'] = {}
-            # Ensure environment is a dict
-            if 'environment' not in deployment or not isinstance(deployment.get('environment'), dict):
-                deployment['environment'] = {}
-            
-            deployment_config = DeploymentConfig(**deployment)
+            deployment_config = self._deployment_config_from_dict(deployment)
             build_config = config.get('build', {})
             
             self.logger.info(f"Starting {deployment_type} deployment from config: {config_path}")
@@ -259,6 +328,7 @@ CMD ["sh"]
 
         deployment_start = datetime.now()
         deployment_id = f"deploy_{int(deployment_start.timestamp())}"
+        runtime_network = self._resolve_runtime_network(config.network)
         
         # Auto-detect health check endpoint based on image type
         detected_endpoint = self._detect_health_check_endpoint(config.image_tag)
@@ -275,7 +345,7 @@ CMD ["sh"]
             # Phase 1: Prepare image (check, pull, or build)
             build_task = progress.add_task("🔨 Preparing image...", total=None)
             try:
-                success, message = self._prepare_image(config.image_tag, build_config)
+                success, message = self._prepare_image(config.image_tag, build_config, config.container_name)
                 if not success:
                     progress.update(build_task, description=f"❌ {message}")
                     self.console.print(f"[bold red]❌ {message}[/bold red]")
@@ -311,9 +381,12 @@ CMD ["sh"]
                     'environment': config.environment,
                     'volumes': self._normalize_volumes(config.volumes),
                     'restart_policy': {"Name": config.restart_policy},
-                    'network': config.network,
                     **self._get_resource_limits(config)
                 }
+                if runtime_network == "host":
+                    create_kwargs['network_mode'] = "host"
+                elif runtime_network:
+                    create_kwargs['network'] = runtime_network
                 if hasattr(config, 'command') and config.command:
                     create_kwargs['command'] = config.command
                 elif 'alpine' in config.image_tag.lower():
@@ -464,6 +537,7 @@ CMD ["sh"]
         if detected_endpoint != config.health_check_endpoint:
             self.logger.info(f"Auto-detected health check endpoint: {detected_endpoint} (was: {config.health_check_endpoint})")
             config.health_check_endpoint = detected_endpoint
+        runtime_network = self._resolve_runtime_network(config.network)
         
         blue_name = f"{config.container_name}_blue"
         green_name = f"{config.container_name}_green"
@@ -575,7 +649,7 @@ CMD ["sh"]
             # Build or pull image
             build_task = progress.add_task("🔨 Preparing image...", total=None)
             try:
-                success, message = self._prepare_image(config.image_tag, build_config)
+                success, message = self._prepare_image(config.image_tag, build_config, config.container_name)
                 if not success:
                     progress.update(build_task, description=f"❌ {message}")
                     self.console.print(f"[bold red]❌ {message}[/bold red]")
@@ -615,7 +689,7 @@ CMD ["sh"]
             }
             
             # Handle network mode
-            if config.network == 'host':
+            if runtime_network == 'host':
                 # With host network, ports are directly mapped - no port mapping needed
                 container_kwargs['network_mode'] = 'host'
                 # For host network, we can't use different ports for testing
@@ -641,8 +715,8 @@ CMD ["sh"]
                     for container_port, host_port in config.port_mapping.items():
                         temp_port_mapping[container_port] = str(int(host_port) + 1000)  # +1000 for temp
                     container_kwargs['ports'] = temp_port_mapping
-                if config.network and config.network != 'bridge':
-                    container_kwargs['network'] = config.network
+                if runtime_network and runtime_network != 'bridge':
+                    container_kwargs['network'] = runtime_network
             
             # Add resource limits
             container_kwargs.update(self._get_resource_limits(config))
@@ -743,7 +817,7 @@ CMD ["sh"]
             
             # Determine port for validation
             validation_port = None
-            if config.network == 'host':
+            if runtime_network == 'host':
                 # With host network, use the original port directly
                 validation_port = list(config.port_mapping.values())[0] if config.port_mapping else '3000'
             elif 'temp_port_mapping' in locals() and temp_port_mapping and len(temp_port_mapping) > 0:
@@ -846,7 +920,7 @@ CMD ["sh"]
                     progress.update(test_task, description="⚠️ No ports to test")
                 else:
                     # Determine test port based on network mode
-                    if config.network == 'host':
+                    if runtime_network == 'host':
                         test_port = list(config.port_mapping.values())[0]
                     elif 'temp_port_mapping' in locals() and temp_port_mapping and len(temp_port_mapping) > 0:
                         test_port = list(temp_port_mapping.values())[0]
@@ -912,13 +986,13 @@ CMD ["sh"]
                 }
                 
                 # Handle network and ports
-                if config.network == 'host':
+                if runtime_network == 'host':
                     final_container_kwargs['network_mode'] = 'host'
                 else:
                     if config.port_mapping and len(config.port_mapping) > 0:
                         final_container_kwargs['ports'] = config.port_mapping  # Final ports
-                    if config.network and config.network != 'bridge':
-                        final_container_kwargs['network'] = config.network
+                    if runtime_network and runtime_network != 'bridge':
+                        final_container_kwargs['network'] = runtime_network
                 
                 # Add resource limits
                 final_container_kwargs.update(self._get_resource_limits(config))
@@ -992,7 +1066,7 @@ CMD ["sh"]
                 has_ports = config.port_mapping and len(config.port_mapping) > 0
                 
                 if has_ports:
-                    if config.network == 'host':
+                    if runtime_network == 'host':
                         # With host network, use the original port directly
                         final_port = list(config.port_mapping.values())[0]
                     else:
@@ -1321,7 +1395,7 @@ CMD ["sh"]
             # Prepare image
             build_task = progress.add_task("🔨 Preparing canary image...", total=None)
             try:
-                success, message = self._prepare_image(config.image_tag, build_config)
+                success, message = self._prepare_image(config.image_tag, build_config, config.container_name)
                 if not success:
                     progress.update(build_task, description=f"❌ {message}")
                     self.console.print(f"[bold red]❌ {message}[/bold red]")
@@ -1429,12 +1503,13 @@ CMD ["sh"]
         
         return True
 
-    def _prepare_image(self, image_tag: str, build_config: dict = None):
+    def _prepare_image(self, image_tag: str, build_config: dict = None, container_name: Optional[str] = None):
         """Prepare image for deployment - check if exists, pull, or build.
         
         Args:
             image_tag: Docker image tag to prepare
             build_config: Optional build configuration dict
+            container_name: Optional running container name for local-image fallback
         
         Returns:
             tuple: (success: bool, message: str)
@@ -1446,6 +1521,9 @@ CMD ["sh"]
             return True, "Image already exists"
         except docker.errors.ImageNotFound:
             pass
+
+        if self._ensure_image_from_existing_container(image_tag, container_name):
+            return True, "Image resolved from existing container"
         
         # If build_config is provided and has dockerfile_path, try to build
         if build_config and build_config.get('dockerfile_path'):
@@ -1461,6 +1539,8 @@ CMD ["sh"]
             self.client.images.pull(image_tag)
             return True, "Image pulled successfully"
         except Exception as pull_error:
+            if self._ensure_image_from_existing_container(image_tag, container_name):
+                return True, "Image resolved from existing container after pull failure"
             error_msg = f"Failed to pull image {image_tag}: {pull_error}"
             self.logger.error(error_msg)
             return False, error_msg
@@ -2212,7 +2292,7 @@ CMD ["sh"]
                     duration = timedelta(seconds=1)
                     
                     # Create a deployment record for staging
-                    deployment_config = DeploymentConfig(**config['deployment'])
+                    deployment_config = self._deployment_config_from_dict(config['deployment'])
                     self._record_deployment(deployment_id, deployment_config, f'promotion-{target_env}', True, duration, target_env=target_env)
                     
                     self.console.print(f"[green]✓ STAGING configuration saved. Container already running in PROD, no new deployment needed.[/green]")
@@ -2223,20 +2303,8 @@ CMD ["sh"]
                 self.console.print("[red]Pre-promotion checks failed[/red]")
                 return False
             
-            # Normalize deployment config to ensure all fields are in correct format
             deployment = config['deployment']
-            # Ensure volumes is a dict
-            if 'volumes' not in deployment or not isinstance(deployment.get('volumes'), dict):
-                deployment['volumes'] = {}
-            # Ensure port_mapping is a dict
-            if 'port_mapping' not in deployment or not isinstance(deployment.get('port_mapping'), dict):
-                deployment['port_mapping'] = {}
-            # Ensure environment is a dict
-            if 'environment' not in deployment or not isinstance(deployment.get('environment'), dict):
-                deployment['environment'] = {}
-            
-            # Execute deployment
-            deployment_config = DeploymentConfig(**deployment)
+            deployment_config = self._deployment_config_from_dict(deployment)
             build_config = config.get('build', {})
             
             # Use appropriate deployment strategy based on target environment

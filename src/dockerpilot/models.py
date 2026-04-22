@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict
+from typing import Any, Dict, Optional
 
 
 class LogLevel(Enum):
@@ -31,6 +31,8 @@ class DeploymentConfig:
     cpu_limit: str = None
     memory_limit: str = None
     privileged: bool = False
+    command: Optional[Any] = None
+    entrypoint: Optional[Any] = None
 
 
 @dataclass
@@ -44,4 +46,3 @@ class ContainerStats:
     network_tx_mb: float
     pids: int
     timestamp: datetime
-

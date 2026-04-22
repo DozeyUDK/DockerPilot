@@ -72,6 +72,7 @@ function Environments() {
   const [loadingEnvServersMap, setLoadingEnvServersMap] = useState(true)
   const [savingEnvServersMap, setSavingEnvServersMap] = useState(false)
   const [envServersMapDraft, setEnvServersMapDraft] = useState({}) // local draft before Save
+  const [environmentStatusFetchError, setEnvironmentStatusFetchError] = useState(null)
 
   useEffect(() => {
     migrationProgressRef.current = migrationProgress
@@ -449,14 +450,23 @@ function Environments() {
       const response = await environmentAPI.getStatus()
       if (response.data.success) {
         setEnvironmentsData(response.data.environments)
+        setEnvironmentStatusFetchError(null)
+      } else {
+        setEnvironmentsData(null)
+        setEnvironmentStatusFetchError(
+          response.data.error || 'Nie udało się pobrać statusu środowisk (odpowiedź API).'
+        )
       }
     } catch (error) {
       console.error('Error loading environments status:', error)
+      setEnvironmentsData(null)
+      setEnvironmentStatusFetchError(
+        error.response?.data?.error || error.message || 'Błąd sieci przy pobieraniu statusu środowisk.'
+      )
     } finally {
       setLoadingStatus(false)
     }
   }
-
 
   const handleServerCreate = async () => {
     try {
@@ -591,6 +601,37 @@ function Environments() {
     return s ? (s.name || s.hostname || serverId) : serverId
   }
 
+  const getServerLabelById = (serverId) => {
+    const normalizedId = serverId || 'local'
+    if (normalizedId === 'local') return 'Local'
+    const found = (servers || []).find((item) => item.id === normalizedId)
+    return found ? (found.name || found.hostname || normalizedId) : normalizedId
+  }
+
+  const hasEnvServerMapChanges = environments.some(
+    (env) => (envServersMapDraft[env.name] ?? 'local') !== (envServersMap[env.name] ?? 'local')
+  )
+
+  const handleSaveEnvServerMapping = async () => {
+    setSavingEnvServersMap(true)
+    try {
+      const res = await environmentAPI.updateEnvServersMap(envServersMapDraft)
+      if (res.data.success) {
+        const savedMap = res.data.env_servers || envServersMapDraft
+        setEnvServersMap(savedMap)
+        setEnvServersMapDraft(savedMap)
+        setMessage({ type: 'success', text: 'Environment → server mapping saved.' })
+        await loadEnvironmentsStatus()
+      } else {
+        setMessage({ type: 'error', text: res.data.error || 'Failed to save mapping' })
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: e.response?.data?.error || 'Failed to save mapping' })
+    } finally {
+      setSavingEnvServersMap(false)
+    }
+  }
+
   const handlePromote = async (fromEnv, toEnv) => {
     const targetServer = getTargetServerDisplay(toEnv)
     if (!window.confirm(`Promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?\n\nTarget server: ${targetServer}`)) {
@@ -609,6 +650,14 @@ function Environments() {
           text: `Promotion from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()} completed successfully!` 
         })
         // Reload status after successful promotion
+        await loadEnvironmentsStatus()
+      } else if (response.data.partial) {
+        const ok = (response.data.successful || []).join(', ')
+        const failed = (response.data.failed || []).join(', ')
+        setMessage({
+          type: 'warning',
+          text: `Partial promotion ${fromEnv.toUpperCase()} → ${toEnv.toUpperCase()}: OK [${ok || 'none'}], FAILED [${failed || 'none'}]`
+        })
         await loadEnvironmentsStatus()
       } else {
         setMessage({ type: 'error', text: response.data.error || 'Error during promotion' })
@@ -632,7 +681,8 @@ function Environments() {
     const labels = {
       'active': 'Aktywne',
       'inactive': 'Nieaktywne',
-      'empty': 'Puste'
+      'empty': 'Puste',
+      'unavailable': 'Host niedostępny'
     }
     return labels[status] || 'Nieznany'
   }
@@ -641,7 +691,8 @@ function Environments() {
     const colors = {
       'active': '#28a745',
       'inactive': '#6c757d',
-      'empty': '#ffc107'
+      'empty': '#ffc107',
+      'unavailable': '#dc3545'
     }
     return colors[status] || '#6c757d'
   }
@@ -649,6 +700,7 @@ function Environments() {
   const getScopeHint = (envData) => {
     const mode = envData?.scope_mode
     if (!mode) return null
+    if (mode === 'server-full') return 'View scope: full server inventory'
     if (mode === 'bindings') return 'View scope: explicitly assigned containers'
     if (mode === 'bindings-empty') return 'View scope: no containers assigned'
     if (mode === 'shared-server-default-primary') return 'View scope: shared server fallback (primary env)'
@@ -1130,6 +1182,13 @@ function Environments() {
     }
   }
 
+  const envsWithHostErrors =
+    environmentsData == null
+      ? []
+      : environments
+          .map((e) => ({ name: e.name, label: e.label, data: environmentsData[e.name] }))
+          .filter((x) => x.data?.host_error)
+
   const filteredContainers = containers.filter(container => 
     container.name.toLowerCase().includes(containerSearch.toLowerCase()) ||
     (container.image && container.image.toLowerCase().includes(containerSearch.toLowerCase()))
@@ -1179,6 +1238,30 @@ function Environments() {
       {message && (
         <div className={`alert alert-${message.type}`}>
           {message.text}
+        </div>
+      )}
+
+      {environmentStatusFetchError && (
+        <div className="alert alert-error" style={{ marginBottom: '1rem' }}>
+          <strong>Status środowisk:</strong> {environmentStatusFetchError}
+        </div>
+      )}
+
+      {!loadingStatus && !environmentStatusFetchError && envsWithHostErrors.length > 0 && (
+        <div
+          className="alert alert-warning"
+          style={{ marginBottom: '1rem', textAlign: 'left' }}
+          role="status"
+        >
+          <strong>Nie można odczytać Dockera</strong> na mapowanym hoście dla:{' '}
+          {envsWithHostErrors.map((x, i) => (
+            <span key={x.name}>
+              {i > 0 ? ', ' : ''}
+              <strong>{x.label}</strong>
+              {x.data?.server_label ? ` (${x.data.server_label})` : ''}
+            </span>
+          ))}
+          . Sprawdź, czy maszyna jest włączona i czy SSH (port 22) oraz Docker działają. Szczegóły na kartach poniżej.
         </div>
       )}
 
@@ -1431,7 +1514,17 @@ function Environments() {
 
       <div className="card">
         <h3 className="card-title">Environment Promotion Workflow</h3>
-        
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
+          Server mapping is integrated directly into each environment stage. Promotion always targets the server currently selected in that stage.
+        </p>
+        <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Each stage shows full container inventory from the mapped server (server-first model).
+        </p>
+        {loadingEnvServersMap && (
+          <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+            Loading server mapping...
+          </p>
+        )}
         <div className="env-workflow-scroll">
           <div className="env-workflow-track">
             {environments.map((env, index) => (
@@ -1475,17 +1568,49 @@ function Environments() {
                   </h3>
                   {(() => {
                     const envData = getEnvironmentData(env.name)
-                    const serverLabel = envData?.server_label || (envData?.server_id === 'local' ? 'Local' : envData?.server_id) || '—'
+                    const persistedServerId = envServersMap[env.name] ?? envData?.server_id ?? 'local'
+                    const draftServerId = envServersMapDraft[env.name] ?? persistedServerId
+                    const isDraftDirty = draftServerId !== persistedServerId
+                    const serverLabel = getServerLabelById(draftServerId)
                     return (
-                      <p className="env-stage-meta">
-                        Server: {serverLabel}
-                      </p>
+                      <div style={{ marginBottom: '0.55rem' }}>
+                        <p className="env-stage-meta">
+                          Server: {serverLabel}{isDraftDirty ? ' (draft)' : ''}
+                        </p>
+                        <select
+                          value={draftServerId}
+                          disabled={loadingEnvServersMap || savingEnvServersMap}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const nextValue = e.target.value || 'local'
+                            setEnvServersMapDraft((prev) => ({ ...prev, [env.name]: nextValue }))
+                          }}
+                          style={{
+                            width: '100%',
+                            marginTop: '0.35rem',
+                            padding: '0.35rem 0.5rem',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border-color)',
+                            backgroundColor: 'var(--input-bg)',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.82rem',
+                            cursor: loadingEnvServersMap || savingEnvServersMap ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          <option value="local">Local</option>
+                          {(servers || []).map((s) => (
+                            <option key={s.id} value={s.id}>{s.name || s.hostname || s.id}</option>
+                          ))}
+                        </select>
+                      </div>
                     )
                   })()}
                   <p className="env-stage-value">
                     Image: {(() => {
                       const envData = getEnvironmentData(env.name)
                       if (loadingStatus) return 'Loading...'
+                      if (envData?.status === 'unavailable' && envData?.host_error) return '—'
                       if (envData?.primary_image) return envData.primary_image
                       if (envData?.images?.length > 0) return envData.images[0]
                       return 'No image'
@@ -1496,19 +1621,43 @@ function Environments() {
                       const envData = getEnvironmentData(env.name)
                       if (loadingStatus) return 'Loading...'
                       const status = envData?.status || 'empty'
-                      return getStatusLabel(status)
+                      return (
+                        <span style={{ color: getStatusColor(status), fontWeight: 600 }}>
+                          {getStatusLabel(status)}
+                        </span>
+                      )
                     })()}
                   </p>
                   {(() => {
                     const envData = getEnvironmentData(env.name)
                     if (!envData || loadingStatus) return null
-                    const hostTotal = envData.containers?.host_total || envData.containers?.total || 0
+                    if (envData.host_error) {
+                      return (
+                        <p
+                          className="env-stage-value"
+                          style={{
+                            fontSize: '0.78rem',
+                            marginTop: '0.45rem',
+                            color: '#dc3545',
+                            lineHeight: 1.35,
+                            wordBreak: 'break-word'
+                          }}
+                          title={envData.host_error}
+                        >
+                          {envData.host_error}
+                        </p>
+                      )
+                    }
+                    return null
+                  })()}
+                  {(() => {
+                    const envData = getEnvironmentData(env.name)
+                    if (!envData || loadingStatus) return null
                     const scopeHint = getScopeHint(envData)
                     return (
                       <>
                         <p className="env-stage-value" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
-                          Containers: {envData.containers?.running || 0} running / {envData.containers?.total || 0} total
-                          {hostTotal !== (envData.containers?.total || 0) && ` (host: ${hostTotal})`}
+                          Containers: {envData.host_error ? '—' : `${envData.containers?.running || 0} running / ${envData.containers?.total || 0} total`}
                         </p>
                         {scopeHint && (
                           <p className="env-stage-value" style={{ fontSize: '0.75rem', opacity: 0.85 }}>
@@ -1540,16 +1689,9 @@ function Environments() {
           {environments.slice(0, -1).map((env, index) => {
             const nextEnv = environments[index + 1]
             const key = `${env.name}-${nextEnv.name}`
-            // Colors based on operation importance
-            // DEV → Pre-Prod: yellow/orange (medium importance)
-            // Pre-Prod → PROD: red (high importance)
-            const buttonColor = index === 0 
-              ? '#f59e0b' // Orange for DEV → Pre-Prod
-              : '#dc2626' // Czerwony dla Pre-Prod → PROD
-            const buttonHoverColor = index === 0
-              ? '#d97706' // Darker orange
-              : '#b91c1c' // Ciemniejszy czerwony
-            
+            const buttonColor = index === 0 ? '#f59e0b' : '#dc2626'
+            const buttonHoverColor = index === 0 ? '#d97706' : '#b91c1c'
+
             return (
               <button
                 key={key}
@@ -1574,76 +1716,37 @@ function Environments() {
                   e.target.style.boxShadow = `0 4px 12px ${buttonColor}50`
                 }}
               >
-                {loading[key] 
-                  ? 'Promoting...' 
-                  : `${env.label} → ${nextEnv.label}`
-                }
+                {loading[key] ? 'Promoting...' : `${env.label} → ${nextEnv.label}`}
               </button>
             )
           })}
         </div>
-      </div>
 
-      <div className="card">
-        <h3 className="card-title">Environment → Server mapping</h3>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-          Each environment (DEV / Pre-Prod / PROD) can run on a different server. Promotion deploys to the server assigned to the target environment.
-        </p>
-        <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-          When multiple environments share one server, containers are shown per environment assignment (not full host duplicates).
-        </p>
-        {loadingEnvServersMap ? (
-          <p style={{ color: 'var(--text-tertiary)' }}>Loading mapping...</p>
-        ) : (
-          <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
-              {environments.map((env) => (
-                <div key={env.name} style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: '600', minWidth: '100px', color: env.color }}>{env.label}</span>
-                  <span style={{ color: 'var(--text-tertiary)' }}>→</span>
-                  <select
-                    value={envServersMapDraft[env.name] ?? 'local'}
-                    onChange={(e) => setEnvServersMapDraft((prev) => ({ ...prev, [env.name]: e.target.value || 'local' }))}
-                    style={{
-                      padding: '0.4rem 0.75rem',
-                      borderRadius: '4px',
-                      border: '1px solid var(--border-color)',
-                      backgroundColor: 'var(--input-bg)',
-                      color: 'var(--text-primary)',
-                      minWidth: '180px'
-                    }}
-                  >
-                    <option value="local">Local</option>
-                    {(servers || []).map((s) => (
-                      <option key={s.id} value={s.id}>{s.name || s.hostname || s.id}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
+        <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleSaveEnvServerMapping}
+            disabled={loadingEnvServersMap || savingEnvServersMap || !hasEnvServerMapChanges}
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: (loadingEnvServersMap || savingEnvServersMap || !hasEnvServerMapChanges) ? '#888' : '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (loadingEnvServersMap || savingEnvServersMap || !hasEnvServerMapChanges) ? 'not-allowed' : 'pointer',
+              fontWeight: '600'
+            }}
+          >
+            {savingEnvServersMap ? 'Saving...' : hasEnvServerMapChanges ? 'Save server mapping' : 'Mapping saved'}
+          </button>
+          {hasEnvServerMapChanges && (
             <button
               type="button"
-              onClick={async () => {
-                setSavingEnvServersMap(true)
-                try {
-                  const res = await environmentAPI.updateEnvServersMap(envServersMapDraft)
-                  if (res.data.success) {
-                    setEnvServersMap(res.data.env_servers || envServersMapDraft)
-                    setMessage({ type: 'success', text: 'Environment → server mapping saved.' })
-                    await loadEnvironmentsStatus()
-                  } else {
-                    setMessage({ type: 'error', text: res.data.error || 'Failed to save' })
-                  }
-                } catch (e) {
-                  setMessage({ type: 'error', text: e.response?.data?.error || 'Failed to save mapping' })
-                } finally {
-                  setSavingEnvServersMap(false)
-                }
-              }}
+              onClick={() => setEnvServersMapDraft(envServersMap)}
               disabled={savingEnvServersMap}
               style={{
                 padding: '0.5rem 1rem',
-                backgroundColor: savingEnvServersMap ? '#888' : '#28a745',
+                backgroundColor: '#495057',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
@@ -1651,13 +1754,13 @@ function Environments() {
                 fontWeight: '600'
               }}
             >
-              {savingEnvServersMap ? 'Saving...' : 'Save mapping'}
+              Discard changes
             </button>
-            <p style={{ marginTop: '1rem', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-              💡 Click an environment tile (DEV/Pre-Prod/PROD) to prepare configs or promote a single container.
-            </p>
-          </>
-        )}
+          )}
+        </div>
+        <p style={{ marginTop: '0.75rem', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+          💡 Click an environment tile (DEV/Pre-Prod/PROD) to prepare configs or promote a single container.
+        </p>
       </div>
 
       {/* Container Selection Modal */}

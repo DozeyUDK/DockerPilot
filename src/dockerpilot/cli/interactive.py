@@ -9,7 +9,7 @@ def run_interactive_menu(pilot):
         while True:
             choice = Prompt.ask(
                 "\n[bold cyan]Docker Pilot - Interactive Menu[/bold cyan]\n"
-                "Container: list, list-img, start, stop, restart, remove, pause, unpause, stop-remove, exec, exec-simple, policy, run_image, logs, remove-image, prune-images, json, build\n"
+                "Container: list, list-img, start, stop, restart, remove, pause, unpause, stop-remove, exec, exec-simple, rename, policy, run_image, logs, remove-image, prune-images, json, build\n"
                 "Monitor: monitor, live-monitor, stats, health-check\n"
                 "Deploy: quick-deploy, deploy-init, deploy-config, history, promote\n"
                 "System: validate, backup-create, backup-restore, alerts, test, pipeline, docs, checklist\n"
@@ -27,6 +27,17 @@ def run_interactive_menu(pilot):
             elif choice == "list-img":
                 hide_untagged = Confirm.ask("Hide untagged images (dangling)?", default=False)
                 pilot.list_images(show_all=True, format_output="table", hide_untagged=hide_untagged)
+            elif choice == "rename":
+                pilot.list_containers()
+                name = Prompt.ask("Container name or ID to rename")
+                new_name = Prompt.ask("New container name")
+                if not name or not new_name:
+                    pilot.console.print("[red]Both current name and new name are required[/red]")
+                    continue
+                success = pilot.rename_container(name, new_name)
+                if not success:
+                    pilot.console.print("[red]Failed to rename container[/red]")
+
             elif choice in ("start", "stop", "restart", "remove", "pause", "unpause"):
                 pilot.list_containers()
                 names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2)")

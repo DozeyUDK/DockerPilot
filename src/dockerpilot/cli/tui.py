@@ -293,6 +293,8 @@ def infer_resource_selector(command: CommandNode, argument: ArgumentSpec) -> Opt
         action = path[1] if len(path) > 1 else None
         if action in {"start", "stop", "restart", "remove", "pause", "unpause", "stop-remove", "exec", "logs"} and dest == "name":
             return ResourceSelectorSpec(resource_type="container", mode="multi")
+        if action == "rename" and dest == "name":
+            return ResourceSelectorSpec(resource_type="container", mode="single")
         if action == "exec-simple" and dest == "name":
             return ResourceSelectorSpec(resource_type="container", mode="single")
 

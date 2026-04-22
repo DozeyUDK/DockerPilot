@@ -48,6 +48,10 @@ def build_cli_parser() -> argparse.ArgumentParser:
         if action == 'remove':
             action_parser.add_argument('--force', '-f', action='store_true', help='Force removal')
 
+    rename_parser = container_subparsers.add_parser('rename', help='Rename container')
+    rename_parser.add_argument('name', help='Current container name or ID')
+    rename_parser.add_argument('new_name', help='New container name')
+
     stop_remove_parser = container_subparsers.add_parser('stop-remove', help='Stop and remove container(s) in one operation')
     stop_remove_parser.add_argument('name', help='Container name(s) or ID(s), comma-separated')
     stop_remove_parser.add_argument('--timeout', '-t', type=int, default=10, help='Timeout seconds')

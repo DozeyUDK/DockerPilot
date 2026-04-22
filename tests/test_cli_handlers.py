@@ -37,9 +37,11 @@ class DummyPilot:
         self.logger = DummyLogger()
         self.run_calls = []
         self.exec_calls = []
+        self.rename_calls = []
         self.quick_calls = []
         self.promote_calls = []
         self.exec_results = {}
+        self.rename_result = True
 
     def _parse_multi_target(self, target_string):
         return [item.strip() for item in str(target_string).split(",") if item.strip()]
@@ -55,6 +57,10 @@ class DummyPilot:
     def exec_container(self, container, command):
         self.exec_calls.append((container, command))
         return self.exec_results.get(container, True)
+
+    def rename_container(self, container, new_name):
+        self.rename_calls.append((container, new_name))
+        return self.rename_result
 
     def quick_deploy(self, **kwargs):
         self.quick_calls.append(kwargs)
@@ -111,6 +117,26 @@ def test_handle_container_exec_runs_all_targets_and_continues_on_failure():
 
     assert pilot.exec_calls == [("mongo", "/bin/bash"), ("api", "/bin/bash")]
     assert any("Failed to exec in mongo" in line for line in pilot.console.lines)
+
+
+def test_handle_container_rename_calls_pilot():
+    pilot = DummyPilot()
+    args = Namespace(container_action="rename", name="myapp", new_name="myapp-v2")
+
+    handle_container_cli(pilot, args)
+
+    assert pilot.rename_calls == [("myapp", "myapp-v2")]
+
+
+def test_handle_container_rename_exits_when_operation_fails():
+    pilot = DummyPilot()
+    pilot.rename_result = False
+    args = Namespace(container_action="rename", name="myapp", new_name="myapp-v2")
+
+    with pytest.raises(SystemExit) as exc:
+        handle_container_cli(pilot, args)
+
+    assert exc.value.code == 1
 
 
 def test_handle_deploy_quick_parses_and_calls_quick_deploy():

@@ -34,4 +34,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-dockerpilot = ["configs/*.template"]
+dockerpilot = ["configs/*.template", "dockerfile_template_bodies.yaml"]

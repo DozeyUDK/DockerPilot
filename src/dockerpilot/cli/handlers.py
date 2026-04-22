@@ -119,6 +119,11 @@ def handle_container_cli(pilot, args):
         if not success:
             sys.exit(1)
 
+    elif args.container_action == 'rename':
+        success = pilot.rename_container(args.name, args.new_name)
+        if not success:
+            sys.exit(1)
+
     elif args.container_action in ['start', 'stop', 'restart', 'remove', 'pause', 'unpause']:
         containers = pilot._parse_multi_target(args.name)
         if not containers:
