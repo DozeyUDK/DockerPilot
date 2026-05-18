@@ -1,6 +1,6 @@
 {
   "name": "dockerpilot-extras-frontend",
-  "version": "0.9.0-pre.1",
+  "version": "0.9.0-pre.2",
   "description": "DockerPilot Web Panel - CI/CD Manager Frontend",
   "private": true,
   "dependencies": {

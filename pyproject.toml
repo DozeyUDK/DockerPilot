@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dockerpilot"
-version = "0.1.0"
+version = "0.9.0-pre.2"
 description = "Docker container management tool with advanced deployment capabilities"
 readme = "README.md"
 license = { text = "MIT" }

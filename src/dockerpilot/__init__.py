@@ -2,7 +2,7 @@
 DockerPilot - Docker container management tool with advanced deployment capabilities
 """
 
-__version__ = "0.1.0"
+__version__ = "0.9.0-pre.2"
 __author__ = "dozey"
 __email__ = "dozeynwct@hotmail.com"
 
