@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Packet Sniffer</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 { margin-bottom: 10px; }
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 15px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+        }
+        .controls {
+            padding: 15px;
+            background: #f8f9fa;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5568d3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .packet-list {
+            max-height: 600px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        .packet-item {
+            padding: 12px;
+            margin: 5px 0;
+            border-left: 4px solid #667eea;
+            background: #f8f9fa;
+            border-radius: 4px;
+            transition: all 0.2s;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        .packet-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        .packet-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .packet-time {
+            color: #6c757d;
+            font-size: 11px;
+        }
+        .packet-protocol {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        .protocol-tcp { background: #28a745; color: white; }
+        .protocol-udp { background: #ffc107; color: black; }
+        .protocol-icmp { background: #17a2b8; color: white; }
+        .protocol-arp { background: #6f42c1; color: white; }
+        .protocol-other { background: #6c757d; color: white; }
+        .status {
+            padding: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .status.active { background: #d4edda; color: #155724; }
+        .status.stopped { background: #f8d7da; color: #721c24; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .error-message {
+            padding: 15px;
+            margin: 10px;
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+            border-radius: 4px;
+            display: none;
+        }
+        .error-message.show {
+            display: block;
+        }
+        .sudo-prompt {
+            padding: 15px;
+            margin: 10px;
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            border-radius: 4px;
+            display: none;
+        }
+        .sudo-prompt.show {
+            display: block;
+        }
+        .sudo-prompt input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .sudo-prompt button {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Network Packet Sniffer</h1>
+            <p>Real-time network traffic monitoring</p>
+        </div>
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="totalPackets">0</div>
+                <div class="stat-label">Total Packets</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="tcpPackets">0</div>
+                <div class="stat-label">TCP</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="udpPackets">0</div>
+                <div class="stat-label">UDP</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="icmpPackets">0</div>
+                <div class="stat-label">ICMP</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="otherPackets">0</div>
+                <div class="stat-label">Other</div>
+            </div>
+        </div>
+        <div class="error-message" id="errorMessage"></div>
+        <div class="sudo-prompt" id="sudoPrompt">
+            <strong>🔐 Sudo Password Required</strong>
+            <p>This operation requires root privileges. Enter your sudo password:</p>
+            <input type="password" id="sudoPassword" placeholder="Enter sudo password" autocomplete="off">
+            <div>
+                <button class="btn-primary" onclick="submitSudoPassword()">Submit</button>
+                <button class="btn-danger" onclick="cancelSudoPassword()">Cancel</button>
+            </div>
+            <small style="color: #6c757d; margin-top: 10px; display: block;">
+                Password is transmitted securely and only used to elevate privileges. It is not stored or logged.
+            </small>
+        </div>
+        <div class="controls">
+            <button class="btn-primary" onclick="startSniffing()">Start</button>
+            <button class="btn-danger" onclick="stopSniffing()">Stop</button>
+            <button class="btn-success" onclick="clearPackets()">Clear</button>
+            <input type="text" id="filterInput" placeholder="BPF Filter (e.g., tcp, port 80, host 192.168.1.1)" style="flex: 1; max-width: 300px;">
+            <button class="btn-primary" onclick="applyFilter()">Apply Filter</button>
+            <span id="status" class="status stopped">Stopped</span>
+        </div>
+        <div class="packet-list" id="packetList"></div>
+    </div>
+
+    <script src="/sniffer.js"></script>
+</body>
+</html>

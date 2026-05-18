@@ -13,10 +13,11 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 from scapy.all import sniff, IP, TCP, UDP, ICMP, ARP, Ether
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, send_from_directory
 from flask_socketio import SocketIO
 import json
 
@@ -27,390 +28,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Default HTML template
-DEFAULT_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Network Packet Sniffer</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-        .header h1 { margin-bottom: 10px; }
-        .stats {
-            display: flex;
-            justify-content: space-around;
-            padding: 15px;
-            background: #f8f9fa;
-            border-bottom: 2px solid #e9ecef;
-        }
-        .stat-item {
-            text-align: center;
-        }
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #667eea;
-        }
-        .stat-label {
-            font-size: 12px;
-            color: #6c757d;
-            text-transform: uppercase;
-        }
-        .controls {
-            padding: 15px;
-            background: #f8f9fa;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        button {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s;
-        }
-        .btn-primary { background: #667eea; color: white; }
-        .btn-primary:hover { background: #5568d3; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-danger:hover { background: #c82333; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-success:hover { background: #218838; }
-        input[type="text"] {
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        .packet-list {
-            max-height: 600px;
-            overflow-y: auto;
-            padding: 10px;
-        }
-        .packet-item {
-            padding: 12px;
-            margin: 5px 0;
-            border-left: 4px solid #667eea;
-            background: #f8f9fa;
-            border-radius: 4px;
-            transition: all 0.2s;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-        }
-        .packet-item:hover {
-            background: #e9ecef;
-            transform: translateX(5px);
-        }
-        .packet-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        .packet-time {
-            color: #6c757d;
-            font-size: 11px;
-        }
-        .packet-protocol {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            font-weight: bold;
-            margin-right: 5px;
-        }
-        .protocol-tcp { background: #28a745; color: white; }
-        .protocol-udp { background: #ffc107; color: black; }
-        .protocol-icmp { background: #17a2b8; color: white; }
-        .protocol-arp { background: #6f42c1; color: white; }
-        .protocol-other { background: #6c757d; color: white; }
-        .status {
-            padding: 10px;
-            text-align: center;
-            font-weight: bold;
-        }
-        .status.active { background: #d4edda; color: #155724; }
-        .status.stopped { background: #f8d7da; color: #721c24; }
-        .status.error { background: #f8d7da; color: #721c24; }
-        .error-message {
-            padding: 15px;
-            margin: 10px;
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid #dc3545;
-            border-radius: 4px;
-            display: none;
-        }
-        .error-message.show {
-            display: block;
-        }
-        .sudo-prompt {
-            padding: 15px;
-            margin: 10px;
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            border-radius: 4px;
-            display: none;
-        }
-        .sudo-prompt.show {
-            display: block;
-        }
-        .sudo-prompt input[type="password"] {
-            width: 100%;
-            padding: 8px;
-            margin: 10px 0;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-        }
-        .sudo-prompt button {
-            margin-right: 5px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🔍 Network Packet Sniffer</h1>
-            <p>Real-time network traffic monitoring</p>
-        </div>
-        <div class="stats">
-            <div class="stat-item">
-                <div class="stat-value" id="totalPackets">0</div>
-                <div class="stat-label">Total Packets</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="tcpPackets">0</div>
-                <div class="stat-label">TCP</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="udpPackets">0</div>
-                <div class="stat-label">UDP</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="icmpPackets">0</div>
-                <div class="stat-label">ICMP</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="otherPackets">0</div>
-                <div class="stat-label">Other</div>
-            </div>
-        </div>
-        <div class="error-message" id="errorMessage"></div>
-        <div class="sudo-prompt" id="sudoPrompt">
-            <strong>🔐 Sudo Password Required</strong>
-            <p>This operation requires root privileges. Enter your sudo password:</p>
-            <input type="password" id="sudoPassword" placeholder="Enter sudo password" autocomplete="off">
-            <div>
-                <button class="btn-primary" onclick="submitSudoPassword()">Submit</button>
-                <button class="btn-danger" onclick="cancelSudoPassword()">Cancel</button>
-            </div>
-            <small style="color: #6c757d; margin-top: 10px; display: block;">
-                Password is transmitted securely and only used to elevate privileges. It is not stored or logged.
-            </small>
-        </div>
-        <div class="controls">
-            <button class="btn-primary" onclick="startSniffing()">Start</button>
-            <button class="btn-danger" onclick="stopSniffing()">Stop</button>
-            <button class="btn-success" onclick="clearPackets()">Clear</button>
-            <input type="text" id="filterInput" placeholder="BPF Filter (e.g., tcp, port 80, host 192.168.1.1)" style="flex: 1; max-width: 300px;">
-            <button class="btn-primary" onclick="applyFilter()">Apply Filter</button>
-            <span id="status" class="status stopped">Stopped</span>
-        </div>
-        <div class="packet-list" id="packetList"></div>
-    </div>
+# Sniffer UI: templates/sniffer.html + sniffer.js (served at /sniffer.js)
+_SEARCHER_DIR = Path(__file__).resolve().parent
 
-    <script>
-        const socket = io();
-        let packetCount = 0;
-        let stats = { tcp: 0, udp: 0, icmp: 0, other: 0 };
-        let isSniffing = false;
 
-        socket.on('connect', () => {
-            console.log('Connected to server');
-        });
+def _load_sniffer_html_template() -> str:
+    return (_SEARCHER_DIR / "templates" / "sniffer.html").read_text(encoding="utf-8")
 
-        socket.on('packet', (data) => {
-            if (!isSniffing) return;
-            addPacket(data);
-            updateStats(data.protocol);
-        });
 
-        socket.on('status', (data) => {
-            const statusEl = document.getElementById('status');
-            const errorEl = document.getElementById('errorMessage');
-            const sudoPrompt = document.getElementById('sudoPrompt');
-            
-            if (data.status === 'started') {
-                statusEl.textContent = 'Sniffing...';
-                statusEl.className = 'status active';
-                isSniffing = true;
-                errorEl.classList.remove('show');
-                sudoPrompt.classList.remove('show');
-            } else if (data.status === 'error') {
-                statusEl.textContent = 'Error';
-                statusEl.className = 'status error';
-                isSniffing = false;
-                errorEl.textContent = 'Error: ' + (data.message || 'Unknown error');
-                if (data.message && data.message.includes('Operation not permitted')) {
-                    errorEl.textContent = 'Error: Operation not permitted. Root privileges required.';
-                    sudoPrompt.classList.add('show');
-                } else {
-                    sudoPrompt.classList.remove('show');
-                }
-                errorEl.classList.add('show');
-            } else if (data.status === 'sudo_required') {
-                sudoPrompt.classList.add('show');
-                document.getElementById('sudoPassword').focus();
-            } else if (data.status === 'sudo_success') {
-                sudoPrompt.classList.remove('show');
-                document.getElementById('sudoPassword').value = '';
-                // Automatically retry starting
-                setTimeout(() => {
-                    socket.emit('start_sniffing');
-                }, 500);
-            } else if (data.status === 'sudo_failed') {
-                sudoPrompt.classList.add('show');
-                errorEl.textContent = 'Error: Invalid sudo password. Please try again.';
-                errorEl.classList.add('show');
-                document.getElementById('sudoPassword').value = '';
-                document.getElementById('sudoPassword').focus();
-            } else {
-                statusEl.textContent = 'Stopped';
-                statusEl.className = 'status stopped';
-                isSniffing = false;
-                errorEl.classList.remove('show');
-                sudoPrompt.classList.remove('show');
-            }
-        });
-
-        function addPacket(data) {
-            packetCount++;
-            const list = document.getElementById('packetList');
-            const item = document.createElement('div');
-            item.className = 'packet-item';
-            
-            const protocolClass = `protocol-${data.protocol.toLowerCase()}`;
-            item.innerHTML = `
-                <div class="packet-header">
-                    <span><span class="packet-protocol ${protocolClass}">${data.protocol}</span> ${data.src} → ${data.dst}</span>
-                    <span class="packet-time">${data.time}</span>
-                </div>
-                <div>Size: ${data.size} bytes | ${data.details}</div>
-            `;
-            
-            list.insertBefore(item, list.firstChild);
-            
-            // Keep only last 1000 packets
-            while (list.children.length > 1000) {
-                list.removeChild(list.lastChild);
-            }
-            
-            document.getElementById('totalPackets').textContent = packetCount;
-        }
-
-        function updateStats(protocol) {
-            if (stats.hasOwnProperty(protocol.toLowerCase())) {
-                stats[protocol.toLowerCase()]++;
-            } else {
-                stats.other++;
-            }
-            document.getElementById('tcpPackets').textContent = stats.tcp;
-            document.getElementById('udpPackets').textContent = stats.udp;
-            document.getElementById('icmpPackets').textContent = stats.icmp;
-            document.getElementById('otherPackets').textContent = stats.other;
-        }
-
-        function startSniffing() {
-            socket.emit('start_sniffing');
-        }
-
-        function stopSniffing() {
-            socket.emit('stop_sniffing');
-        }
-
-        function clearPackets() {
-            document.getElementById('packetList').innerHTML = '';
-            packetCount = 0;
-            stats = { tcp: 0, udp: 0, icmp: 0, other: 0 };
-            document.getElementById('totalPackets').textContent = '0';
-            document.getElementById('tcpPackets').textContent = '0';
-            document.getElementById('udpPackets').textContent = '0';
-            document.getElementById('icmpPackets').textContent = '0';
-            document.getElementById('otherPackets').textContent = '0';
-        }
-
-        function applyFilter() {
-            const filter = document.getElementById('filterInput').value;
-            if (isSniffing) {
-                // If sniffing, stop first, then restart with new filter
-                socket.emit('stop_sniffing');
-                setTimeout(() => {
-                    socket.emit('set_filter', { filter: filter });
-                    setTimeout(() => {
-                        socket.emit('start_sniffing');
-                    }, 500);
-                }, 500);
-            } else {
-                socket.emit('set_filter', { filter: filter });
-            }
-        }
-
-        function submitSudoPassword() {
-            const password = document.getElementById('sudoPassword').value;
-            if (!password) {
-                alert('Please enter your sudo password');
-                return;
-            }
-            socket.emit('sudo_password', { password: password });
-        }
-
-        function cancelSudoPassword() {
-            document.getElementById('sudoPassword').value = '';
-            document.getElementById('sudoPrompt').classList.remove('show');
-            socket.emit('cancel_sudo');
-        }
-
-        // Allow Enter key to submit password
-        document.addEventListener('DOMContentLoaded', () => {
-            const passwordInput = document.getElementById('sudoPassword');
-            if (passwordInput) {
-                passwordInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        submitSudoPassword();
-                    }
-                });
-            }
-        });
-    </script>
-</body>
-</html>
-"""
+DEFAULT_TEMPLATE = _load_sniffer_html_template()
 
 
 class PacketSniffer:
@@ -716,6 +342,16 @@ socketio = SocketIO(
 def index():
     """Serve the main page"""
     return render_template_string(DEFAULT_TEMPLATE)
+
+
+@app.route('/sniffer.js')
+def sniffer_js():
+    """Serve sniffer UI script (same directory as sniffer.html)."""
+    return send_from_directory(
+        _SEARCHER_DIR / 'templates',
+        'sniffer.js',
+        mimetype='application/javascript; charset=utf-8',
+    )
 
 
 @socketio.on('connect')
