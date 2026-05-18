@@ -10,6 +10,26 @@ from rich.prompt import Confirm
 from .utils import format_ports, get_container_size, calculate_uptime
 
 
+def _container_image_label(attrs: dict) -> str:
+    """Image reference for display without calling client.images.get.
+
+    Accessing ``Container.image`` triggers an image inspect that raises
+    ``NotFound`` when the image was removed while the container record remains.
+    """
+    if not attrs:
+        return "none"
+    cfg = attrs.get("Config") or {}
+    ref = cfg.get("Image")
+    if ref:
+        return ref
+    image_field = attrs.get("Image")
+    if isinstance(image_field, str) and image_field.startswith("sha256:"):
+        return image_field[7:19] + "…"
+    if image_field:
+        return image_field
+    return "none"
+
+
 class ContainerManager:
     """Manages Docker container operations."""
     
@@ -35,7 +55,7 @@ class ContainerManager:
                         'name': c.name,
                         'status': c.status,
                         'state': state,
-                        'image': c.image.tags[0] if c.image.tags else "none",
+                        'image': _container_image_label(c.attrs),
                         'ports': c.ports,
                         'created': c.attrs['Created'],
                         'size': get_container_size(c)
@@ -109,7 +129,7 @@ class ContainerManager:
                     c.short_id,
                     c.name,
                     status,
-                    c.image.tags[0] if c.image.tags else "❌ none",
+                    _container_image_label(c.attrs),
                     ports
                 ]
                 
