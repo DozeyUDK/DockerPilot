@@ -215,6 +215,8 @@ def test_export_bundle_enforces_max_size(tmp_path, monkeypatch):
 def test_export_bundle_encrypts_when_enabled(tmp_path, monkeypatch):
     import tarfile
 
+    pytest.importorskip("cryptography")
+
     base = tmp_path / "migrations"
     base.mkdir()
     monkeypatch.setenv("DOCKERPILOT_MCP_MIGRATIONS_DIR", str(base))

@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("cryptography")
+
 
 def test_encrypt_decrypt_roundtrip(tmp_path, monkeypatch):
     from dockerpilot.mcp.crypto import EncryptionSettings, decrypt_file, encrypt_file
@@ -34,4 +36,3 @@ def test_decrypt_wrong_passphrase_fails(tmp_path):
     encrypt_file(in_path=plain, out_path=enc, settings=settings_ok)
     with pytest.raises(CryptoError):
         decrypt_file(in_path=enc, out_path=dec, settings=settings_bad)
-
