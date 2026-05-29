@@ -107,7 +107,14 @@ pip install -e . --break-system-packages
 pip install -e .[git]   # Git integration for CI/CD
 pip install -e .[test]  # Development dependencies
 pip install -e .[tui]   # Mouse-friendly terminal UI
+pip install -e .[mcp]   # MCP server (AI assistants / stdio tools)
 ```
+
+## MCP support (AI tools)
+
+DockerPilot can run as an MCP server so AI assistants can safely inspect DockerPilot/Docker state and perform controlled container actions.
+
+See `docs/mcp.md`.
 
 **Verify installation:**
 ```bash
