@@ -114,12 +114,14 @@ class SecureDeployService:
 
         plan: Dict[str, Any] = {
             "schema_version": 1,
+            "contract_extension": "v1.1",
             "plan_id": plan_id,
             "created_at": _iso(created),
             "expires_at": _iso(expires),
             "actor": actor,
             "spec_sha256": spec_sha,
             "normalized_compose_sha256": compose_sha,
+            "source_spec": spec,
             "dozeyguard": {
                 "scanner_version": str(((report.get("scanner") or {}).get("version") or "unknown")),
                 "contract_version": 1,

@@ -178,7 +178,14 @@ export const secureDeployAPI = {
   getDraft: (draftId) => api.get(`/secure-deploy/drafts/${draftId}`),
   validate: (spec) => api.post('/secure-deploy/validate', { spec }),
   plan: (spec) => api.post('/secure-deploy/plan', { spec }),
-  getPlan: (planId) => api.get(`/secure-deploy/plans/${planId}`)
+  getPlan: (planId) => api.get(`/secure-deploy/plans/${planId}`),
+  approve: (planId, { plan_sha256, totp_code }) =>
+    api.post(`/secure-deploy/plans/${planId}/approve`, { plan_sha256, totp_code }),
+  getApproval: (approvalId) => api.get(`/secure-deploy/approvals/${approvalId}`),
+  revoke: (approvalId, { totp_code }) =>
+    api.post(`/secure-deploy/approvals/${approvalId}/revoke`, { totp_code }),
+  brokerDryRun: (planId, { approval_id }) =>
+    api.post(`/secure-deploy/plans/${planId}/broker-dry-run`, { approval_id })
 }
 
 // Health check

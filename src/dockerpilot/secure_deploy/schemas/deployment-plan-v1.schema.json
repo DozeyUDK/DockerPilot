@@ -247,7 +247,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["pending", "approved", "expired", "consumed", "rejected"]
+          "enum": ["pending", "approved", "expired", "consumed", "rejected", "revoked"]
         },
         "approved_by": { "type": ["string", "null"], "maxLength": 128 },
         "approved_at": { "type": ["string", "null"], "maxLength": 40 },
@@ -267,6 +267,16 @@
     "warnings": {
       "type": "array",
       "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "source_spec": {
+      "type": "object",
+      "description": "Contract v1.1 additive: embedded Spec v1 for independent broker revalidation. Optional for legacy plans; required by broker verify/dry_run.",
+      "additionalProperties": true
+    },
+    "contract_extension": {
+      "type": "string",
+      "const": "v1.1",
+      "description": "Marks plans that include source_spec (additive, non-breaking for schema_version=1)."
     }
   }
 }

@@ -426,7 +426,9 @@ def load_deployment_config(container_name: str, env: str = None) -> dict:
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-# Lax keeps SPA-on-separate-port working; Secure Deploy POSTs still enforce Origin allowlist.
+# Lax is compatible with SPA-on-different-port (SameSite is scheme+eTLD+1, not port).
+# Production must set SESSION_COOKIE_SECURE=true; Secure Deploy POSTs always require CSRF,
+# and production/SECURE_DEPLOY_REQUIRE_ORIGIN also requires allowlisted Origin.
 app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
     'SESSION_COOKIE_SECURE',
@@ -654,7 +656,6 @@ def _secure_deploy_origin_allowed() -> bool:
         return origin in allowed
     if referer:
         return any(referer.startswith(item.rstrip('/') + '/') or referer.rstrip('/') == item.rstrip('/') for item in allowed)
-    # Non-browser clients in tests may omit Origin; require CSRF header instead.
     return False
 
 
@@ -687,9 +688,28 @@ def require_secure_deploy_access() -> None:
                 code='secure_deploy_csrf',
                 message='Secure Deploy CSRF token required',
             )
-        # When browsers send Origin, it must be on the allowlist (defense in depth).
+
         origin = (request.headers.get('Origin') or '').strip()
-        if origin and not _secure_deploy_origin_allowed():
+        require_origin = (
+            os.environ.get('SECURE_DEPLOY_REQUIRE_ORIGIN', '').lower() == 'true'
+            or os.environ.get('FLASK_ENV') == 'production'
+            or app.config.get('SESSION_COOKIE_SECURE')
+        )
+        trusted_client = os.environ.get('SECURE_DEPLOY_TRUSTED_CLIENT', 'false').lower() == 'true'
+        # SameSite is scheme+registrable-domain (not port). CSRF is always required;
+        # production browser calls must also send an allowlisted Origin.
+        if require_origin and not trusted_client:
+            if not origin:
+                raise ForbiddenError(
+                    code='secure_deploy_csrf',
+                    message='Secure Deploy Origin required in production',
+                )
+            if not _secure_deploy_origin_allowed():
+                raise ForbiddenError(
+                    code='secure_deploy_csrf',
+                    message='Secure Deploy Origin check failed',
+                )
+        elif origin and not _secure_deploy_origin_allowed():
             raise ForbiddenError(
                 code='secure_deploy_csrf',
                 message='Secure Deploy Origin check failed',
@@ -699,6 +719,19 @@ def require_secure_deploy_access() -> None:
 
 def get_secure_deploy_actor() -> str:
     return str(session.get('auth_username') or WEB_AUTH_USERNAME)
+
+
+def get_secure_deploy_session_hash() -> str:
+    from backend.secure_deploy.approval import session_id_hash
+
+    material = '|'.join(
+        [
+            str(session.get('auth_username') or ''),
+            str(session.get('secure_deploy_csrf') or ''),
+            str(session.get('auth_mfa_verified') or ''),
+        ]
+    )
+    return session_id_hash(material)
 
 # Configuration
 app.config['CONFIG_DIR'] = Path.home() / ".dockerpilot_extras"
@@ -2107,18 +2140,47 @@ _secure_deploy_root = Path(
 _secure_deploy_store = FileSecureDeployStore(_secure_deploy_root)
 _secure_deploy_service = SecureDeployService(_secure_deploy_store)
 
+from backend.secure_deploy.approval import ApprovalService
+from backend.secure_deploy.broker_client import BrokerClient
+from backend.secure_deploy.step_up import StepUpTotpGuard
+
+_secure_deploy_approvals = ApprovalService(_secure_deploy_store)
+_secure_deploy_broker = BrokerClient(os.environ.get('SECURE_DEPLOY_BROKER_SOCKET'))
+_secure_deploy_step_up = StepUpTotpGuard(
+    verify_fn=lambda secret, code, window=1: _verify_totp_code(secret, code, window),
+)
+
+
+def _verify_secure_deploy_step_up(code: str) -> bool:
+    actor = get_secure_deploy_actor()
+    return _secure_deploy_step_up.verify(
+        actor_key=actor,
+        secret=WEB_AUTH_TOTP_SECRET,
+        code=code,
+        window=WEB_AUTH_TOTP_WINDOW,
+    )
+
+
 (
     SecureDeployDrafts,
     SecureDeployDraftDetail,
     SecureDeployValidate,
     SecureDeployPlan,
     SecureDeployPlanDetail,
+    SecureDeployPlanApprove,
+    SecureDeployApprovalDetail,
+    SecureDeployApprovalRevoke,
+    SecureDeployBrokerDryRun,
 ) = create_secure_deploy_resources(
     Resource=Resource,
     request=request,
     service=_secure_deploy_service,
+    approval_service=_secure_deploy_approvals,
+    broker_client=_secure_deploy_broker,
     require_secure_deploy_access=require_secure_deploy_access,
     get_actor=get_secure_deploy_actor,
+    get_session_hash=get_secure_deploy_session_hash,
+    verify_step_up_totp=_verify_secure_deploy_step_up,
     max_body_bytes=SECURE_DEPLOY_MAX_BODY,
 )
 
@@ -2177,6 +2239,10 @@ register_api_routes(
     SecureDeployValidate=SecureDeployValidate,
     SecureDeployPlan=SecureDeployPlan,
     SecureDeployPlanDetail=SecureDeployPlanDetail,
+    SecureDeployPlanApprove=SecureDeployPlanApprove,
+    SecureDeployApprovalDetail=SecureDeployApprovalDetail,
+    SecureDeployApprovalRevoke=SecureDeployApprovalRevoke,
+    SecureDeployBrokerDryRun=SecureDeployBrokerDryRun,
 )
 
 

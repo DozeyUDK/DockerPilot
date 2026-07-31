@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/secure-deploy-approval-v1.schema.json",
+  "title": "SecureDeployApproval",
+  "description": "Standalone approval record v1 (no secrets, no session cookie).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "approval_version",
+    "approval_id",
+    "plan_id",
+    "plan_sha256",
+    "actor",
+    "nonce",
+    "issued_at",
+    "approved_at",
+    "expires_at",
+    "session_id_hash",
+    "status"
+  ],
+  "properties": {
+    "approval_version": { "type": "integer", "const": 1 },
+    "approval_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "actor": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "nonce": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "issued_at": { "type": "string", "minLength": 20, "maxLength": 40 },
+    "approved_at": { "type": ["string", "null"], "maxLength": 40 },
+    "expires_at": { "type": "string", "minLength": 20, "maxLength": 40 },
+    "session_id_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "approved", "consumed", "expired", "revoked"]
+    }
+  }
+}

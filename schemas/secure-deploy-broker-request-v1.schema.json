@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/secure-deploy-broker-request-v1.schema.json",
+  "title": "SecureDeployBrokerRequest",
+  "description": "Unix-socket broker request envelope v1. Forbidden command/argv/path/environment fields are rejected in protocol.py (stdlib schema validator has no anyOf).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "operation",
+    "client"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 1 },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["ping", "capabilities", "verify_plan", "dry_run"]
+    },
+    "plan": { "type": "object", "additionalProperties": true },
+    "approval": { "type": "object", "additionalProperties": true },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "const": "dockerpilot-extras" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    }
+  }
+}

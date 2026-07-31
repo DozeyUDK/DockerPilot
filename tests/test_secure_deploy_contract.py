@@ -188,6 +188,17 @@ def test_fixed_golden_hashes():
     mutated["metadata"]["owner"] = "mutated-owner"
     assert sha256_canonical(mutated) != golden["spec_sha256"]
 
+    # Contract v1.1 additive fields participate in plan hash (not excluded).
+    assert "source_spec" not in PLAN_HASH_EXCLUDED_FIELDS
+    assert "contract_extension" not in PLAN_HASH_EXCLUDED_FIELDS
+    assert "source_spec" not in plan  # legacy v1 fixture remains readable without extension
+    with_ext = json.loads(json.dumps(plan))
+    with_ext["contract_extension"] = "v1.1"
+    assert compute_plan_sha256(with_ext) != golden["deployment_plan_sha256"]
+    with_spec = json.loads(json.dumps(plan))
+    with_spec["source_spec"] = {"schema_version": 1}
+    assert compute_plan_sha256(with_spec) != golden["deployment_plan_sha256"]
+
 
 def test_schema_rejects_host_network_via_forbidden_runtime_key():
     doc = _load(FIXTURES / "pass" / "minimal_production_localhost.json")

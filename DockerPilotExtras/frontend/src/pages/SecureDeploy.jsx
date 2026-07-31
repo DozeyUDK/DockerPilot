@@ -96,6 +96,9 @@ function SecureDeploy() {
   const [preview, setPreview] = useState(null)
   const [draftId, setDraftId] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [totpCode, setTotpCode] = useState('')
+  const [approval, setApproval] = useState(null)
+  const [brokerResult, setBrokerResult] = useState(null)
 
   useEffect(() => {
     refreshStatus?.()
@@ -185,6 +188,49 @@ function SecureDeploy() {
     anchor.download = `${preview.plan.plan_id || 'secure-deploy-plan'}.json`
     anchor.click()
     URL.revokeObjectURL(url)
+  }
+
+  const approvePlan = async () => {
+    if (!preview?.plan?.plan_id) return
+    setBusy(true)
+    setMessage(null)
+    try {
+      const { data } = await secureDeployAPI.approve(preview.plan.plan_id, {
+        plan_sha256: preview.plan.plan_sha256,
+        totp_code: totpCode
+      })
+      setTotpCode('')
+      setApproval(data.approval)
+      setMessage({ type: 'success', text: `Approved ${data.approval.approval_id}` })
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err?.response?.data?.error?.message || err.message || 'Approve failed'
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const verifyWithBroker = async () => {
+    if (!preview?.plan?.plan_id || !approval?.approval_id) return
+    setBusy(true)
+    setMessage(null)
+    try {
+      const { data } = await secureDeployAPI.brokerDryRun(preview.plan.plan_id, {
+        approval_id: approval.approval_id
+      })
+      setBrokerResult(data.verification)
+      setMessage({ type: 'success', text: `Broker dry-run: ${data.verification?.status}` })
+    } catch (err) {
+      setBrokerResult(null)
+      setMessage({
+        type: 'error',
+        text: err?.response?.data?.error?.message || err.message || 'Broker dry-run failed'
+      })
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -351,6 +397,10 @@ function SecureDeploy() {
                 {draftId ? ` · draft ${draftId}` : ''}
               </div>
               <div>
+                <strong>Plan hash (confirm before approve)</strong>
+                <pre style={{ whiteSpace: 'pre-wrap' }}>{preview.plan?.plan_sha256 || preview.preview?.hashes?.plan_sha256}</pre>
+              </div>
+              <div>
                 <strong>Hashes</strong>
                 <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview.preview?.hashes || {}, null, 2)}</pre>
               </div>
@@ -369,6 +419,33 @@ function SecureDeploy() {
               <div>
                 <strong>Plan expiry</strong> {preview.plan?.expires_at}
               </div>
+              {approval && (
+                <div>
+                  <strong>Approval</strong>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({
+                    approval_id: approval.approval_id,
+                    status: approval.status,
+                    expires_at: approval.expires_at
+                  }, null, 2)}</pre>
+                </div>
+              )}
+              {brokerResult && (
+                <div>
+                  <strong>Broker dry-run</strong>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(brokerResult, null, 2)}</pre>
+                </div>
+              )}
+              <div style={{ display: 'grid', gap: '0.5rem' }}>
+                <label>
+                  Step-up TOTP (approve / revoke)
+                  <input
+                    type="password"
+                    autoComplete="one-time-code"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                  />
+                </label>
+              </div>
             </div>
           )}
         </div>
@@ -379,6 +456,8 @@ function SecureDeploy() {
         <button type="button" className="btn" disabled={busy} onClick={validate}>Validate</button>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={generatePreview}>Generate preview</button>
         <button type="button" className="btn" disabled={!preview?.plan} onClick={downloadPlan}>Download redacted plan</button>
+        <button type="button" className="btn" disabled={busy || !preview?.plan} onClick={approvePlan}>Approve plan</button>
+        <button type="button" className="btn" disabled={busy || !approval?.approval_id} onClick={verifyWithBroker}>Verify with broker</button>
       </div>
     </div>
   )

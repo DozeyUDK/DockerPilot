@@ -1,0 +1,47 @@
+[Unit]
+Description=DockerPilot Extras (unprivileged Secure Deploy control plane)
+Documentation=file:///opt/dockerpilot/docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md
+After=network.target
+# Requires=dockerpilot-secure-broker.socket  # enable when broker is installed
+
+[Service]
+Type=simple
+User=dockerpilot-extras
+Group=dockerpilot-extras
+# SupplementaryGroups=dockerpilot-broker  # socket group only; NEVER docker
+WorkingDirectory=/var/lib/dockerpilot-extras
+Environment=WEB_AUTH_ENABLED=true
+Environment=SESSION_COOKIE_SECURE=true
+Environment=SESSION_COOKIE_SAMESITE=Lax
+Environment=SECURE_DEPLOY_REQUIRE_ORIGIN=true
+Environment=SECURE_DEPLOY_TRUSTED_CLIENT=false
+Environment=SECURE_DEPLOY_BROKER_SOCKET=/run/dockerpilot/secure-broker.sock
+Environment=SECURE_DEPLOY_STORE_ROOT=/var/lib/dockerpilot-extras/secure_deploy
+# DOZEYGUARD_BIN is UI-side only and is NOT a trust boundary for the broker.
+ExecStart=/usr/bin/env python3 -m backend.app
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @reboot @swap @raw-io @debug
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/dockerpilot-extras /run/dockerpilot
+# Explicitly no docker.sock, no /usr/bin/docker group, no sudo.
+
+[Install]
+WantedBy=multi-user.target
