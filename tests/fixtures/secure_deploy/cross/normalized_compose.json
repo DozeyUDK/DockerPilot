@@ -1,0 +1,58 @@
+{
+  "services": {
+    "web": {
+      "image": "docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "user": "101:101",
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "pids_limit": 128,
+      "mem_limit": "256m",
+      "cpus": "0.50",
+      "restart": "unless-stopped",
+      "command": ["nginx", "-g", "daemon off;"],
+      "entrypoint": ["nginx"],
+      "ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "published": 18080,
+          "target": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        "web_data:/var/lib/nginx",
+        {
+          "type": "bind",
+          "source": "/mnt/sdc_share/apps/web",
+          "target": "/etc/nginx/conf.d",
+          "read_only": true
+        },
+        {
+          "type": "tmpfs",
+          "target": "/var/cache/nginx"
+        }
+      ],
+      "healthcheck": {
+        "test": ["CMD", "wget", "-qO-", "http://127.0.0.1/"],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "10s"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {"max-size": "10m", "max-file": "3"}
+      },
+      "networks": ["private"]
+    }
+  },
+  "networks": {
+    "private": {
+      "internal": true
+    }
+  },
+  "volumes": {
+    "web_data": {}
+  }
+}

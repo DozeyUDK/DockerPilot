@@ -1,0 +1,12 @@
+{
+  "spec_sha256": "6d2babdad097500a2b0988c68aa9117c2c212cddf13477a6af76441626b64c2b",
+  "normalized_compose_sha256": "a28d27bea5c07da35de1e13e52cd97219f3b37f9c8ddb19183c46836c488aaf2",
+  "deployment_plan_sha256": "fb4ade4d93c88af8a8c5dfea9dad975e7a41d0957476636057ab4945b86c5640",
+  "dozeyguard_result_sha256": "c9d8d295237b2d09eed810b7fb884c58fd19c962fb2626f5eb1a5bad59171c5f",
+  "notes": {
+    "spec_fixture": "pass/minimal_production_localhost.json",
+    "compose_fixture": "cross/normalized_compose.json",
+    "plan_fixture": "cross/deployment_plan_template.json with spec_sha256 and normalized_compose_sha256 substituted before hashing",
+    "dozeyguard_fixture": "cross/dozeyguard_golden_result.json (result.result_sha256 omitted from hash payload)"
+  }
+}

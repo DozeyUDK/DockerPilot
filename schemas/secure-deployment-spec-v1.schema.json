@@ -1,0 +1,399 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/secure-deployment-spec-v1.schema.json",
+  "title": "SecureDeploymentSpec",
+  "description": "DockerPilot Secure Deployment Spec v1. Closed schema; no secret values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "metadata",
+    "image",
+    "runtime",
+    "network",
+    "storage",
+    "secrets",
+    "health",
+    "deployment",
+    "exceptions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "service", "owner", "environment"],
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "owner": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 1024 },
+        "environment": {
+          "type": "string",
+          "enum": ["dev", "staging", "production"]
+        },
+        "change_ticket": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "digest", "pull_policy", "allow_mutable_tag"],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Registry/name without digest fragment"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "pull_policy": {
+          "type": "string",
+          "enum": ["never", "if_not_present", "always"]
+        },
+        "allow_mutable_tag": { "type": "boolean" },
+        "exception_ref": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "read_only",
+        "no_new_privileges",
+        "cap_drop",
+        "cap_add",
+        "restart_policy"
+      ],
+      "properties": {
+        "user": {
+          "type": "string",
+          "pattern": "^[0-9]{1,10}:[0-9]{1,10}$"
+        },
+        "group": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]{1,10}$"
+        },
+        "read_only": { "type": "boolean", "const": true },
+        "no_new_privileges": { "type": "boolean", "const": true },
+        "init": { "type": "boolean" },
+        "restart_policy": {
+          "type": "string",
+          "enum": ["no", "on-failure", "unless-stopped"]
+        },
+        "stop_grace_period_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "cap_drop": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "contains": { "const": "ALL" },
+          "uniqueItems": true
+        },
+        "cap_add": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "not": { "enum": ["ALL", "all", "All"] }
+          },
+          "uniqueItems": true
+        },
+        "pids_limit": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "memory_limit": {
+          "type": "string",
+          "pattern": "^[0-9]+[kKmMgG]?$"
+        },
+        "cpu_limit": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?$"
+        },
+        "tmpfs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target"],
+            "properties": {
+              "target": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "size_bytes": { "type": "integer", "minimum": 1 },
+              "mode": { "type": "string", "pattern": "^[0-7]{3,4}$" }
+            }
+          }
+        },
+        "command": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "entrypoint": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exposure", "published_ports", "allowed_sources", "networks"],
+      "properties": {
+        "exposure": {
+          "type": "string",
+          "enum": [
+            "none",
+            "localhost",
+            "lan_allowlist",
+            "zerotier_allowlist",
+            "public_via_existing_proxy"
+          ]
+        },
+        "published_ports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "container_port",
+              "host_port",
+              "protocol",
+              "bind_address",
+              "exposure"
+            ],
+            "properties": {
+              "container_port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "host_port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "protocol": { "type": "string", "enum": ["tcp", "udp"] },
+              "bind_address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "exposure": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "localhost",
+                  "lan_allowlist",
+                  "zerotier_allowlist",
+                  "public_via_existing_proxy"
+                ]
+              }
+            }
+          }
+        },
+        "allowed_sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "CIDR (IPv4 or IPv6)",
+            "minLength": 3,
+            "maxLength": 64
+          }
+        },
+        "networks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          }
+        },
+        "dns": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volumes"],
+      "properties": {
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "target", "read_only"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["named_volume", "bind", "tmpfs"]
+              },
+              "source": { "type": ["string", "null"], "maxLength": 1024 },
+              "target": { "type": "string", "pattern": "^/", "maxLength": 1024 },
+              "read_only": { "type": "boolean" },
+              "approved_root_ref": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              }
+            }
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["refs"],
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "provider",
+              "manifest_service",
+              "target",
+              "injection"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_./-]+$"
+              },
+              "provider": { "type": "string", "const": "openbao" },
+              "manifest_service": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "injection": {
+                "type": "string",
+                "enum": ["file", "environment"]
+              },
+              "environment_key": {
+                "type": ["string", "null"],
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "test", "interval_seconds", "timeout_seconds", "retries"],
+      "properties": {
+        "required": { "type": "boolean", "const": true },
+        "test": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "interval_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "retries": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "start_period_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "rollback_enabled",
+        "health_timeout_seconds",
+        "lock_scope"
+      ],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["recreate", "rolling"]
+        },
+        "rollback_enabled": { "type": "boolean" },
+        "health_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "max_unavailable": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "lock_scope": {
+          "type": "string",
+          "enum": ["project_service"]
+        }
+      }
+    },
+    "exceptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_refs"],
+      "properties": {
+        "policy_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rule", "reason", "owner", "expires"],
+            "properties": {
+              "rule": {
+                "type": "string",
+                "pattern": "^DG[0-9]{3}$"
+              },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "owner": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "expires": {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
