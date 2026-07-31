@@ -8,6 +8,7 @@ import Login from './pages/Login'
 import Pipelines from './pages/Pipelines'
 import Environments from './pages/Environments'
 import Status from './pages/Status'
+import SecureDeploy from './pages/SecureDeploy'
 import './App.css'
 
 function Navigation() {
@@ -18,7 +19,8 @@ function Navigation() {
   const navItems = [
     { path: '/', label: 'CI/CD Pipelines', component: Pipelines },
     { path: '/environments', label: 'Environments', component: Environments },
-    { path: '/status', label: 'Status', component: Status }
+    { path: '/status', label: 'Status', component: Status },
+    { path: '/secure-deploy', label: 'Secure Deploy', component: SecureDeploy }
   ]
 
   return (
@@ -127,6 +129,7 @@ function AppShell() {
               <Route path="/deployments" element={<Navigate to="/environments" replace />} />
               <Route path="/environments" element={<Environments />} />
               <Route path="/status" element={<Status />} />
+              <Route path="/secure-deploy" element={<SecureDeploy />} />
             </Routes>
           </main>
         </div>

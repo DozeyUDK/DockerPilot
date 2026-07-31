@@ -11,11 +11,21 @@ pytest.importorskip("flask")
 pytest.importorskip("flask_restful")
 
 
-def _load_backend_app_module():
+def _load_backend_app_module(monkeypatch=None):
     extras_dir = Path(__file__).resolve().parents[1] / "DockerPilotExtras"
     extras_dir_str = str(extras_dir)
     if extras_dir_str not in sys.path:
         sys.path.insert(0, extras_dir_str)
+    # Legacy API tests expect WEB_AUTH_ENABLED=false (default product config).
+    if monkeypatch is not None:
+        monkeypatch.setenv("WEB_AUTH_ENABLED", "false")
+    else:
+        import os
+
+        os.environ["WEB_AUTH_ENABLED"] = "false"
+    for name in list(sys.modules):
+        if name == "backend.app" or name.startswith("backend.secure_deploy") or name == "backend.api":
+            sys.modules.pop(name, None)
     return importlib.import_module("backend.app")
 
 
@@ -36,7 +46,7 @@ class _FakePilot:
 
 
 def test_status_endpoint_local_context(monkeypatch):
-    backend_app_module = _load_backend_app_module()
+    backend_app_module = _load_backend_app_module(monkeypatch)
     client = backend_app_module.app.test_client()
 
     monkeypatch.setattr(backend_app_module, "get_selected_server_config", lambda: None)
@@ -53,7 +63,7 @@ def test_status_endpoint_local_context(monkeypatch):
 
 
 def test_status_endpoint_remote_context_and_versions(monkeypatch):
-    backend_app_module = _load_backend_app_module()
+    backend_app_module = _load_backend_app_module(monkeypatch)
     client = backend_app_module.app.test_client()
 
     server = {"id": "prod-1", "name": "Prod Node", "hostname": "prod.example.internal"}
@@ -83,7 +93,7 @@ def test_status_endpoint_remote_context_and_versions(monkeypatch):
 
 
 def test_status_endpoint_remote_probe_errors(monkeypatch):
-    backend_app_module = _load_backend_app_module()
+    backend_app_module = _load_backend_app_module(monkeypatch)
     client = backend_app_module.app.test_client()
 
     server = {"id": "stage-1", "name": "Stage Node", "hostname": "stage.example.internal"}
