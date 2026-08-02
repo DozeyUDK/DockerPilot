@@ -1,0 +1,5 @@
+# Staged tmpfiles for Secure Deploy (#11D.1 — not installed)
+d /run/dockerpilot 0750 root dockerpilot-broker -
+d /var/lib/dockerpilot-extras 0750 dockerpilot-extras dockerpilot-extras -
+d /var/lib/dockerpilot-extras/secure_deploy 0700 dockerpilot-extras dockerpilot-extras -
+z /run/dockerpilot/secure-broker.sock 0660 root dockerpilot-broker -

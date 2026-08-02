@@ -1,0 +1,56 @@
+[Unit]
+Description=DockerPilot Secure Deploy Broker (verify/dry-run only)
+Documentation=file:///usr/libexec/dockerpilot-secure-broker/docs/ROOT_BROKER_SYSTEMD_HARDENING.md
+Requires=dockerpilot-secure-broker.socket
+After=network.target dockerpilot-secure-broker.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+ExecStart=/usr/libexec/dockerpilot-secure-broker/broker --config /etc/dockerpilot-secure-broker/config.json
+Restart=on-failure
+RestartSec=2
+
+# Environment — no EnvironmentFile from user-writable paths
+Environment=PYTHONNOUSERSITE=1
+Environment=DOCKERPILOT_BROKER_STRICT_ENV=1
+Environment=PATH=/usr/bin:/bin
+Environment=HOME=/
+Environment=LANG=C.UTF-8
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+# MemoryDenyWriteExecute may break some Python runtimes; keep enabled and document if host fails.
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @reboot @swap @raw-io @debug @module
+
+InaccessiblePaths=/var/run/docker.sock
+InaccessiblePaths=-/run/docker.sock
+ReadWritePaths=/var/lib/dockerpilot-secure-broker /run/dockerpilot-secure-broker
+ReadOnlyPaths=/usr/libexec/dockerpilot-secure-broker /etc/dockerpilot-secure-broker
+
+# Apply/deploy/firewall/secret materialization are NOT enabled in this unit.
+
+[Install]
+WantedBy=multi-user.target

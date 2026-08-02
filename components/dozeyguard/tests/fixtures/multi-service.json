@@ -1,0 +1,12 @@
+{
+  "services": {
+    "zeta": {
+      "image": "nginx:latest",
+      "privileged": true
+    },
+    "alpha": {
+      "image": "nginx:latest",
+      "privileged": true
+    }
+  }
+}

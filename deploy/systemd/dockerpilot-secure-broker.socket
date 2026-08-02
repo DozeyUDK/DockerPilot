@@ -1,0 +1,10 @@
+[Socket]
+ListenStream=/run/dockerpilot-secure-broker/broker.sock
+SocketUser=root
+SocketGroup=dockerpilot-secure-broker
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

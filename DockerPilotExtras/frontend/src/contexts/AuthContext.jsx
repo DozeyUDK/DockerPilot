@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { authAPI } from '../services/api'
+import { authAPI, setSecureDeployCsrf } from '../services/api'
 
 const AuthContext = createContext(null)
 
@@ -19,12 +19,15 @@ const defaultState = {
   mfaRequired: false,
   sessionIdleMinutes: 45,
   sessionExpiresInSeconds: null,
+  secureDeployCsrf: null,
 }
 
 export const AuthProvider = ({ children }) => {
   const [state, setState] = useState(defaultState)
 
   const applyStatus = useCallback((payload = {}) => {
+    const csrf = payload.secure_deploy_csrf || null
+    setSecureDeployCsrf(csrf)
     setState(prev => ({
       ...prev,
       checking: false,
@@ -34,6 +37,7 @@ export const AuthProvider = ({ children }) => {
       mfaRequired: Boolean(payload.mfa_required),
       sessionIdleMinutes: payload.session_idle_minutes || prev.sessionIdleMinutes,
       sessionExpiresInSeconds: payload.session_expires_in_seconds ?? null,
+      secureDeployCsrf: csrf,
     }))
   }, [])
 

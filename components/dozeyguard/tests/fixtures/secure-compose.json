@@ -1,0 +1,39 @@
+{
+  "services": {
+    "web": {
+      "image": "docker.io/library/nginx:1.27",
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "pids_limit": 128,
+      "mem_limit": "256m",
+      "cpus": "0.50",
+      "restart": "unless-stopped",
+      "ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "published": 18080,
+          "target": 80
+        }
+      ],
+      "volumes": ["/mnt/sdc_share/apps/web:/var/cache/nginx"],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "wget -qO- http://127.0.0.1 || exit 1"]
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "networks": ["private"]
+    }
+  },
+  "networks": {
+    "private": {
+      "internal": true
+    }
+  }
+}

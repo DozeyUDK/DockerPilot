@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "plan_id": "plan_secure_canary_web_001",
+  "created_at": "2026-07-31T11:00:00+00:00",
+  "expires_at": "2026-07-31T12:00:00+00:00",
+  "actor": "dozey",
+  "spec_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "normalized_compose_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "dozeyguard": {
+    "scanner_version": "0.1.0",
+    "contract_version": 1,
+    "policy_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "result_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "exit_code": 0,
+    "blocking_findings": 0,
+    "warning_findings": 0
+  },
+  "compose": {
+    "project": "secure-canary",
+    "service": "web",
+    "normalized_model": {
+      "services": {
+        "web": {
+          "image": "docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "read_only": true
+        }
+      }
+    }
+  },
+  "firewall": {
+    "required": false,
+    "ufw_actions": [],
+    "docker_user_actions": [],
+    "rollback_actions": []
+  },
+  "secrets": {
+    "required_refs": [
+      {
+        "name": "nginx_htpasswd",
+        "provider": "openbao",
+        "injection": "file"
+      }
+    ]
+  },
+  "deployment": {
+    "strategy": "recreate",
+    "health_gate": {
+      "timeout_seconds": 120,
+      "required": true
+    },
+    "rollback_plan": {
+      "mode": "previous_snapshot"
+    }
+  },
+  "approval": {
+    "required": true,
+    "plan_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "status": "pending",
+    "approved_by": null,
+    "approved_at": null,
+    "expires_at": "2026-07-31T12:00:00+00:00",
+    "nonce": "nonce_test_001"
+  },
+  "invariants": [
+    "no_docker_sock",
+    "no_privileged",
+    "no_host_network",
+    "secrets_refs_only"
+  ],
+  "warnings": []
+}

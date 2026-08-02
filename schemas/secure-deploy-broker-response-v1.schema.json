@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/secure-deploy-broker-response-v1.schema.json",
+  "title": "SecureDeployBrokerResponse",
+  "description": "Unix-socket broker response envelope v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "operation",
+    "ok"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 1 },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "description": "Requested operation. Success responses use supported ops only; error envelopes may echo a sanitized rejected name or 'unknown'."
+    },
+    "ok": { "type": "boolean" },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ping", "capabilities", "verify_plan", "dry_run"]
+          }
+        },
+        "apply_supported": { "type": "boolean", "const": false },
+        "protocol_version": { "type": "integer", "const": 1 }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail"]
+        },
+        "broker_verification_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "ok"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "ok": { "type": "boolean" },
+              "detail": { "type": "string", "maxLength": 256 }
+            }
+          }
+        },
+        "plan_id": { "type": "string", "maxLength": 128 },
+        "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dozeyguard_exit_code": { "type": "integer", "enum": [0, 1, 2] },
+        "blocking_findings": { "type": "integer", "minimum": 0 },
+        "dry_run": { "type": "boolean" }
+      }
+    }
+  }
+}

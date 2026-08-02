@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/deployment-plan-v1.schema.json",
+  "title": "DeploymentPlan",
+  "description": "Immutable Secure Deploy plan v1. No secret values. plan_sha256 is computed over the plan with plan_sha256 omitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "created_at",
+    "expires_at",
+    "actor",
+    "spec_sha256",
+    "normalized_compose_sha256",
+    "dozeyguard",
+    "compose",
+    "firewall",
+    "secrets",
+    "deployment",
+    "approval",
+    "invariants",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "plan_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "actor": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "spec_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "normalized_compose_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Optional on disk after hashing; excluded from hash input"
+    },
+    "dozeyguard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scanner_version",
+        "contract_version",
+        "policy_sha256",
+        "result_sha256",
+        "exit_code",
+        "blocking_findings",
+        "warning_findings"
+      ],
+      "properties": {
+        "scanner_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "contract_version": { "type": "integer", "const": 1 },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "result_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "exit_code": { "type": "integer", "enum": [0, 1, 2] },
+        "blocking_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warning_findings": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "service", "normalized_model"],
+      "properties": {
+        "project": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "normalized_model": {
+          "type": "object",
+          "description": "Secret-free normalized Compose subset",
+          "additionalProperties": true
+        }
+      }
+    },
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "ufw_actions",
+        "docker_user_actions",
+        "rollback_actions"
+      ],
+      "properties": {
+        "required": { "type": "boolean" },
+        "ufw_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "rule_id"],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["allow", "deny", "noop"]
+              },
+              "rule_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "comment": { "type": "string", "maxLength": 256 },
+              "cidr": { "type": "string", "maxLength": 64 },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "proto": { "type": "string", "enum": ["tcp", "udp"] }
+            }
+          }
+        },
+        "docker_user_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "rule_id"],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["allow", "deny", "noop"]
+              },
+              "rule_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "comment": { "type": "string", "maxLength": 256 },
+              "cidr": { "type": "string", "maxLength": 64 },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "proto": { "type": "string", "enum": ["tcp", "udp"] },
+              "family": { "type": "string", "enum": ["ipv4", "ipv6"] }
+            }
+          }
+        },
+        "rollback_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "rule_id"],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["delete", "restore", "noop"]
+              },
+              "rule_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_refs"],
+      "properties": {
+        "required_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "provider", "injection"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "provider": { "type": "string", "const": "openbao" },
+              "injection": {
+                "type": "string",
+                "enum": ["file", "environment"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "health_gate", "rollback_plan"],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["recreate", "rolling"]
+        },
+        "health_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timeout_seconds", "required"],
+          "properties": {
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "required": { "type": "boolean" }
+          }
+        },
+        "rollback_plan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["previous_snapshot", "none"]
+            }
+          }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "plan_sha256", "status", "nonce"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "expired", "consumed", "rejected", "revoked"]
+        },
+        "approved_by": { "type": ["string", "null"], "maxLength": 128 },
+        "approved_at": { "type": ["string", "null"], "maxLength": 40 },
+        "expires_at": { "type": ["string", "null"], "maxLength": 40 },
+        "nonce": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "source_spec": {
+      "type": "object",
+      "description": "Contract v1.1 additive: embedded Spec v1 for independent broker revalidation. Optional for legacy plans; required by broker verify/dry_run.",
+      "additionalProperties": true
+    },
+    "contract_extension": {
+      "type": "string",
+      "const": "v1.1",
+      "description": "Marks plans that include source_spec (additive, non-breaking for schema_version=1)."
+    }
+  }
+}

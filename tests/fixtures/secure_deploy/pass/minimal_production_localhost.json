@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "project": "secure-canary",
+    "service": "web",
+    "owner": "dozey",
+    "description": "Minimal production localhost canary",
+    "environment": "production",
+    "change_ticket": "SD-11B"
+  },
+  "image": {
+    "reference": "docker.io/library/nginx",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pull_policy": "if_not_present",
+    "allow_mutable_tag": false,
+    "exception_ref": null
+  },
+  "runtime": {
+    "user": "101:101",
+    "group": "101",
+    "read_only": true,
+    "no_new_privileges": true,
+    "init": true,
+    "restart_policy": "unless-stopped",
+    "stop_grace_period_seconds": 10,
+    "cap_drop": ["ALL"],
+    "cap_add": [],
+    "pids_limit": 128,
+    "memory_limit": "256m",
+    "cpu_limit": "0.5",
+    "tmpfs": [{"target": "/var/cache/nginx", "size_bytes": 16777216, "mode": "1777"}],
+    "command": ["nginx", "-g", "daemon off;"],
+    "entrypoint": ["nginx"]
+  },
+  "network": {
+    "exposure": "localhost",
+    "published_ports": [
+      {
+        "container_port": 80,
+        "host_port": 18080,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1",
+        "exposure": "localhost"
+      }
+    ],
+    "allowed_sources": [],
+    "networks": ["private"],
+    "dns": []
+  },
+  "storage": {
+    "volumes": [
+      {
+        "type": "named_volume",
+        "source": "web_data",
+        "target": "/var/lib/nginx",
+        "read_only": false,
+        "approved_root_ref": null
+      },
+      {
+        "type": "bind",
+        "source": "/mnt/sdc_share/apps/web",
+        "target": "/etc/nginx/conf.d",
+        "read_only": true,
+        "approved_root_ref": "sdc_share_apps"
+      }
+    ]
+  },
+  "secrets": {
+    "refs": [
+      {
+        "name": "nginx_htpasswd",
+        "provider": "openbao",
+        "manifest_service": "secure-canary-web",
+        "target": "/run/secrets/htpasswd",
+        "injection": "file",
+        "environment_key": null
+      }
+    ]
+  },
+  "health": {
+    "required": true,
+    "test": ["CMD", "wget", "-qO-", "http://127.0.0.1/"],
+    "interval_seconds": 30,
+    "timeout_seconds": 5,
+    "retries": 3,
+    "start_period_seconds": 10
+  },
+  "deployment": {
+    "strategy": "recreate",
+    "rollback_enabled": true,
+    "health_timeout_seconds": 120,
+    "max_unavailable": 1,
+    "lock_scope": "project_service"
+  },
+  "exceptions": {
+    "policy_refs": []
+  }
+}

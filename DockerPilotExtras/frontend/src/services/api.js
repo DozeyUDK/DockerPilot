@@ -10,6 +10,23 @@ const api = axios.create({
   }
 })
 
+let secureDeployCsrf = null
+
+export const setSecureDeployCsrf = (token) => {
+  secureDeployCsrf = token || null
+}
+
+api.interceptors.request.use((config) => {
+  const url = config.url || ''
+  if (url.includes('/secure-deploy/') && ['post', 'put', 'patch', 'delete'].includes((config.method || '').toLowerCase())) {
+    config.headers = config.headers || {}
+    if (secureDeployCsrf) {
+      config.headers['X-CSRF-Token'] = secureDeployCsrf
+    }
+  }
+  return config
+})
+
 // Pipeline API
 export const pipelineAPI = {
   generate: (data) => api.post('/pipeline/generate', data),
@@ -154,6 +171,21 @@ export const authAPI = {
     totp_code: totpCode
   }),
   logout: () => api.post('/auth/logout')
+}
+
+export const secureDeployAPI = {
+  createDraft: (spec) => api.post('/secure-deploy/drafts', { spec }),
+  getDraft: (draftId) => api.get(`/secure-deploy/drafts/${draftId}`),
+  validate: (spec) => api.post('/secure-deploy/validate', { spec }),
+  plan: (spec) => api.post('/secure-deploy/plan', { spec }),
+  getPlan: (planId) => api.get(`/secure-deploy/plans/${planId}`),
+  approve: (planId, { plan_sha256, totp_code }) =>
+    api.post(`/secure-deploy/plans/${planId}/approve`, { plan_sha256, totp_code }),
+  getApproval: (approvalId) => api.get(`/secure-deploy/approvals/${approvalId}`),
+  revoke: (approvalId, { totp_code }) =>
+    api.post(`/secure-deploy/approvals/${approvalId}/revoke`, { totp_code }),
+  brokerDryRun: (planId, { approval_id }) =>
+    api.post(`/secure-deploy/plans/${planId}/broker-dry-run`, { approval_id })
 }
 
 // Health check

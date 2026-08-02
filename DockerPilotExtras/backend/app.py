@@ -46,6 +46,15 @@ from backend.resources.progress import create_progress_resources
 from backend.resources.servers import create_server_resources
 from backend.resources.storage import create_storage_resources
 from backend.resources.status import create_status_resources
+from backend.secure_deploy.resources import create_secure_deploy_resources
+from backend.secure_deploy.service import SecureDeployService
+from backend.secure_deploy.store import FileSecureDeployStore
+from backend.secure_deploy.errors import (
+    AuthRequiredError,
+    ForbiddenError,
+    UnauthorizedError,
+    SecureDeployError as SecureDeployGateError,
+)
 from backend.services.environment_status import build_environment_status as _svc_build_environment_status
 from backend.services.host_network import (
     extract_port_from_string as _svc_extract_port_from_string,
@@ -417,7 +426,10 @@ def load_deployment_config(container_name: str, env: str = None) -> dict:
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Lax is compatible with SPA-on-different-port (SameSite is scheme+eTLD+1, not port).
+# Production must set SESSION_COOKIE_SECURE=true; Secure Deploy POSTs always require CSRF,
+# and production/SECURE_DEPLOY_REQUIRE_ORIGIN also requires allowlisted Origin.
+app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
     'SESSION_COOKIE_SECURE',
     'true' if os.environ.get('FLASK_ENV') == 'production' else 'false'
@@ -583,8 +595,10 @@ def _auth_status_payload():
         'authenticated': bool(authed),
         'username': session.get('auth_username') if authed else None,
         'mfa_required': bool(WEB_AUTH_TOTP_SECRET),
+        'mfa_verified': bool(session.get('auth_mfa_verified')) if authed else False,
         'session_idle_minutes': APP_SESSION_IDLE_MINUTES,
         'session_expires_in_seconds': expires_in,
+        'secure_deploy_csrf': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
     }
 
 
@@ -609,6 +623,9 @@ def require_auth_for_api():
         return None
     if path in PUBLIC_API_PATHS:
         return None
+    # Secure Deploy has a stricter dedicated gate.
+    if path.startswith('/api/secure-deploy/'):
+        return None
 
     if not _is_authenticated_session():
         return jsonify({
@@ -617,6 +634,104 @@ def require_auth_for_api():
             'auth_required': True,
         }), 401
     return None
+
+
+SECURE_DEPLOY_MAX_BODY = 2 * 1024 * 1024
+
+
+def _ensure_secure_deploy_csrf() -> str:
+    token = session.get('secure_deploy_csrf')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['secure_deploy_csrf'] = token
+        session.permanent = True
+    return token
+
+
+def _secure_deploy_origin_allowed() -> bool:
+    origin = (request.headers.get('Origin') or '').strip()
+    referer = (request.headers.get('Referer') or '').strip()
+    allowed = set(cors_origins)
+    if origin:
+        return origin in allowed
+    if referer:
+        return any(referer.startswith(item.rstrip('/') + '/') or referer.rstrip('/') == item.rstrip('/') for item in allowed)
+    return False
+
+
+def require_secure_deploy_access() -> None:
+    """Fail-closed auth gate for /api/secure-deploy/* (stricter than legacy)."""
+    if not WEB_AUTH_ENABLED:
+        raise AuthRequiredError(
+            code='secure_deploy_auth_required',
+            message='Secure Deploy requires WEB_AUTH_ENABLED=true',
+        )
+    if not WEB_AUTH_TOTP_SECRET:
+        raise ForbiddenError(
+            code='secure_deploy_mfa_required',
+            message='Secure Deploy requires WEB_AUTH_TOTP_SECRET / MFA',
+        )
+    if not _is_authenticated_session():
+        raise UnauthorizedError()
+    if not session.get('auth_mfa_verified'):
+        raise ForbiddenError(
+            code='secure_deploy_mfa_unverified',
+            message='Secure Deploy requires verified MFA session',
+        )
+
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        csrf_header = (request.headers.get('X-CSRF-Token') or '').strip()
+        csrf_session = session.get('secure_deploy_csrf') or ''
+        csrf_ok = bool(csrf_header) and bool(csrf_session) and hmac.compare_digest(csrf_header, csrf_session)
+        if not csrf_ok:
+            raise ForbiddenError(
+                code='secure_deploy_csrf',
+                message='Secure Deploy CSRF token required',
+            )
+
+        origin = (request.headers.get('Origin') or '').strip()
+        require_origin = (
+            os.environ.get('SECURE_DEPLOY_REQUIRE_ORIGIN', '').lower() == 'true'
+            or os.environ.get('FLASK_ENV') == 'production'
+            or app.config.get('SESSION_COOKIE_SECURE')
+        )
+        trusted_client = os.environ.get('SECURE_DEPLOY_TRUSTED_CLIENT', 'false').lower() == 'true'
+        # SameSite is scheme+registrable-domain (not port). CSRF is always required;
+        # production browser calls must also send an allowlisted Origin.
+        if require_origin and not trusted_client:
+            if not origin:
+                raise ForbiddenError(
+                    code='secure_deploy_csrf',
+                    message='Secure Deploy Origin required in production',
+                )
+            if not _secure_deploy_origin_allowed():
+                raise ForbiddenError(
+                    code='secure_deploy_csrf',
+                    message='Secure Deploy Origin check failed',
+                )
+        elif origin and not _secure_deploy_origin_allowed():
+            raise ForbiddenError(
+                code='secure_deploy_csrf',
+                message='Secure Deploy Origin check failed',
+            )
+    _ensure_secure_deploy_csrf()
+
+
+def get_secure_deploy_actor() -> str:
+    return str(session.get('auth_username') or WEB_AUTH_USERNAME)
+
+
+def get_secure_deploy_session_hash() -> str:
+    from backend.secure_deploy.approval import session_id_hash
+
+    material = '|'.join(
+        [
+            str(session.get('auth_username') or ''),
+            str(session.get('secure_deploy_csrf') or ''),
+            str(session.get('auth_mfa_verified') or ''),
+        ]
+    )
+    return session_id_hash(material)
 
 # Configuration
 app.config['CONFIG_DIR'] = Path.home() / ".dockerpilot_extras"
@@ -2016,6 +2131,60 @@ def ensure_local_postgres_container(
 )
 
 
+_secure_deploy_root = Path(
+    os.environ.get(
+        'SECURE_DEPLOY_STORE_ROOT',
+        str(Path.home() / '.dockerpilot_extras' / 'secure_deploy'),
+    )
+)
+_secure_deploy_store = FileSecureDeployStore(_secure_deploy_root)
+_secure_deploy_service = SecureDeployService(_secure_deploy_store)
+
+from backend.secure_deploy.approval import ApprovalService
+from backend.secure_deploy.broker_client import BrokerClient
+from backend.secure_deploy.step_up import StepUpTotpGuard
+
+_secure_deploy_approvals = ApprovalService(_secure_deploy_store)
+_secure_deploy_broker = BrokerClient(os.environ.get('SECURE_DEPLOY_BROKER_SOCKET'))
+_secure_deploy_step_up = StepUpTotpGuard(
+    verify_fn=lambda secret, code, window=1: _verify_totp_code(secret, code, window),
+)
+
+
+def _verify_secure_deploy_step_up(code: str) -> bool:
+    actor = get_secure_deploy_actor()
+    return _secure_deploy_step_up.verify(
+        actor_key=actor,
+        secret=WEB_AUTH_TOTP_SECRET,
+        code=code,
+        window=WEB_AUTH_TOTP_WINDOW,
+    )
+
+
+(
+    SecureDeployDrafts,
+    SecureDeployDraftDetail,
+    SecureDeployValidate,
+    SecureDeployPlan,
+    SecureDeployPlanDetail,
+    SecureDeployPlanApprove,
+    SecureDeployApprovalDetail,
+    SecureDeployApprovalRevoke,
+    SecureDeployBrokerDryRun,
+) = create_secure_deploy_resources(
+    Resource=Resource,
+    request=request,
+    service=_secure_deploy_service,
+    approval_service=_secure_deploy_approvals,
+    broker_client=_secure_deploy_broker,
+    require_secure_deploy_access=require_secure_deploy_access,
+    get_actor=get_secure_deploy_actor,
+    get_session_hash=get_secure_deploy_session_hash,
+    verify_step_up_totp=_verify_secure_deploy_step_up,
+    max_body_bytes=SECURE_DEPLOY_MAX_BODY,
+)
+
+
 register_api_routes(
     api,
     HealthCheck=HealthCheck,
@@ -2065,6 +2234,15 @@ register_api_routes(
     ContainerMigrate=ContainerMigrate,
     MigrationProgress=MigrationProgress,
     CancelMigration=CancelMigration,
+    SecureDeployDrafts=SecureDeployDrafts,
+    SecureDeployDraftDetail=SecureDeployDraftDetail,
+    SecureDeployValidate=SecureDeployValidate,
+    SecureDeployPlan=SecureDeployPlan,
+    SecureDeployPlanDetail=SecureDeployPlanDetail,
+    SecureDeployPlanApprove=SecureDeployPlanApprove,
+    SecureDeployApprovalDetail=SecureDeployApprovalDetail,
+    SecureDeployApprovalRevoke=SecureDeployApprovalRevoke,
+    SecureDeployBrokerDryRun=SecureDeployBrokerDryRun,
 )
 
 

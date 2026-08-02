@@ -1,0 +1,21 @@
+{
+  "services": {
+    "camera": {
+      "image": "ghcr.io/example/camera:2.1",
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "pids_limit": 128,
+      "mem_limit": "256m",
+      "cpus": "0.50",
+      "restart": "unless-stopped",
+      "devices": ["/dev/video0:/dev/video0"],
+      "healthcheck": {"test": ["CMD", "true"]},
+      "logging": {
+        "driver": "json-file",
+        "options": {"max-size": "10m", "max-file": "3"}
+      }
+    }
+  }
+}

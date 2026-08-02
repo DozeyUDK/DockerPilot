@@ -1,0 +1,30 @@
+{
+  "services": {
+    "wideopen": {
+      "image": "docker.io/library/nginx:1.27",
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": ["ALL"],
+      "cap_add": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "pids_limit": 64,
+      "mem_limit": "128m",
+      "cpus": "0.25",
+      "restart": "unless-stopped",
+      "ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "published": 18081,
+          "target": 80
+        }
+      ],
+      "healthcheck": {
+        "test": ["CMD", "true"]
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {"max-size": "10m", "max-file": "3"}
+      }
+    }
+  }
+}

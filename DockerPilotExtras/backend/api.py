@@ -53,6 +53,15 @@ def register_api_routes(
     ContainerMigrate,
     MigrationProgress,
     CancelMigration,
+    SecureDeployDrafts=None,
+    SecureDeployDraftDetail=None,
+    SecureDeployValidate=None,
+    SecureDeployPlan=None,
+    SecureDeployPlanDetail=None,
+    SecureDeployPlanApprove=None,
+    SecureDeployApprovalDetail=None,
+    SecureDeployApprovalRevoke=None,
+    SecureDeployBrokerDryRun=None,
 ):
     """Register all API resources and routes."""
     api.add_resource(HealthCheck, "/api/health")
@@ -102,3 +111,26 @@ def register_api_routes(
     api.add_resource(ContainerMigrate, "/api/containers/migrate")
     api.add_resource(MigrationProgress, "/api/containers/migration-progress")
     api.add_resource(CancelMigration, "/api/containers/cancel-migration")
+    if SecureDeployDrafts is not None:
+        api.add_resource(SecureDeployDrafts, "/api/secure-deploy/drafts")
+        api.add_resource(SecureDeployDraftDetail, "/api/secure-deploy/drafts/<string:draft_id>")
+        api.add_resource(SecureDeployValidate, "/api/secure-deploy/validate")
+        api.add_resource(SecureDeployPlan, "/api/secure-deploy/plan")
+        api.add_resource(SecureDeployPlanDetail, "/api/secure-deploy/plans/<string:plan_id>")
+        if SecureDeployPlanApprove is not None:
+            api.add_resource(
+                SecureDeployPlanApprove,
+                "/api/secure-deploy/plans/<string:plan_id>/approve",
+            )
+            api.add_resource(
+                SecureDeployApprovalDetail,
+                "/api/secure-deploy/approvals/<string:approval_id>",
+            )
+            api.add_resource(
+                SecureDeployApprovalRevoke,
+                "/api/secure-deploy/approvals/<string:approval_id>/revoke",
+            )
+            api.add_resource(
+                SecureDeployBrokerDryRun,
+                "/api/secure-deploy/plans/<string:plan_id>/broker-dry-run",
+            )

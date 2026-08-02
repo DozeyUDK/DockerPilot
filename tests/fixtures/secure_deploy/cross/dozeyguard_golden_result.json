@@ -1,0 +1,28 @@
+{
+  "contract_version": 1,
+  "scanner": {
+    "name": "dozeyguard",
+    "version": "0.1.0"
+  },
+  "input": {
+    "format": "compose-json",
+    "sha256": "a28d27bea5c07da35de1e13e52cd97219f3b37f9c8ddb19183c46836c488aaf2",
+    "bytes": 920
+  },
+  "policy": {
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "exceptions_applied": []
+  },
+  "summary": {
+    "services": 1,
+    "findings": 0,
+    "blocking": 0,
+    "warnings": 0,
+    "info": 0
+  },
+  "findings": [],
+  "result": {
+    "status": "pass",
+    "exit_code": 0
+  }
+}
