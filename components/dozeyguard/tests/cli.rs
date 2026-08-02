@@ -339,3 +339,235 @@ fn json_contract_contains_hashes_and_stable_keys() {
     assert!(value["result"]["result_sha256"].as_str().unwrap().len() == 64);
     assert!(value["scanner"]["name"] == "dozeyguard");
 }
+
+fn minimal_compose_payload(pad_to: usize) -> Vec<u8> {
+    let mut payload = br#"{"services":{"web":{"image":"nginx:alpine"}}}"#.to_vec();
+    if payload.len() < pad_to {
+        payload.resize(pad_to, b' ');
+    }
+    payload
+}
+
+#[test]
+fn file_exact_limit_accepted() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("exact.json");
+    let payload = minimal_compose_payload(64);
+    assert_eq!(payload.len(), 64);
+    std::fs::write(&path, &payload).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            path.to_str().unwrap(),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "64",
+            "--fail-on",
+            "critical",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\"contract_version\": 1"));
+    assert!(!stdout.contains("input_too_large"));
+}
+
+#[test]
+fn file_limit_plus_one_rejected() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("plusone.json");
+    let payload = minimal_compose_payload(65);
+    std::fs::write(&path, &payload).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            path.to_str().unwrap(),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "64",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("input_too_large"));
+    assert!(stdout.contains("exceeds") || stdout.contains("65 > 64"));
+}
+
+#[test]
+fn large_file_rejected_without_full_load() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("huge.json");
+    // Several MiB — unbounded fs::read would allocate all of it before the limit check.
+    let mut payload = minimal_compose_payload(48);
+    payload.resize(4 * 1024 * 1024, b' ');
+    std::fs::write(&path, &payload).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            path.to_str().unwrap(),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "1024",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("input_too_large"));
+}
+
+#[test]
+fn stdin_exact_limit_accepted() {
+    let payload = minimal_compose_payload(64);
+    let mut child = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            "-",
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "64",
+            "--fail-on",
+            "critical",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&payload).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("input_too_large"));
+}
+
+#[test]
+fn stdin_limit_plus_one_rejected() {
+    let payload = minimal_compose_payload(65);
+    let mut child = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            "-",
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "64",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&payload).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("input_too_large"));
+}
+
+#[test]
+fn zero_max_input_bytes_rejected() {
+    let output = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            &fixture("secure-compose.json"),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--max-input-bytes",
+            "0",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("invalid_limit") || stdout.contains("greater than zero"));
+}
+
+#[test]
+fn secure_fixture_json_sha_stable_under_bounded_input() {
+    let output = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            &fixture("secure-compose.json"),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--fail-on",
+            "low",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let first: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+
+    let output2 = Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            &fixture("secure-compose.json"),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            &fixture("policy.toml"),
+            "--output",
+            "json",
+            "--fail-on",
+            "low",
+        ])
+        .output()
+        .unwrap();
+    let second: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output2.stdout).unwrap()).unwrap();
+    assert_eq!(
+        first["result"]["result_sha256"],
+        second["result"]["result_sha256"]
+    );
+}

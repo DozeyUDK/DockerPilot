@@ -48,5 +48,6 @@ Runtime broker and Extras adapter must use an **installed / staged binary** path
 
 ## Known follow-ups
 
-- **#11B.1** — bounded `fs::read(input)` for file inputs remains an open finding;
-  do not “fix” it in this integration batch.
+Bounded compose input (`read_bounded` / metadata precheck) is implemented (#11B.1).
+Policy files still use a normal text read (small TOML); compose payloads never use
+unbounded `fs::read`.

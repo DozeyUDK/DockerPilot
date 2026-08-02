@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod finding;
 pub mod hashutil;
+pub mod input;
 pub mod model;
 pub mod output;
 pub mod parser;

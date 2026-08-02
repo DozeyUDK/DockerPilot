@@ -1,11 +1,12 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::finding::{scan_exit_code, Severity};
+use crate::input::read_bounded;
 use crate::output;
 use crate::parser;
 use crate::policy::Policy;
@@ -121,8 +122,11 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
     let input = match read_input(&args.input, args.max_input_bytes) {
         Ok(bytes) => bytes,
         Err(error) => {
-            let message = error.to_string();
-            let code = if message.contains("input exceeds") {
+            let message = format!("{error:#}");
+            let code = if error
+                .chain()
+                .any(|cause| cause.to_string().contains("input exceeds"))
+            {
                 "input_too_large"
             } else {
                 "input_error"
@@ -207,23 +211,26 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
 }
 
 fn read_input(input: &str, max_bytes: usize) -> anyhow::Result<Vec<u8>> {
-    let bytes = if input == "-" {
-        let mut buffer = Vec::new();
-        io::stdin()
-            .take((max_bytes as u64).saturating_add(1))
-            .read_to_end(&mut buffer)
-            .context("failed to read stdin")?;
-        buffer
-    } else {
-        fs::read(input).context("failed to read input file")?
-    };
-
-    if bytes.len() > max_bytes {
-        bail!(
-            "input exceeds max-input-bytes limit ({} > {})",
-            bytes.len(),
-            max_bytes
-        );
+    if input == "-" {
+        return read_bounded(io::stdin().lock(), max_bytes).context("failed to read stdin");
     }
-    Ok(bytes)
+
+    // Fast precheck for regular files. Final authority is the bounded reader
+    // (covers TOCTOU growth and non-regular paths where metadata is unreliable).
+    if let Ok(meta) = fs::metadata(input) {
+        if meta.is_file() {
+            let len = meta.len();
+            let max = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            if len > max {
+                bail!(
+                    "input exceeds max-input-bytes limit ({} > {})",
+                    len,
+                    max_bytes
+                );
+            }
+        }
+    }
+
+    let file = fs::File::open(input).context("failed to read input file")?;
+    read_bounded(file, max_bytes).context("failed to read input file")
 }
