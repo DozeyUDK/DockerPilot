@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=root
 # Socket mode 0660 root:dockerpilot-broker — Extras joins that group only.
-ExecStart=/usr/local/sbin/dockerpilot-secure-broker --socket /run/dockerpilot/secure-broker.sock
+ExecStart=/usr/local/sbin/dockerpilot-secure-broker --socket /run/dockerpilot-secure-broker/broker.sock
 Environment=BROKER_DOZEYGUARD_BIN=/usr/local/lib/dockerpilot/dozeyguard
 Environment=BROKER_DOZEYGUARD_POLICY_PATH=/etc/dockerpilot/dozeyguard-policy.toml
 Environment=BROKER_DOZEYGUARD_POLICY_SHA256=REPLACE_WITH_POLICY_SHA256

@@ -169,7 +169,14 @@ class FileSecureDeployStore:
         body["store_expires_at_ts"] = current.get("store_expires_at_ts") or (time.time() + self.ttl_seconds)
         self._atomic_write(path, body)
 
-    def find_active_approval(self, plan_id: str, plan_sha256: str) -> Optional[Dict[str, Any]]:
+    def find_active_approval(
+        self,
+        plan_id: str,
+        plan_sha256: str,
+        *,
+        now_ts: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        now = time.time() if now_ts is None else now_ts
         for path in self.approvals_dir.glob("*.json"):
             if path.is_symlink():
                 continue
@@ -182,5 +189,21 @@ class FileSecureDeployStore:
                 and data.get("plan_sha256") == plan_sha256
                 and data.get("status") == "approved"
             ):
+                expires_at = data.get("expires_at")
+                if isinstance(expires_at, str):
+                    try:
+                        if now >= _parse_iso_to_epoch(expires_at):
+                            continue
+                    except ValueError:
+                        continue
+                store_expires_at = data.get("store_expires_at_ts")
+                if isinstance(store_expires_at, (int, float)) and now > float(store_expires_at):
+                    continue
                 return data
         return None
+
+
+def _parse_iso_to_epoch(value: str) -> float:
+    from datetime import datetime, timezone
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()

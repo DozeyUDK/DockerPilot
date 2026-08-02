@@ -8,8 +8,9 @@ import os
 import socket
 import struct
 import sys
-import tempfile
+import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -23,6 +24,32 @@ FAKE_DG = ROOT / "tests" / "fixtures" / "secure_deploy_preview" / "fake_dozeygua
 POLICY = ROOT / "DockerPilotExtras" / "backend" / "secure_deploy" / "policy" / "preview.toml"
 PASS_SPEC = ROOT / "tests" / "fixtures" / "secure_deploy" / "pass" / "minimal_production_localhost.json"
 TOTP_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+def _prefer_local_paths() -> None:
+    for path in (ROOT / "DockerPilotExtras", ROOT / "src"):
+        text = str(path)
+        while text in sys.path:
+            sys.path.remove(text)
+        sys.path.insert(0, text)
+
+
+def _clear_secure_deploy_modules() -> None:
+    _prefer_local_paths()
+    for name in list(sys.modules):
+        if name == "dockerpilot" or name.startswith("dockerpilot.secure_deploy"):
+            sys.modules.pop(name, None)
+        if name == "backend" or name.startswith("backend.secure_deploy"):
+            sys.modules.pop(name, None)
+
+
+def _allow_local_unix_socket_connects() -> None:
+    import pytest_socket
+
+    pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
+
+
+_prefer_local_paths()
 
 
 def _totp(secret: str = TOTP_SECRET, now: float | None = None) -> str:
@@ -40,6 +67,7 @@ def _totp(secret: str = TOTP_SECRET, now: float | None = None) -> str:
 
 
 def _load_app(monkeypatch, tmp_path, *, auth=True, totp=True, broker_socket: str | None = None, trusted_client: bool = True):
+    _prefer_local_paths()
     extras = ROOT / "DockerPilotExtras"
     if str(extras) not in sys.path:
         sys.path.insert(0, str(extras))
@@ -108,8 +136,7 @@ def test_schema_mirrors_and_goldens_still_pass():
 
 
 def test_approval_step_up_and_state_machine(tmp_path):
-    sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
-    sys.path.insert(0, str(ROOT / "src"))
+    _clear_secure_deploy_modules()
     from backend.secure_deploy.approval import ApprovalService
     from backend.secure_deploy.dozeyguard_adapter import DozeyguardConfig
     from backend.secure_deploy.errors import SecureDeployError
@@ -154,6 +181,32 @@ def test_approval_step_up_and_state_machine(tmp_path):
     assert expired["status"] == "expired"
 
 
+def test_expired_approval_does_not_block_new_approval_without_get(tmp_path):
+    _clear_secure_deploy_modules()
+    from backend.secure_deploy.approval import ApprovalService
+    from backend.secure_deploy.dozeyguard_adapter import DozeyguardConfig
+    from backend.secure_deploy.service import SecureDeployService
+    from backend.secure_deploy.store import FileSecureDeployStore
+
+    store = FileSecureDeployStore(tmp_path / "s")
+    svc = SecureDeployService(
+        store,
+        dozeyguard_config=DozeyguardConfig(executable=str(FAKE_DG), policy_path=str(POLICY)),
+    )
+    clock = {"t": datetime.now(timezone.utc)}
+    approvals = ApprovalService(store, clock=lambda: clock["t"], ttl_minutes=10)
+    env = _make_plan(svc)
+    stored = svc.get_plan(env["plan"]["plan_id"])
+
+    old = approvals.approve_plan(stored, actor="admin", session_hash="d" * 64)
+    clock["t"] = clock["t"] + timedelta(minutes=11)
+    new = approvals.approve_plan(stored, actor="admin", session_hash="e" * 64)
+
+    assert old["status"] == "approved"
+    assert new["status"] == "approved"
+    assert new["approval_id"] != old["approval_id"]
+
+
 def test_http_approve_requires_step_up(authed_client):
     module, client, csrf = authed_client
     spec = json.loads(PASS_SPEC.read_text(encoding="utf-8"))
@@ -188,9 +241,9 @@ def test_http_approve_requires_step_up(authed_client):
     assert ok.get_json()["approval"]["status"] == "approved"
 
 
-def test_broker_canary_dry_run(tmp_path):
-    sys.path.insert(0, str(ROOT / "src"))
-    sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
+def test_broker_canary_dry_run(tmp_path, socket_enabled):
+    _clear_secure_deploy_modules()
+    _allow_local_unix_socket_connects()
     from backend.secure_deploy.approval import ApprovalService
     from backend.secure_deploy.broker_client import BrokerClient
     from backend.secure_deploy.dozeyguard_adapter import DozeyguardConfig
@@ -303,9 +356,9 @@ def test_broker_rejects_forbidden_ops_and_frames(tmp_path):
     )
 
 
-def test_broker_error_envelope_preserves_rejected_operation(tmp_path):
-    sys.path.insert(0, str(ROOT / "src"))
-    sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
+def test_broker_error_envelope_preserves_rejected_operation(tmp_path, socket_enabled):
+    _clear_secure_deploy_modules()
+    _allow_local_unix_socket_connects()
     from backend.secure_deploy.firewall_planner import plan_firewall_actions
     from backend.secure_deploy.normalizer import normalize_spec_to_compose
     from dockerpilot.secure_deploy_broker.protocol import PROTOCOL_VERSION, recv_message, send_message
@@ -397,6 +450,72 @@ def test_broker_error_envelope_preserves_rejected_operation(tmp_path):
     finally:
         server.stop()
         assert not Path(sock_path).exists()
+
+
+def test_broker_accept_loop_survives_client_disconnect_before_response():
+    _clear_secure_deploy_modules()
+    from backend.secure_deploy.firewall_planner import plan_firewall_actions
+    from backend.secure_deploy.normalizer import normalize_spec_to_compose
+    from dockerpilot.secure_deploy_broker.protocol import PROTOCOL_VERSION, recv_message, send_message
+    from dockerpilot.secure_deploy_broker.server import BrokerServer, BrokerRuntimeConfig
+
+    class FakeListener:
+        def __init__(self, sockets):
+            self._sockets = deque(sockets)
+            self._closed = False
+
+        def settimeout(self, _timeout):
+            return None
+
+        def accept(self):
+            if self._closed:
+                raise OSError("listener closed")
+            try:
+                return self._sockets.popleft(), None
+            except IndexError:
+                time.sleep(0.01)
+                raise socket.timeout()
+
+        def close(self):
+            self._closed = True
+
+    req = {
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": "breq_" + "d" * 12,
+        "operation": "ping",
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+    }
+    first_client, first_server = socket.socketpair()
+    second_client, second_server = socket.socketpair()
+    first_client.settimeout(5)
+    second_client.settimeout(5)
+    send_message(first_client, req)
+    first_client.close()
+    send_message(second_client, {**req, "request_id": "breq_" + "e" * 12})
+
+    server = BrokerServer(
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=None,
+            expected_peer_uid=os.getuid(),
+        ),
+        run_dozeyguard=None,
+        normalize_spec_to_compose=normalize_spec_to_compose,
+        plan_firewall_actions=plan_firewall_actions,
+    )
+    listener = FakeListener([first_server, second_server])
+    server._sock = listener
+    server._stop.clear()
+    server._thread = threading.Thread(target=server._serve, name="test-broker", daemon=True)
+    server._thread.start()
+    try:
+        resp = recv_message(second_client, timeout=5)
+        assert resp["ok"] is True
+        assert resp["operation"] == "ping"
+        assert server._thread.is_alive()
+    finally:
+        second_client.close()
+        server.stop()
 
 
 def test_broker_module_has_no_docker_or_shell_true():

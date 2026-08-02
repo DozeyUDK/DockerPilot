@@ -87,7 +87,7 @@ class ApprovalService:
 
         with self._lock_for(plan_id):
             # Reject second active approval for same plan hash.
-            existing = self.store.find_active_approval(plan_id, plan_sha)
+            existing = self.store.find_active_approval(plan_id, plan_sha, now_ts=now.timestamp())
             if existing and existing.get("status") == "approved":
                 raise SecureDeployError("double_approval", "plan already has an active approval", 409)
 
