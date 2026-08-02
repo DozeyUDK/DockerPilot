@@ -26,6 +26,7 @@ env.bak/
 venv.bak/
 
 # IDE
+.cursor/
 .vscode/
 .idea/
 *.swp
@@ -111,9 +112,5 @@ htmlcov/
 *.swp
 *~
 
-# DockerPilotExtras - exclude only generated/user files
-DockerPilotExtras/backup_*/
-DockerPilotExtras/*.log
-DockerPilotExtras/deployment_history.json
-DockerPilotExtras/.env
-DockerPilotExtras/.env.*
+# Secure Deploy root broker staging outputs (binaries/state; never commit)
+.staging/11d2a/
