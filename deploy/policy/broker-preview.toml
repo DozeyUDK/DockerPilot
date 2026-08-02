@@ -1,0 +1,6 @@
+[global]
+allowed_registries = ["docker.io", "ghcr.io"]
+# Root broker policy must not reference /home paths.
+readonly_bind_roots = ["/var/lib/dockerpilot-secure-broker/binds", "/mnt/sdc_share"]
+writable_bind_roots = ["/mnt/sdc_share/apps"]
+allowed_local_port_ranges = ["18000-18999"]

@@ -1,0 +1,17 @@
+# Staging plan only — do not create these accounts in #11D.2A.
+#
+# groupadd --system dockerpilot-secure-broker
+# useradd --system --shell /usr/sbin/nologin --home-dir /var/lib/dockerpilot-extras \
+#   --create-home --gid dockerpilot-extras dockerpilot-extras
+# usermod -a -G dockerpilot-secure-broker dockerpilot-extras
+#
+# FORBIDDEN:
+# - docker group membership (any primary or supplementary docker GID)
+# - membership for interactive operator / telegraf / promtail / n8n in dockerpilot-secure-broker
+# - login shell
+# - sudo
+#
+# Directories (future install):
+# /var/lib/dockerpilot-extras   0750 dockerpilot-extras:dockerpilot-extras
+# /etc/dockerpilot-extras       0750 root:dockerpilot-extras
+# /run/dockerpilot-secure-broker 0750 root:dockerpilot-secure-broker
