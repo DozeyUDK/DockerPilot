@@ -1,3 +1,5 @@
+use std::path::{Component, Path, PathBuf};
+
 use regex::Regex;
 
 use crate::finding::{sort_findings, Finding, Severity};
@@ -511,20 +513,25 @@ fn dg023_writable_binds(
     findings: &mut Vec<Finding>,
 ) {
     for mount in service_mounts(service) {
-        if !mount.is_bind || mount.read_only {
+        if !mount.is_bind {
             continue;
         }
         let Some(source) = mount.source.as_deref() else {
             continue;
         };
-        if !path_under_any(source, &policy.global.writable_bind_roots) {
+        let roots = if mount.read_only {
+            &policy.global.readonly_bind_roots
+        } else {
+            &policy.global.writable_bind_roots
+        };
+        if !path_under_any(source, roots) {
             findings.push(finding(
                 "DG023",
                 Severity::High,
                 service_name,
                 "volumes",
-                "Service has a writable bind mount outside allowlisted roots.",
-                "Make the bind read-only or move it under an allowlisted writable root.",
+                "Service has a bind mount outside the matching read-only or writable allowlisted roots.",
+                "Move the bind under the matching policy root or add an approved root reference through Secure Deploy.",
             ));
         }
     }
@@ -602,9 +609,33 @@ fn image_registry(image: &str) -> String {
 }
 
 fn path_under_any(path: &str, roots: &[String]) -> bool {
-    roots
-        .iter()
-        .any(|root| path == root || path.starts_with(&format!("{root}/")))
+    let Some(path) = normalize_absolute_path(path) else {
+        return false;
+    };
+    roots.iter().any(|root| {
+        normalize_absolute_path(root)
+            .as_ref()
+            .is_some_and(|root| path == *root || path.starts_with(root))
+    })
+}
+
+fn normalize_absolute_path(path: &str) -> Option<PathBuf> {
+    let source = Path::new(path);
+    if !source.is_absolute() {
+        return None;
+    }
+
+    let mut normalized = PathBuf::from("/");
+    for component in source.components() {
+        match component {
+            Component::RootDir => {}
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => return None,
+            Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized)
 }
 
 #[cfg(test)]
@@ -799,6 +830,138 @@ mod tests {
             },
             ..Default::default()
         };
+        assert!(has(&scan(&document, &policy), "DG023"));
+    }
+
+    #[test]
+    fn dg023_allows_writable_bind_under_normalized_root() {
+        let document = ComposeDocument {
+            services: [(
+                "app".to_string(),
+                serde_json::from_value(json!({"volumes": ["/srv//apps/./app:/data"]})).unwrap(),
+            )]
+            .into(),
+            networks: Default::default(),
+        };
+        let policy = Policy {
+            global: GlobalPolicy {
+                writable_bind_roots: vec!["/srv/apps".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!has(&scan(&document, &policy), "DG023"));
+    }
+
+    #[test]
+    fn dg023_rejects_traversal_before_containment() {
+        let policy = Policy {
+            global: GlobalPolicy {
+                writable_bind_roots: vec!["/allowed/root".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for source in [
+            "/allowed/root/../../../etc",
+            "/allowed/root/../root/app",
+            "/allowed/root/./../root/app",
+        ] {
+            let document = ComposeDocument {
+                services: [(
+                    "app".to_string(),
+                    serde_json::from_value(json!({"volumes": [format!("{source}:/data")]}))
+                        .unwrap(),
+                )]
+                .into(),
+                networks: Default::default(),
+            };
+            assert!(has(&scan(&document, &policy), "DG023"), "{source}");
+        }
+    }
+
+    #[test]
+    fn dg023_distinguishes_sibling_prefixes() {
+        let document = ComposeDocument {
+            services: [(
+                "app".to_string(),
+                serde_json::from_value(json!({"volumes": ["/root2/app:/data"]})).unwrap(),
+            )]
+            .into(),
+            networks: Default::default(),
+        };
+        let policy = Policy {
+            global: GlobalPolicy {
+                writable_bind_roots: vec!["/root".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(has(&scan(&document, &policy), "DG023"));
+    }
+
+    #[test]
+    fn dg023_checks_readonly_binds_against_readonly_roots() {
+        let policy = Policy {
+            global: GlobalPolicy {
+                readonly_bind_roots: vec!["/srv/readonly".to_string()],
+                writable_bind_roots: vec!["/srv/writable".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let allowed = ComposeDocument {
+            services: [(
+                "app".to_string(),
+                serde_json::from_value(json!({"volumes": ["/srv/readonly/config:/config:ro"]}))
+                    .unwrap(),
+            )]
+            .into(),
+            networks: Default::default(),
+        };
+        assert!(!has(&scan(&allowed, &policy), "DG023"));
+
+        for source in ["/root/.ssh", "/var/lib/docker", "/srv/writable/config"] {
+            let document = ComposeDocument {
+                services: [(
+                    "app".to_string(),
+                    serde_json::from_value(json!({"volumes": [format!("{source}:/config:ro")]}))
+                        .unwrap(),
+                )]
+                .into(),
+                networks: Default::default(),
+            };
+            assert!(has(&scan(&document, &policy), "DG023"), "{source}");
+        }
+    }
+
+    #[test]
+    fn dg023_approved_root_ref_does_not_bypass_bind_policy() {
+        let policy = Policy {
+            global: GlobalPolicy {
+                readonly_bind_roots: vec!["/srv/readonly".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document: ComposeDocument = serde_json::from_value(json!({
+            "services": {
+                "app": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/var/lib/docker",
+                            "target": "/host-docker",
+                            "read_only": true,
+                            "approved_root_ref": "docker"
+                        }
+                    ]
+                }
+            }
+        }))
+        .unwrap();
+
         assert!(has(&scan(&document, &policy), "DG023"));
     }
 
