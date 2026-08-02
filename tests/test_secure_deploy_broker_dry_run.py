@@ -136,8 +136,7 @@ def test_schema_mirrors_and_goldens_still_pass():
 
 
 def test_approval_step_up_and_state_machine(tmp_path):
-    sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
-    sys.path.insert(0, str(ROOT / "src"))
+    _clear_secure_deploy_modules()
     from backend.secure_deploy.approval import ApprovalService
     from backend.secure_deploy.dozeyguard_adapter import DozeyguardConfig
     from backend.secure_deploy.errors import SecureDeployError
@@ -180,6 +179,32 @@ def test_approval_step_up_and_state_machine(tmp_path):
     clock["t"] = clock["t"] + timedelta(minutes=11)
     expired = approvals.get(record2["approval_id"])
     assert expired["status"] == "expired"
+
+
+def test_expired_approval_does_not_block_new_approval_without_get(tmp_path):
+    _clear_secure_deploy_modules()
+    from backend.secure_deploy.approval import ApprovalService
+    from backend.secure_deploy.dozeyguard_adapter import DozeyguardConfig
+    from backend.secure_deploy.service import SecureDeployService
+    from backend.secure_deploy.store import FileSecureDeployStore
+
+    store = FileSecureDeployStore(tmp_path / "s")
+    svc = SecureDeployService(
+        store,
+        dozeyguard_config=DozeyguardConfig(executable=str(FAKE_DG), policy_path=str(POLICY)),
+    )
+    clock = {"t": datetime.now(timezone.utc)}
+    approvals = ApprovalService(store, clock=lambda: clock["t"], ttl_minutes=10)
+    env = _make_plan(svc)
+    stored = svc.get_plan(env["plan"]["plan_id"])
+
+    old = approvals.approve_plan(stored, actor="admin", session_hash="d" * 64)
+    clock["t"] = clock["t"] + timedelta(minutes=11)
+    new = approvals.approve_plan(stored, actor="admin", session_hash="e" * 64)
+
+    assert old["status"] == "approved"
+    assert new["status"] == "approved"
+    assert new["approval_id"] != old["approval_id"]
 
 
 def test_http_approve_requires_step_up(authed_client):
