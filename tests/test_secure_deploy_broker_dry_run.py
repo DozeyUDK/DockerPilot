@@ -96,13 +96,15 @@ def _make_plan(service, actor="admin"):
 
 
 def test_schema_mirrors_and_goldens_still_pass():
-    from tests.test_secure_deploy_contract import (
-        test_schema_mirror_byte_equality,
-        test_fixed_golden_hashes,
-    )
+    import importlib.util
 
-    test_schema_mirror_byte_equality()
-    test_fixed_golden_hashes()
+    path = ROOT / "tests" / "test_secure_deploy_contract.py"
+    spec = importlib.util.spec_from_file_location("secure_deploy_contract_tests", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.test_schema_mirror_byte_equality()
+    mod.test_fixed_golden_hashes()
 
 
 def test_approval_step_up_and_state_machine(tmp_path):
@@ -249,7 +251,9 @@ def test_broker_rejects_forbidden_ops_and_frames(tmp_path):
     from dockerpilot.secure_deploy_broker.protocol import (
         PROTOCOL_VERSION,
         encode_frame,
+        sanitize_error_operation,
         validate_request,
+        validate_response,
     )
     from dockerpilot.secure_deploy_broker.errors import ProtocolError
 
@@ -279,6 +283,120 @@ def test_broker_rejects_forbidden_ops_and_frames(tmp_path):
 
     with pytest.raises(ProtocolError):
         decode_frame(bad)
+
+    assert sanitize_error_operation("dance") == "dance"
+    assert sanitize_error_operation("apply") == "apply"
+    assert sanitize_error_operation(None) == "unknown"
+    assert sanitize_error_operation(123) == "unknown"
+    assert sanitize_error_operation({"x": 1}) == "unknown"
+    assert sanitize_error_operation("x" * 65) == "unknown"
+    assert sanitize_error_operation("HAS_CAPS") == "unknown"
+    # Error envelope with rejected op must validate against widened response schema.
+    validate_response(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "canary_dance_001",
+            "operation": "dance",
+            "ok": False,
+            "error": {"code": "broker_operation_not_supported", "message": "operation dance is not supported"},
+        }
+    )
+
+
+def test_broker_error_envelope_preserves_rejected_operation(tmp_path):
+    sys.path.insert(0, str(ROOT / "src"))
+    sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
+    from backend.secure_deploy.firewall_planner import plan_firewall_actions
+    from backend.secure_deploy.normalizer import normalize_spec_to_compose
+    from dockerpilot.secure_deploy_broker.protocol import PROTOCOL_VERSION, recv_message, send_message
+    from dockerpilot.secure_deploy_broker.server import BrokerServer, build_canary_config
+
+    sock_path = str(tmp_path / "env.sock")
+    cfg = build_canary_config(
+        sock_path,
+        executable=str(FAKE_DG),
+        policy_path=str(POLICY),
+        expected_peer_uid=os.getuid(),
+    )
+    server = BrokerServer(
+        cfg,
+        run_dozeyguard=None,
+        normalize_spec_to_compose=normalize_spec_to_compose,
+        plan_firewall_actions=plan_firewall_actions,
+    )
+    server.start()
+    try:
+
+        def raw_call(operation):
+            req = {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": "breq_" + "a" * 12,
+                "operation": operation,
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+            }
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect(sock_path)
+            try:
+                send_message(sock, req)
+                return recv_message(sock, timeout=5)
+            finally:
+                sock.close()
+
+        dance = raw_call("dance")
+        assert dance["ok"] is False
+        assert dance["operation"] == "dance"
+        assert dance["error"]["code"] == "broker_operation_not_supported"
+
+        apply_resp = raw_call("apply")
+        assert apply_resp["ok"] is False
+        assert apply_resp["operation"] == "apply"
+        assert apply_resp["error"]["code"] == "broker_operation_not_supported"
+
+        missing = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "breq_" + "b" * 12,
+            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        }
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(sock_path)
+        send_message(sock, missing)
+        missing_resp = recv_message(sock, timeout=5)
+        sock.close()
+        assert missing_resp["ok"] is False
+        assert missing_resp["operation"] == "unknown"
+
+        for bad_op in (123, {"op": "ping"}, "X" * 200):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect(sock_path)
+            send_message(
+                sock,
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": "breq_" + "c" * 12,
+                    "operation": bad_op,
+                    "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                },
+            )
+            bad_resp = recv_message(sock, timeout=5)
+            sock.close()
+            assert bad_resp["ok"] is False
+            assert bad_resp["operation"] == "unknown"
+            # Must not echo overlong payloads into the envelope.
+            assert len(bad_resp["operation"]) <= 64
+
+        ping = raw_call("ping")
+        assert ping["ok"] is True
+        assert ping["operation"] == "ping"
+        caps = raw_call("capabilities")
+        assert caps["ok"] is True
+        assert caps["operation"] == "capabilities"
+        assert caps["capabilities"]["apply_supported"] is False
+    finally:
+        server.stop()
+        assert not Path(sock_path).exists()
 
 
 def test_broker_module_has_no_docker_or_shell_true():

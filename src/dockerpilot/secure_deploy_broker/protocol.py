@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from typing import Any, Dict, Tuple
 
@@ -28,6 +29,32 @@ FORBIDDEN_OPERATIONS = frozenset(
     }
 )
 FORBIDDEN_FIELDS = frozenset({"command", "args", "argv", "path", "working_directory", "environment"})
+
+# Error envelopes may echo a rejected operation name; keep it small and printable.
+ERROR_OPERATION_MAX_LEN = 64
+_ERROR_OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+NEUTRAL_ERROR_OPERATION = "unknown"
+
+
+def sanitize_error_operation(raw: Any) -> str:
+    """Return a safe ``operation`` value for error envelopes.
+
+    Preserves the caller-supplied name when it is a short ASCII identifier.
+    Missing/non-string/overlong/binary-ish values become ``unknown`` — never
+    fall back to ``ping`` (which falsely implies a ping failure).
+    """
+    if not isinstance(raw, str):
+        return NEUTRAL_ERROR_OPERATION
+    if not raw or len(raw) > ERROR_OPERATION_MAX_LEN:
+        return NEUTRAL_ERROR_OPERATION
+    if not _ERROR_OPERATION_RE.fullmatch(raw):
+        return NEUTRAL_ERROR_OPERATION
+    return raw
+
+# Error envelopes may echo a rejected operation name; keep it small and printable.
+ERROR_OPERATION_MAX_LEN = 64
+_ERROR_OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+NEUTRAL_ERROR_OPERATION = "unknown"
 
 
 def encode_frame(obj: Dict[str, Any]) -> bytes:
@@ -106,6 +133,8 @@ def validate_request(doc: Dict[str, Any]) -> Dict[str, Any]:
         if field in doc:
             raise ProtocolError("forbidden_field", f"field {field} is not allowed")
     op = doc.get("operation")
+    if not isinstance(op, str):
+        raise ProtocolError("invalid_operation", "operation must be a string")
     if op in FORBIDDEN_OPERATIONS:
         raise ProtocolError("broker_operation_not_supported", f"operation {op} is not supported")
     if doc.get("protocol_version") != PROTOCOL_VERSION:

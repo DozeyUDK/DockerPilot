@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import socket
 import struct
 from dataclasses import dataclass
@@ -31,6 +30,15 @@ def get_peer_credentials(conn: socket.socket) -> PeerCred:
 
 
 def assert_expected_uid(cred: PeerCred, expected_uid: int | None = None) -> None:
-    want = os.getuid() if expected_uid is None else int(expected_uid)
+    """Reject peers unless expected_uid is an explicit configured integer.
+
+    ``None`` is fail-closed (misconfiguration). Never fall back to ``os.getuid()``:
+    a root broker would otherwise only accept root callers.
+    """
+    if expected_uid is None:
+        raise BrokerError("peer_uid_unconfigured", "expected_peer_uid is required")
+    want = int(expected_uid)
+    if want < 0:
+        raise BrokerError("peer_uid_invalid", "expected_peer_uid must be >= 0")
     if cred.uid != want:
         raise BrokerError("peer_uid_mismatch", "peer UID rejected")

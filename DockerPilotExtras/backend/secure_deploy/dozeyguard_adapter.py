@@ -36,9 +36,15 @@ def resolve_dozeyguard_config(
 ) -> DozeyguardConfig:
     exe = executable or os.environ.get("DOZEYGUARD_BIN") or shutil.which("dozeyguard")
     if not exe:
-        # Common local path during development
-        candidate = Path("/home/dozey/dozeyguard/target/debug/dozeyguard")
-        if candidate.exists():
+        # Portable local fallback: DOZEYGUARD_SRC or sibling ../dozeyguard debug build.
+        src_env = os.environ.get("DOZEYGUARD_SRC")
+        if src_env:
+            candidate = Path(src_env).expanduser().resolve() / "target" / "debug" / "dozeyguard"
+        else:
+            # DockerPilotExtras/backend/secure_deploy → repo root is parents[3]
+            repo_root = Path(__file__).resolve().parents[3]
+            candidate = (repo_root.parent / "dozeyguard" / "target" / "debug" / "dozeyguard").resolve()
+        if candidate.is_file():
             exe = str(candidate)
     policy = policy_path or os.environ.get("DOZEYGUARD_POLICY_PATH")
     if not policy:
