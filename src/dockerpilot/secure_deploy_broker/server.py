@@ -181,7 +181,12 @@ class BrokerServer:
                 "ok": False,
                 "error": {"code": "broker_internal_error", "message": "internal broker error"},
             }
-        send_message(conn, resp)
+        try:
+            send_message(conn, resp)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # Client disconnects must only fail the current connection. The
+            # broker thread must stay alive to accept later requests.
+            return
 
     def _assert_artifacts(self) -> None:
         if self.config.expected_binary_sha256:
