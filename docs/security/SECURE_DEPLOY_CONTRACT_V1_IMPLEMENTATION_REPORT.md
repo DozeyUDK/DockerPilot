@@ -16,7 +16,7 @@ Schemas Spec/Plan v1, Dozeyguard JSON contract v1 (deterministic), DG026, input 
 | DockerPilot branch | `feature/secure-deploy-contract-v1` (local, no push) |
 | Drift vs entry `137b08f` | none (clean tracked tree at branch point) |
 | Dozeyguard Git | **DOZEYGUARD_NOT_VERSIONED** (no `.git`) |
-| Dozeyguard backup | `/home/dozey/dozeyguard/.backups/11b_20260731_132319/` |
+| Dozeyguard backup | historical external `.backups/` (not in monorepo) |
 
 ## Artifacts
 
@@ -27,7 +27,7 @@ Schemas Spec/Plan v1, Dozeyguard JSON contract v1 (deterministic), DG026, input 
 | Packaged copies | `src/dockerpilot/secure_deploy/schemas/*.json` |
 | Python lib | `src/dockerpilot/secure_deploy/{canonical,schemas,models}.py` |
 | Contract doc | `docs/security/SECURE_DEPLOY_CONTRACT_V1.md` |
-| Dozeyguard contract doc | `/home/dozey/dozeyguard/docs/JSON_CONTRACT_V1.md` |
+| Dozeyguard contract doc | `components/dozeyguard/docs/JSON_CONTRACT_V1.md` |
 | New dependency (Dozeyguard) | `sha2 = "0.10"` |
 | New dependency (DockerPilot) | none (stdlib validator; pydantic remains mcp-optional only) |
 

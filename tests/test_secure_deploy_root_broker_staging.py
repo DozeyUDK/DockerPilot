@@ -546,14 +546,18 @@ def test_resolve_dozeyguard_src(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT / "tools" / "secure_deploy"))
     import build_root_broker_staging as builder
 
-    missing = tmp_path / "nope"
+    fake_root = tmp_path / "repo"
+    (fake_root / "components").mkdir(parents=True)
     monkeypatch.delenv("DOZEYGUARD_SRC", raising=False)
     with pytest.raises(SystemExit, match="dozeyguard source missing"):
-        builder.resolve_dozeyguard_src(missing)
-    dg = tmp_path / "dozeyguard"
+        builder.resolve_dozeyguard_src(fake_root)
+    dg = fake_root / "components" / "dozeyguard"
     dg.mkdir()
-    monkeypatch.setenv("DOZEYGUARD_SRC", str(dg))
-    assert builder.resolve_dozeyguard_src(missing) == dg.resolve()
+    assert builder.resolve_dozeyguard_src(fake_root) == dg.resolve()
+    override = tmp_path / "alt"
+    override.mkdir()
+    monkeypatch.setenv("DOZEYGUARD_SRC", str(override))
+    assert builder.resolve_dozeyguard_src(fake_root) == override.resolve()
 
 
 def test_generated_install_scripts_operator_and_backup(tmp_path, monkeypatch):
@@ -578,6 +582,8 @@ def test_generated_install_scripts_operator_and_backup(tmp_path, monkeypatch):
     src = (ROOT / "tools" / "secure_deploy" / "build_root_broker_staging.py").read_text(encoding="utf-8")
     assert '"forbidden_gids"' not in src
     assert 'Path("/home/dozey/dozeyguard")' not in src
+    assert 'repo_root.parent / "dozeyguard"' not in src
+    assert 'components" / "dozeyguard"' in src or "components/dozeyguard" in src
 
 
 def test_clear_staging_probes_before_delete(tmp_path, monkeypatch):

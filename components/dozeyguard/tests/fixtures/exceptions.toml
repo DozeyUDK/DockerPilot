@@ -1,0 +1,16 @@
+[global]
+allowed_registries = ["docker.io", "ghcr.io"]
+writable_bind_roots = ["/mnt/sdc_share/apps"]
+allowed_local_port_ranges = ["18000-18999"]
+
+[[services.camera.exceptions]]
+rule = "DG020"
+reason = "Camera workload needs video device"
+owner = "dozey"
+expires = "2099-09-01"
+
+[[services.legacy.exceptions]]
+rule = "DG020"
+reason = "Old exception should not suppress"
+owner = "dozey"
+expires = "2025-01-01"

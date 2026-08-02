@@ -2,7 +2,7 @@
 
 **Status:** #11B offline contracts (no UI/API apply, no Docker/firewall)
 **DockerPilot branch:** `feature/secure-deploy-contract-v1`
-**Related:** Dozeyguard `docs/JSON_CONTRACT_V1.md`, architecture note under `/home/dozey/docs/dockerpilot/`
+**Related:** Dozeyguard `components/dozeyguard/docs/JSON_CONTRACT_V1.md`
 
 ## Trust boundaries
 

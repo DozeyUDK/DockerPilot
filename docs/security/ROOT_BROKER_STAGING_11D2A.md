@@ -8,7 +8,7 @@ Built by `tools/secure_deploy/build_root_broker_staging.py` into:
 
 `.staging/11d2a/` (gitignored)
 
-Dozeyguard source: env `DOZEYGUARD_SRC`, or sibling `../dozeyguard` relative to the DockerPilot repo.
+Dozeyguard source: monorepo `components/dozeyguard` (override with `DOZEYGUARD_SRC`).
 
 Target install layout:
 

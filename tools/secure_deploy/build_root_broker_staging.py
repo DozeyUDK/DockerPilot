@@ -20,17 +20,17 @@ BACKUP_DIR_CANARY = "/var/backups/dockerpilot-secure-broker-11d2a"
 
 
 def resolve_dozeyguard_src(repo_root: Path = ROOT) -> Path:
-    """Locate dozeyguard checkout: ``DOZEYGUARD_SRC`` or sibling ``../dozeyguard``."""
+    """Locate dozeyguard sources: ``DOZEYGUARD_SRC`` or monorepo ``components/dozeyguard``."""
     env = os.environ.get("DOZEYGUARD_SRC")
     if env:
         path = Path(env).expanduser().resolve()
     else:
-        path = (repo_root.parent / "dozeyguard").resolve()
+        path = (repo_root / "components" / "dozeyguard").resolve()
     if not path.is_dir():
         raise SystemExit(
             f"dozeyguard source missing: {path}\n"
-            "Set DOZEYGUARD_SRC to the dozeyguard checkout, or place it as a sibling "
-            f"directory at {repo_root.parent / 'dozeyguard'}"
+            "Expected monorepo path components/dozeyguard, or set DOZEYGUARD_SRC "
+            "to an alternate checkout for local overrides."
         )
     return path
 

@@ -1,0 +1,6 @@
+{
+  "services": {
+    "bad": {
+      "environment": {
+        "API_KEY": "SECRET_DO_NOT_PRINT_123"
+      }

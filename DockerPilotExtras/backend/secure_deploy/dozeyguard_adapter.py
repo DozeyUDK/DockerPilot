@@ -34,18 +34,12 @@ def resolve_dozeyguard_config(
     executable: Optional[str] = None,
     policy_path: Optional[str] = None,
 ) -> DozeyguardConfig:
+    """Resolve broker/Extras scanner paths.
+
+    Runtime must use an explicit binary via ``executable`` / ``DOZEYGUARD_BIN`` /
+    ``PATH`` — never a monorepo ``components/.../target`` path.
+    """
     exe = executable or os.environ.get("DOZEYGUARD_BIN") or shutil.which("dozeyguard")
-    if not exe:
-        # Portable local fallback: DOZEYGUARD_SRC or sibling ../dozeyguard debug build.
-        src_env = os.environ.get("DOZEYGUARD_SRC")
-        if src_env:
-            candidate = Path(src_env).expanduser().resolve() / "target" / "debug" / "dozeyguard"
-        else:
-            # DockerPilotExtras/backend/secure_deploy → repo root is parents[3]
-            repo_root = Path(__file__).resolve().parents[3]
-            candidate = (repo_root.parent / "dozeyguard" / "target" / "debug" / "dozeyguard").resolve()
-        if candidate.is_file():
-            exe = str(candidate)
     policy = policy_path or os.environ.get("DOZEYGUARD_POLICY_PATH")
     if not policy:
         policy = str(Path(__file__).resolve().parent / "policy" / "preview.toml")
@@ -58,6 +52,14 @@ def resolve_dozeyguard_config(
     policy_file = Path(policy).resolve()
     if exe_path.is_symlink() or policy_file.is_symlink():
         raise ScannerError("symlink executable/policy rejected", code="dozeyguard_symlink")
+    # Fail closed if someone points DOZEYGUARD_BIN at an in-tree cargo target.
+    parts = {p.lower() for p in exe_path.parts}
+    if "components" in parts and "dozeyguard" in parts and "target" in parts:
+        raise ScannerError(
+            "dozeyguard runtime must not use components/dozeyguard/target; "
+            "set DOZEYGUARD_BIN to an installed/staging binary",
+            code="dozeyguard_dev_path",
+        )
     return DozeyguardConfig(executable=str(exe_path), policy_path=str(policy_file))
 
 
