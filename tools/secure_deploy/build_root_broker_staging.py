@@ -42,6 +42,17 @@ DEST_PREFIX = {
     "run": "/run/dockerpilot-secure-broker",
 }
 
+ALLOWED_INSTALL_EXACT = {
+    "/etc/systemd/system/dockerpilot-secure-broker.service",
+    "/etc/systemd/system/dockerpilot-secure-broker.socket",
+}
+ALLOWED_INSTALL_PREFIXES = (
+    "/usr/libexec/dockerpilot-secure-broker/",
+    "/etc/dockerpilot-secure-broker/",
+    "/var/lib/dockerpilot-secure-broker/",
+    "/run/dockerpilot-secure-broker/",
+)
+
 PURE_MODULES = [
     ROOT / "DockerPilotExtras" / "backend" / "secure_deploy" / "normalizer.py",
     ROOT / "DockerPilotExtras" / "backend" / "secure_deploy" / "firewall_planner.py",
@@ -82,6 +93,70 @@ def copy_file(src: Path, dst: Path, mode: int) -> dict:
         "required": True,
         "rollback_action": "restore_or_remove",
     }
+
+
+def parse_artifact_mode(mode: object, *, destination: str) -> int:
+    if isinstance(mode, str):
+        try:
+            parsed = int(mode, 8)
+        except ValueError as exc:
+            raise SystemExit(f"invalid artifact mode for {destination}: {mode}") from exc
+    elif isinstance(mode, int):
+        parsed = mode
+    else:
+        raise SystemExit(f"invalid artifact mode for {destination}: {mode!r}")
+    if parsed < 0 or parsed > 0o777:
+        raise SystemExit(f"artifact mode out of range for {destination}: {oct(parsed)}")
+    if parsed & 0o022:
+        raise SystemExit(f"refusing group/other-writable mode for {destination}")
+    return parsed
+
+
+def assert_allowed_install_destination(destination: str | Path) -> str:
+    text = str(destination)
+    dest = Path(text)
+    if not dest.is_absolute() or ".." in dest.parts:
+        raise SystemExit(f"path traversal rejected: {text}")
+    if text in ALLOWED_INSTALL_EXACT:
+        return text
+    if any(text.startswith(prefix) for prefix in ALLOWED_INSTALL_PREFIXES):
+        return text
+    raise SystemExit(f"destination outside allowlist: {text}")
+
+
+def artifact_source_path(staging: Path, artifact: dict) -> Path:
+    raw = artifact.get("staging_path")
+    if not isinstance(raw, str) or not raw:
+        raise SystemExit(f"missing staging_path for {artifact.get('destination')}")
+    rel = Path(raw)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise SystemExit(f"invalid staging_path for {artifact.get('destination')}: {raw}")
+    return staging / rel
+
+
+def verify_manifest_artifacts(staging: Path, manifest: dict) -> None:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise SystemExit("manifest artifacts must be a list")
+    for artifact in artifacts:
+        if artifact.get("type") != "file":
+            raise SystemExit(f"unsupported artifact type for {artifact.get('destination')}")
+        destination = artifact.get("destination")
+        if not isinstance(destination, str) or not destination:
+            raise SystemExit("manifest artifact missing destination")
+        assert_allowed_install_destination(destination)
+        if destination == "/etc/dockerpilot-secure-broker/config.json":
+            raise SystemExit("manifest must not ship pre-baked runtime config.json")
+        parse_artifact_mode(artifact.get("mode"), destination=destination)
+        source = artifact_source_path(staging, artifact)
+        if source.is_symlink() or not source.is_file():
+            raise SystemExit(f"missing/invalid staging artifact {source}")
+        expected_sha = artifact.get("sha256")
+        if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+            raise SystemExit(f"invalid sha256 for {destination}")
+        actual_sha = sha256_file(source)
+        if actual_sha != expected_sha:
+            raise SystemExit(f"sha256 mismatch for {destination}")
 
 
 def build_dozeyguard() -> Path:
@@ -546,6 +621,7 @@ raise SystemExit(main())
     # Logical hash sidecar stays in staging (not under installed libexec) so the
     # install manifest can be closed before writing it (avoids chicken/egg).
     write_text(STAGING / "MANIFEST.logical.sha256", manifest["logical_manifest_sha256"] + "\n", 0o644)
+    verify_manifest_artifacts(STAGING, manifest)
 
     # Ship the systemd preflight helper next to the install script (not an
     # installed host artifact — outside bundle/, not in install-manifest).
@@ -656,6 +732,74 @@ helpers.assert_backup_dir_compatible(
     os.environ["EXPECTED_MANIFEST_SHA"],
 )
 print("backup dir compatible with manifest")
+PY
+
+python3 - <<'PY'
+import hashlib, json, os
+from pathlib import Path
+
+ALLOWED_EXACT = {
+    "/etc/systemd/system/dockerpilot-secure-broker.service",
+    "/etc/systemd/system/dockerpilot-secure-broker.socket",
+}
+ALLOWED_PREFIXES = (
+    "/usr/libexec/dockerpilot-secure-broker/",
+    "/etc/dockerpilot-secure-broker/",
+    "/var/lib/dockerpilot-secure-broker/",
+    "/run/dockerpilot-secure-broker/",
+)
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def assert_allowed_dest(dest):
+    text = str(dest)
+    if not dest.is_absolute() or ".." in dest.parts:
+        raise SystemExit(f"path traversal rejected: {text}")
+    if text in ALLOWED_EXACT:
+        return
+    if not any(text.startswith(p) for p in ALLOWED_PREFIXES):
+        raise SystemExit(f"destination outside allowlist: {text}")
+
+def artifact_mode(art):
+    dest = art.get("destination")
+    mode = art.get("mode")
+    try:
+        parsed = int(mode, 8) if isinstance(mode, str) else int(mode)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(f"invalid artifact mode for {dest}: {mode}") from exc
+    if parsed < 0 or parsed > 0o777:
+        raise SystemExit(f"artifact mode out of range for {dest}: {oct(parsed)}")
+    if parsed & 0o022:
+        raise SystemExit(f"refusing group/other-writable mode for {dest}")
+    return parsed
+
+staging = Path(os.environ["STAGING_OVERRIDE"])
+manifest = json.loads((staging / "install-manifest.json").read_text())
+for art in manifest.get("artifacts") or []:
+    if art.get("type") != "file":
+        raise SystemExit(f"unsupported artifact type for {art.get('destination')}")
+    dest = Path(str(art.get("destination") or ""))
+    assert_allowed_dest(dest)
+    if dest == Path("/etc/dockerpilot-secure-broker/config.json"):
+        raise SystemExit("manifest must not ship pre-baked runtime config.json")
+    artifact_mode(art)
+    staging_path = Path(str(art.get("staging_path") or ""))
+    if staging_path.is_absolute() or ".." in staging_path.parts:
+        raise SystemExit(f"invalid staging_path for {dest}: {staging_path}")
+    src = staging / staging_path
+    if src.is_symlink() or not src.is_file():
+        raise SystemExit(f"missing/invalid staging artifact {src}")
+    expected_sha = art.get("sha256")
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+        raise SystemExit(f"invalid sha256 for {dest}")
+    if sha256_file(src) != expected_sha:
+        raise SystemExit(f"sha256 mismatch for {dest}")
+print("all manifest artifacts verified before mutation")
 PY
 
 mkdir -p "$BACKUP_DIR"
