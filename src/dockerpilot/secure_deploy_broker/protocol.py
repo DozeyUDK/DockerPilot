@@ -15,7 +15,17 @@ PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 _LENGTH_STRUCT = struct.Struct("!I")
 
-SUPPORTED_OPERATIONS = frozenset({"ping", "capabilities", "verify_plan", "dry_run"})
+SUPPORTED_OPERATIONS = frozenset(
+    {
+        "ping",
+        "capabilities",
+        "verify_plan",
+        "dry_run",
+        "admit_canary_execution",
+        "deploy_canary",
+        "remove_canary",
+    }
+)
 FORBIDDEN_OPERATIONS = frozenset(
     {
         "apply",
@@ -28,7 +38,29 @@ FORBIDDEN_OPERATIONS = frozenset(
         "shell",
     }
 )
-FORBIDDEN_FIELDS = frozenset({"command", "args", "argv", "path", "working_directory", "environment"})
+FORBIDDEN_FIELDS = frozenset(
+    {
+        "command",
+        "args",
+        "argv",
+        "path",
+        "working_directory",
+        "environment",
+        "env",
+        "compose",
+        "compose_content",
+        "expected_compose_sha256",
+        "image",
+        "port",
+        "project",
+        "service",
+        "workdir",
+        "health_timeout_seconds",
+        "cleanup",
+        "cleanup_flags",
+        "nonce",
+    }
+)
 
 # Error envelopes may echo a rejected operation name; keep it small and printable.
 ERROR_OPERATION_MAX_LEN = 64
@@ -50,12 +82,6 @@ def sanitize_error_operation(raw: Any) -> str:
     if not _ERROR_OPERATION_RE.fullmatch(raw):
         return NEUTRAL_ERROR_OPERATION
     return raw
-
-# Error envelopes may echo a rejected operation name; keep it small and printable.
-ERROR_OPERATION_MAX_LEN = 64
-_ERROR_OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-NEUTRAL_ERROR_OPERATION = "unknown"
-
 
 def encode_frame(obj: Dict[str, Any]) -> bytes:
     raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -148,7 +174,42 @@ def validate_request(doc: Dict[str, Any]) -> Dict[str, Any]:
         _validate(doc, schema, "$")
     except SchemaValidationError as exc:
         raise ProtocolError("invalid_request_schema", str(exc)) from exc
+    _validate_operation_shape(doc)
     return doc
+
+
+def _validate_operation_shape(doc: Dict[str, Any]) -> None:
+    op = doc["operation"]
+    if op in {"verify_plan", "dry_run"}:
+        if not isinstance(doc.get("plan"), dict):
+            raise ProtocolError("plan_required", "plan object required")
+        if op == "dry_run" and not isinstance(doc.get("approval"), dict):
+            raise ProtocolError("approval_required", "approval object required")
+        return
+    if op == "admit_canary_execution":
+        if doc.get("template_id") != "dockerpilot-secure-canary-v1":
+            raise ProtocolError("canary_template", "unsupported canary template")
+        for field in ("plan_id", "plan_sha256", "approval_id", "admission_bundle_sha256"):
+            if not isinstance(doc.get(field), str):
+                raise ProtocolError("invalid_request_schema", f"{field} required")
+        for forbidden in ("plan", "approval", "canary_execution_id"):
+            if forbidden in doc:
+                raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for admit_canary_execution")
+        return
+    if op == "deploy_canary":
+        for field in ("plan_id", "plan_sha256", "approval_id"):
+            if not isinstance(doc.get(field), str):
+                raise ProtocolError("invalid_request_schema", f"{field} required")
+        for forbidden in ("plan", "approval", "template_id", "canary_execution_id"):
+            if forbidden in doc:
+                raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for deploy_canary")
+        return
+    if op == "remove_canary":
+        if not isinstance(doc.get("canary_execution_id"), str):
+            raise ProtocolError("invalid_request_schema", "canary_execution_id required")
+        for forbidden in ("plan", "approval", "template_id", "plan_id", "plan_sha256", "approval_id"):
+            if forbidden in doc:
+                raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for remove_canary")
 
 
 def validate_response(doc: Dict[str, Any]) -> Dict[str, Any]:

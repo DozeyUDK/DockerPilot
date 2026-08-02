@@ -44,10 +44,19 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["ping", "capabilities", "verify_plan", "dry_run"]
+            "enum": [
+              "ping",
+              "capabilities",
+              "verify_plan",
+              "dry_run",
+              "admit_canary_execution",
+              "deploy_canary",
+              "remove_canary"
+            ]
           }
         },
         "apply_supported": { "type": "boolean", "const": false },
+        "canary_supported": { "type": "boolean", "const": true },
         "protocol_version": { "type": "integer", "const": 1 }
       }
     },
@@ -81,6 +90,64 @@
         "dozeyguard_exit_code": { "type": "integer", "enum": [0, 1, 2] },
         "blocking_findings": { "type": "integer", "minimum": 0 },
         "dry_run": { "type": "boolean" }
+      }
+    },
+    "canary_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "execution_id": {
+          "type": "string",
+          "pattern": "^exec_[A-Fa-f0-9]+$"
+        },
+        "template_id": {
+          "type": "string",
+          "const": "dockerpilot-secure-canary-v1"
+        },
+        "audit_id": {
+          "type": "string",
+          "pattern": "^audit_[A-Fa-f0-9]+$"
+        }
+      }
+    },
+    "canary_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["pass", "fail"] },
+        "state": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "replay": { "type": "boolean" },
+        "execution_id": {
+          "type": "string",
+          "pattern": "^exec_[A-Fa-f0-9]+$"
+        },
+        "template_id": {
+          "type": "string",
+          "const": "dockerpilot-secure-canary-v1"
+        },
+        "project": {
+          "type": "string",
+          "const": "dockerpilot-secure-canary"
+        },
+        "service": {
+          "type": "string",
+          "const": "web"
+        },
+        "compose_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+        "plan_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+        "broker_verification_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "health": { "type": ["object", "null"], "additionalProperties": true },
+        "cleanup": { "type": ["object", "null"], "additionalProperties": true },
+        "audit_id": {
+          "type": ["string", "null"],
+          "pattern": "^audit_[A-Fa-f0-9]+$"
+        },
+        "primary_error": { "type": ["object", "null"], "additionalProperties": true },
+        "error": { "type": ["object", "null"], "additionalProperties": true }
       }
     }
   }
