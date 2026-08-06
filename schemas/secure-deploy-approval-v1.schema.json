@@ -52,7 +52,11 @@
     },
     "status": {
       "type": "string",
-      "enum": ["pending", "approved", "consumed", "expired", "revoked"]
-    }
+      "enum": ["pending", "approved", "consumed", "expired", "revoked", "revocation_pending"]
+    },
+    "canary_admission_bundle_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "broker_revocation_status": { "type": ["string", "null"], "maxLength": 64 },
+    "broker_revocation_error_code": { "type": ["string", "null"], "maxLength": 128 },
+    "broker_revocation_error_message": { "type": ["string", "null"], "maxLength": 512 }
   }
 }

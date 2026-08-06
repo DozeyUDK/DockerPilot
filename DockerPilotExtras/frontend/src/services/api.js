@@ -185,7 +185,13 @@ export const secureDeployAPI = {
   revoke: (approvalId, { totp_code }) =>
     api.post(`/secure-deploy/approvals/${approvalId}/revoke`, { totp_code }),
   brokerDryRun: (planId, { approval_id }) =>
-    api.post(`/secure-deploy/plans/${planId}/broker-dry-run`, { approval_id })
+    api.post(`/secure-deploy/plans/${planId}/broker-dry-run`, { approval_id }),
+  admitCanary: (planId, { approval_id, admission_bundle_sha256 }) =>
+    api.post(`/secure-deploy/plans/${planId}/canary/admit`, { approval_id, admission_bundle_sha256 }),
+  deployCanary: (planId, { approval_id }) =>
+    api.post(`/secure-deploy/plans/${planId}/canary/deploy`, { approval_id }),
+  removeCanary: (canaryExecutionId) =>
+    api.post(`/secure-deploy/canary/executions/${canaryExecutionId}/remove`, {})
 }
 
 // Health check

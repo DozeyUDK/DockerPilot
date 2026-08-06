@@ -24,6 +24,8 @@ ALLOWED_TRANSITIONS = {
     ("approved", "consumed"),
     ("approved", "expired"),
     ("approved", "revoked"),
+    ("approved", "revocation_pending"),
+    ("revocation_pending", "revoked"),
 }
 
 
@@ -129,7 +131,81 @@ class ApprovalService:
             record = self.store.get_approval(approval_id)
             if record.get("actor") != actor:
                 raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
+            if record.get("status") == "revoked":
+                return record
             return self._transition(record, "revoked")
+
+    def bind_canary_admission_bundle(
+        self,
+        approval_id: str,
+        *,
+        plan_id: str,
+        plan_sha256: str,
+        admission_bundle_sha256: str,
+    ) -> Dict[str, Any]:
+        with self._lock_for(approval_id):
+            record = self._expire_if_needed(self.store.get_approval(approval_id))
+            if record.get("plan_id") != plan_id or record.get("plan_sha256") != plan_sha256:
+                raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
+            if record.get("status") != "approved":
+                raise ValidationFailedError("approval not active", code="approval_status")
+            existing = record.get("canary_admission_bundle_sha256")
+            if existing and existing != admission_bundle_sha256:
+                raise SecureDeployError("approval_canary_bundle_conflict", "approval already bound to a different canary bundle", 409)
+            updated = dict(record)
+            updated["canary_admission_bundle_sha256"] = admission_bundle_sha256
+            self._validate(updated)
+            self.store.save_approval_atomic_replace(approval_id, updated, expected_status="approved")
+            return updated
+
+    def mark_revocation_pending(
+        self,
+        approval_id: str,
+        *,
+        actor: str,
+        error_code: str,
+        error_message: str,
+    ) -> Dict[str, Any]:
+        with self._lock_for(approval_id):
+            record = self.store.get_approval(approval_id)
+            if record.get("actor") != actor:
+                raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
+            if record.get("status") == "revoked":
+                return record
+            if record.get("status") not in {"approved", "revocation_pending"}:
+                raise SecureDeployError("approval_transition", f"illegal transition {record.get('status')} -> revocation_pending", 409)
+            updated = dict(record)
+            updated["status"] = "revocation_pending"
+            updated["broker_revocation_status"] = "pending"
+            updated["broker_revocation_error_code"] = str(error_code)[:128]
+            updated["broker_revocation_error_message"] = str(error_message)[:512]
+            self._validate(updated)
+            self.store.save_approval_atomic_replace(approval_id, updated, expected_status=str(record["status"]))
+            return updated
+
+    def confirm_broker_revoked(
+        self,
+        approval_id: str,
+        *,
+        actor: str,
+        broker_status: str = "revoked",
+    ) -> Dict[str, Any]:
+        with self._lock_for(approval_id):
+            record = self.store.get_approval(approval_id)
+            if record.get("actor") != actor:
+                raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
+            if record.get("status") == "revoked":
+                return record
+            if record.get("status") not in {"approved", "revocation_pending"}:
+                raise SecureDeployError("approval_transition", f"illegal transition {record.get('status')} -> revoked", 409)
+            updated = dict(record)
+            updated["status"] = "revoked"
+            updated["broker_revocation_status"] = broker_status
+            updated["broker_revocation_error_code"] = None
+            updated["broker_revocation_error_message"] = None
+            self._validate(updated)
+            self.store.save_approval_atomic_replace(approval_id, updated, expected_status=str(record["status"]))
+            return updated
 
     def get(self, approval_id: str) -> Dict[str, Any]:
         record = self.store.get_approval(approval_id)
