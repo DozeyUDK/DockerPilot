@@ -50,13 +50,15 @@
               "verify_plan",
               "dry_run",
               "admit_canary_execution",
+              "revoke_canary_admission",
               "deploy_canary",
               "remove_canary"
             ]
           }
         },
         "apply_supported": { "type": "boolean", "const": false },
-        "canary_supported": { "type": "boolean", "const": true },
+        "canary_supported": { "type": "boolean" },
+        "canary_revocation_supported": { "type": "boolean" },
         "protocol_version": { "type": "integer", "const": 1 }
       }
     },
@@ -89,7 +91,8 @@
         "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "dozeyguard_exit_code": { "type": "integer", "enum": [0, 1, 2] },
         "blocking_findings": { "type": "integer", "minimum": 0 },
-        "dry_run": { "type": "boolean" }
+        "dry_run": { "type": "boolean" },
+        "canary_admission_bundle_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "canary_admission": {

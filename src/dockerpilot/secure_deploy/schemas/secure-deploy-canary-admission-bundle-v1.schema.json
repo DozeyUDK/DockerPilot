@@ -11,6 +11,8 @@
     "plan_id",
     "plan_sha256",
     "approval_id",
+    "staged_at",
+    "staged_bundle_expires_at",
     "plan",
     "approval"
   ],
@@ -33,6 +35,8 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9_-]+$"
     },
+    "staged_at": { "type": "string", "minLength": 20, "maxLength": 40 },
+    "staged_bundle_expires_at": { "type": "string", "minLength": 20, "maxLength": 40 },
     "plan": { "type": "object" },
     "approval": { "type": "object" }
   }

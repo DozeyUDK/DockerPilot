@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional
 
 from .errors import BrokerError
 from .protocol import MAX_FRAME_BYTES, SUPPORTED_OPERATIONS
+
+CANARY_OPERATIONS = frozenset({"admit_canary_execution", "revoke_canary_admission", "deploy_canary", "remove_canary"})
+PLACEHOLDER_DIGEST = "sha256:" + ("a" * 64)
+_SHA_IMAGE_RE = re.compile(r"^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$")
 
 ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -24,6 +29,11 @@ ALLOWED_CONFIG_KEYS = frozenset(
         "schemas_root",
         "state_root",
         "allowed_operations",
+        "canary_workdir",
+        "canary_image",
+        "canary_health_timeout_seconds",
+        "canary_staged_bundle_ttl_seconds",
+        "canary_live_mode",
     }
 )
 
@@ -81,6 +91,36 @@ class BrokerConfig:
         if len(self.expected_binary_sha256) != 64 or len(self.expected_policy_sha256) != 64:
             raise BrokerError("config_hash", "expected binary/policy sha256 required (64 hex)")
         self.allowed_operations: FrozenSet[str] = op_set
+        self.canary_workdir = str(raw.get("canary_workdir") or "")
+        self.canary_image = str(raw.get("canary_image") or "")
+        try:
+            self.canary_health_timeout_seconds = int(raw.get("canary_health_timeout_seconds", 60))
+        except (TypeError, ValueError) as exc:
+            raise BrokerError("config_canary_timeout", "canary health timeout must be an integer") from exc
+        if self.canary_health_timeout_seconds <= 0 or self.canary_health_timeout_seconds > 600:
+            raise BrokerError("config_canary_timeout", "canary health timeout out of range")
+        self.canary_staged_bundle_ttl_seconds = self._parse_canary_ttl(raw)
+        self.canary_live_mode = bool(raw.get("canary_live_mode", True))
+        if op_set & CANARY_OPERATIONS:
+            if not self.canary_image:
+                raise BrokerError("config_canary_image", "canary_image required when canary operations are enabled")
+            if not _SHA_IMAGE_RE.fullmatch(self.canary_image):
+                raise BrokerError("config_canary_image", "canary_image must be digest-only")
+            if self.canary_live_mode and self.canary_image.endswith("@" + PLACEHOLDER_DIGEST):
+                raise BrokerError("config_canary_image", "live canary image digest must be non-placeholder")
+            if "canary_staged_bundle_ttl_seconds" not in raw:
+                raise BrokerError("config_canary_ttl", "canary_staged_bundle_ttl_seconds required when canary operations are enabled")
+
+    def _parse_canary_ttl(self, raw: Dict[str, Any]) -> int:
+        if "canary_staged_bundle_ttl_seconds" not in raw:
+            return 300
+        try:
+            ttl = int(raw["canary_staged_bundle_ttl_seconds"])
+        except (TypeError, ValueError) as exc:
+            raise BrokerError("config_canary_ttl", "canary staged bundle TTL must be an integer") from exc
+        if ttl <= 0 or ttl > 600:
+            raise BrokerError("config_canary_ttl", "canary staged bundle TTL out of range")
+        return ttl
 
 
 def load_broker_config(path: Path) -> BrokerConfig:

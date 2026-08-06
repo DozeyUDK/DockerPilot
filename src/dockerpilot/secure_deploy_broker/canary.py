@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib import error as urllib_error
@@ -29,7 +29,7 @@ from dockerpilot.secure_deploy.canonical import canonical_json_bytes, sha256_can
 from dockerpilot.secure_deploy.schemas import SchemaValidationError, load_schema
 from dockerpilot.secure_deploy.schemas import _validate as validate_schema
 
-from .approval import assert_approval_binds_plan, validate_approval_record
+from .approval import assert_approval_binds_plan, parse_ts, validate_approval_record
 from .errors import VerificationError
 from .verifier import BrokerDozeyguardConfig, verify_plan_independent
 
@@ -46,14 +46,16 @@ DEFAULT_CANARY_IMAGE = (
 PLACEHOLDER_DIGEST = "sha256:" + ("a" * 64)
 EXPECTED_HTTP_STATUS = 200
 EXPECTED_HTTP_BODY = "Welcome to nginx"
+STAGED = "staged"
 APPROVED = "approved"
 EXECUTING = "executing"
 CONSUMED = "consumed"
 EXPIRED = "expired"
+REVOKED = "revoked"
 FAILED_CLEANUP_OK = "failed_cleanup_ok"
 FAILED_CLEANUP_FAILED = "failed_cleanup_failed"
 REMOVED = "removed"
-TERMINAL_STATES = {CONSUMED, EXPIRED, FAILED_CLEANUP_OK, FAILED_CLEANUP_FAILED, REMOVED}
+TERMINAL_STATES = {CONSUMED, EXPIRED, REVOKED, FAILED_CLEANUP_OK, FAILED_CLEANUP_FAILED, REMOVED}
 MAX_JSON_BYTES = 1024 * 1024
 MAX_AUDIT_EVENT_BYTES = 16 * 1024
 MAX_EXECUTION_RECORDS = 1000
@@ -73,6 +75,7 @@ class CanaryPolicy:
     port: int = PORT
     image: str = DEFAULT_CANARY_IMAGE
     health_timeout_seconds: int = 60
+    staged_bundle_ttl_seconds: int = 300
     health_poll_interval_seconds: float = 1.0
     command_timeout_seconds: int = 30
     expected_http_status: int = EXPECTED_HTTP_STATUS
@@ -81,6 +84,8 @@ class CanaryPolicy:
 
     def __post_init__(self) -> None:
         _digest_image_parts(self.image)
+        if self.staged_bundle_ttl_seconds <= 0 or self.staged_bundle_ttl_seconds > 600:
+            raise VerificationError("canary_bundle_ttl", "canary staged bundle TTL out of range")
         if self.live_mode and self.image.endswith("@" + PLACEHOLDER_DIGEST):
             raise VerificationError("canary_image_placeholder", "live canary image digest must be root-owned and non-placeholder")
 
@@ -427,13 +432,23 @@ class CanaryLedger:
                     raise VerificationError("canary_record_limit", "canary record limit exceeded")
         return count
 
-    def save_admission_bundle(self, *, plan: Dict[str, Any], approval: Dict[str, Any], template_id: str) -> str:
+    def save_admission_bundle(
+        self,
+        *,
+        plan: Dict[str, Any],
+        approval: Dict[str, Any],
+        template_id: str,
+        staged_at: str,
+        staged_bundle_expires_at: str,
+    ) -> str:
         bundle = {
             "schema_version": 1,
             "template_id": template_id,
             "plan_id": plan.get("plan_id"),
             "plan_sha256": plan.get("plan_sha256"),
             "approval_id": approval.get("approval_id"),
+            "staged_at": staged_at,
+            "staged_bundle_expires_at": staged_bundle_expires_at,
             "plan": plan,
             "approval": approval,
         }
@@ -448,6 +463,27 @@ class CanaryLedger:
                 return bundle_sha256
             _atomic_write_json(path, bundle)
             return bundle_sha256
+
+        return self._with_lock(op)
+
+    def save_staged(self, record: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+        def op() -> tuple[Dict[str, Any], bool]:
+            request = self.request_path(str(record["request_key"]))
+            if request.exists() and not request.is_symlink():
+                existing_id = _read_json(request).get("execution_id")
+                if isinstance(existing_id, str):
+                    existing = self._get_unlocked(existing_id)
+                    if existing.get("admission_bundle_sha256") != record.get("admission_bundle_sha256"):
+                        raise VerificationError("canary_staged_conflict", "staged admission record conflict")
+                    return existing, False
+            if self._count_json_records(self.executions_dir) >= self.max_records:
+                raise VerificationError("canary_record_limit", "canary record limit exceeded")
+            path = self.execution_path(str(record["execution_id"]))
+            if path.exists() or path.is_symlink():
+                raise VerificationError("canary_execution_exists", "execution id collision")
+            _atomic_write_json(path, record)
+            _atomic_write_json(request, {"execution_id": record["execution_id"]})
+            return dict(record), True
 
         return self._with_lock(op)
 
@@ -498,6 +534,41 @@ class CanaryLedger:
             _atomic_write_json(replay, pointer)
             _atomic_write_json(nonce, pointer)
             return dict(record)
+
+        return self._with_lock(op)
+
+    def approve_staged(
+        self,
+        record: Dict[str, Any],
+        *,
+        nonce_hash: str,
+        replay_key: str,
+        fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        def op() -> Dict[str, Any]:
+            current = self._get_unlocked(str(record["execution_id"]))
+            if current.get("state") != STAGED:
+                return current
+            if current.get("admission_bundle_sha256") != record.get("admission_bundle_sha256"):
+                raise VerificationError("canary_staged_conflict", "staged admission record conflict")
+            replay = self.replay_path(replay_key)
+            if replay.exists() and not replay.is_symlink():
+                existing_id = _read_json(replay).get("execution_id")
+                if isinstance(existing_id, str):
+                    return self._get_unlocked(existing_id)
+            nonce = self.nonce_path(nonce_hash)
+            if nonce.exists() and not nonce.is_symlink():
+                raise VerificationError("canary_nonce_replay", "approval nonce already used")
+            updated = dict(current)
+            updated.update(fields)
+            updated["state"] = APPROVED
+            updated["replay_key"] = replay_key
+            updated["approval_nonce_hash"] = nonce_hash
+            _atomic_write_json(self.execution_path(str(updated["execution_id"])), updated)
+            pointer = {"execution_id": updated["execution_id"]}
+            _atomic_write_json(replay, pointer)
+            _atomic_write_json(nonce, pointer)
+            return updated
 
         return self._with_lock(op)
 
@@ -742,6 +813,16 @@ class CanaryManager:
             raise VerificationError("canary_bundle_binding", "canary admission bundle does not match request")
         plan = bundle["plan"]
         approval = bundle["approval"]
+        self._assert_staged_bundle_active(bundle)
+        staged = self.ledger.find(plan_id=plan_id, plan_sha256=plan_sha256, approval_id=approval_id)
+        if staged.get("admission_bundle_sha256") != admission_bundle_sha256:
+            raise VerificationError("canary_bundle_binding", "staged admission record does not match bundle")
+        if staged.get("state") == REVOKED:
+            raise VerificationError("canary_revoked", "canary admission revoked")
+        if staged.get("state") == APPROVED:
+            return {"status": staged["state"], "execution_id": staged["execution_id"], "template_id": staged["template_id"], "audit_id": staged.get("audit_id")}
+        if staged.get("state") != STAGED:
+            raise VerificationError("canary_admission_state", "canary admission is not staged")
         self._validate_plan_approval(plan, approval, require_approval=True)
         verification = verify_plan_independent(
             plan,
@@ -764,26 +845,22 @@ class CanaryManager:
                 "template_id": self.policy.template_id,
             }
         )
-        request_key = self.ledger._request_key(plan_id=plan_id, plan_sha256=plan_sha256, approval_id=approval_id)
-        record = {
-            "schema_version": 1,
-            "execution_id": "exec_" + secrets.token_hex(12),
-            "template_id": self.policy.template_id,
-            "state": APPROVED,
-            "plan_id": plan_id,
-            "plan_sha256": plan_sha256,
-            "approval_id": approval_id,
-            "approval_nonce_hash": nonce_hash,
-            "actor": approval["actor"],
-            "approval_expires_at": approval["expires_at"],
-            "admitted_at": _iso(self.now()),
-            "broker_verification_sha256": verification.get("broker_verification_sha256"),
-            "admission_bundle_sha256": admission_bundle_sha256,
-            "request_key": request_key,
-            "replay_key": replay_key,
-            "compose_sha256": compose_sha256(canonical_compose(self.policy)),
-        }
-        saved = self.ledger.save_new(record)
+        saved = self.ledger.approve_staged(
+            staged,
+            nonce_hash=nonce_hash,
+            replay_key=replay_key,
+            fields={
+                "actor": approval["actor"],
+                "approval_expires_at": approval["expires_at"],
+                "admitted_at": _iso(self.now()),
+                "broker_verification_sha256": verification.get("broker_verification_sha256"),
+                "compose_sha256": compose_sha256(canonical_compose(self.policy)),
+            },
+        )
+        if saved.get("state") == REVOKED:
+            raise VerificationError("canary_revoked", "canary admission revoked")
+        if saved.get("state") != APPROVED:
+            raise VerificationError("canary_admission_state", "canary admission is not approved")
         audit_id = self.ledger.append_audit(
             {
                 "event": "canary_admitted",
@@ -801,6 +878,135 @@ class CanaryManager:
         self.ledger.replace(saved)
         return {"status": saved["state"], "execution_id": saved["execution_id"], "template_id": saved["template_id"], "audit_id": audit_id}
 
+    def maybe_stage_admission_bundle(
+        self,
+        *,
+        plan: Dict[str, Any],
+        approval: Dict[str, Any],
+        normalize_spec_to_compose: Callable,
+    ) -> str | None:
+        if not self._looks_like_canary_plan(plan):
+            return None
+        self._validate_plan_approval(plan, approval, require_approval=True)
+        self._assert_canary_plan(plan, normalize_spec_to_compose)
+        request_key = self.ledger._request_key(
+            plan_id=str(plan["plan_id"]),
+            plan_sha256=str(plan["plan_sha256"]),
+            approval_id=str(approval["approval_id"]),
+        )
+        try:
+            existing = self.ledger.find(
+                plan_id=str(plan["plan_id"]),
+                plan_sha256=str(plan["plan_sha256"]),
+                approval_id=str(approval["approval_id"]),
+            )
+        except VerificationError as exc:
+            if exc.code != "canary_execution_missing":
+                raise
+        else:
+            if existing.get("state") == REVOKED:
+                raise VerificationError("canary_revoked", "canary admission revoked")
+            if self._record_staged_bundle_expired(existing):
+                raise VerificationError("canary_bundle_expired", "canary staged bundle expired")
+            bundle_sha = str(existing.get("admission_bundle_sha256") or "")
+            if _SHA_RE.fullmatch(bundle_sha):
+                return bundle_sha
+            raise VerificationError("canary_bundle_missing", "staged admission bundle missing")
+        now = self.now()
+        staged_at = _iso(now)
+        staged_bundle_expires_at = _iso(now + timedelta(seconds=self.policy.staged_bundle_ttl_seconds))
+        bundle_sha = self.ledger.save_admission_bundle(
+            plan=plan,
+            approval=approval,
+            template_id=self.policy.template_id,
+            staged_at=staged_at,
+            staged_bundle_expires_at=staged_bundle_expires_at,
+        )
+        record, created = self.ledger.save_staged(
+            {
+                "schema_version": 1,
+                "execution_id": "exec_" + secrets.token_hex(12),
+                "template_id": self.policy.template_id,
+                "state": STAGED,
+                "plan_id": plan["plan_id"],
+                "plan_sha256": plan["plan_sha256"],
+                "approval_id": approval["approval_id"],
+                "admission_bundle_sha256": bundle_sha,
+                "request_key": request_key,
+                "staged_at": staged_at,
+                "staged_bundle_expires_at": staged_bundle_expires_at,
+            }
+        )
+        if record.get("state") == REVOKED:
+            raise VerificationError("canary_revoked", "canary admission revoked")
+        if record.get("state") != STAGED and record.get("admission_bundle_sha256") != bundle_sha:
+            raise VerificationError("canary_staged_conflict", "staged admission record conflict")
+        audit_id = self.ledger.append_audit(
+            {
+                "event": "canary_admission_staged",
+                "plan_id": plan["plan_id"],
+                "plan_sha256": plan["plan_sha256"],
+                "approval_id": approval["approval_id"],
+                "admission_bundle_sha256": bundle_sha,
+                "staged_bundle_expires_at": record.get("staged_bundle_expires_at"),
+                "created": created,
+            }
+        )
+        if created:
+            updated = dict(record)
+            updated["audit_id"] = audit_id
+            self.ledger.replace(updated)
+        return bundle_sha
+
+    def revoke_admission(
+        self,
+        *,
+        plan_id: str,
+        plan_sha256: str,
+        approval_id: str,
+        admission_bundle_sha256: str,
+    ) -> Dict[str, Any]:
+        bundle = self.ledger.load_admission_bundle(admission_bundle_sha256)
+        if (
+            bundle.get("template_id") != self.policy.template_id
+            or bundle.get("plan_id") != plan_id
+            or bundle.get("plan_sha256") != plan_sha256
+            or bundle.get("approval_id") != approval_id
+        ):
+            raise VerificationError("canary_bundle_binding", "canary admission bundle does not match request")
+        record = self.ledger.find(plan_id=plan_id, plan_sha256=plan_sha256, approval_id=approval_id)
+        if record.get("admission_bundle_sha256") != admission_bundle_sha256:
+            raise VerificationError("canary_bundle_binding", "staged admission record does not match bundle")
+        state = record.get("state")
+        if state == REVOKED:
+            return self._revocation_result(record, replay=True)
+        if state == EXECUTING:
+            raise VerificationError("canary_revoke_state", "executing canary admission cannot be revoked")
+        if state in TERMINAL_STATES:
+            raise VerificationError("canary_revoke_state", "terminal canary admission cannot be revoked")
+        if state not in {STAGED, APPROVED}:
+            raise VerificationError("canary_revoke_state", "canary admission is not revocable")
+        updated = dict(record)
+        updated["state"] = REVOKED
+        updated["revoked_at"] = _iso(self.now())
+        revoked = self.ledger.replace(updated, expected_state=str(state))
+        if revoked.get("state") != REVOKED:
+            raise VerificationError("canary_revoke_state", "concurrent canary admission transition rejected")
+        audit_id = self.ledger.append_audit(
+            {
+                "event": "canary_admission_revoked",
+                "execution_id": revoked["execution_id"],
+                "plan_id": revoked["plan_id"],
+                "plan_sha256": revoked["plan_sha256"],
+                "approval_id": revoked["approval_id"],
+                "admission_bundle_sha256": admission_bundle_sha256,
+                "template_id": revoked["template_id"],
+            }
+        )
+        revoked["audit_id"] = audit_id
+        revoked = self.ledger.replace(revoked)
+        return self._revocation_result(revoked)
+
     def deploy(
         self,
         *,
@@ -811,8 +1017,37 @@ class CanaryManager:
         dozeyguard_config: BrokerDozeyguardConfig,
     ) -> Dict[str, Any]:
         record = self.ledger.find(plan_id=plan_id, plan_sha256=plan_sha256, approval_id=approval_id)
+        if record.get("state") == REVOKED:
+            raise VerificationError("canary_revoked", "canary admission revoked")
+        if record.get("state") == STAGED:
+            raise VerificationError("canary_not_admitted", "canary admission is not approved")
         if record.get("state") != APPROVED:
             return self._result(record, replay=True)
+        if self._record_staged_bundle_expired(record):
+            expired = dict(record)
+            expired["state"] = EXPIRED
+            expired["finished_at"] = _iso(self.now())
+            expired = self.ledger.replace(expired, expected_state=APPROVED)
+            raise VerificationError("canary_bundle_expired", "canary staged bundle expired")
+        if self._record_approval_expired(record):
+            expired = dict(record)
+            expired["state"] = EXPIRED
+            expired["finished_at"] = _iso(self.now())
+            expired = self.ledger.replace(expired, expected_state=APPROVED)
+            audit_id = self.ledger.append_audit(
+                {
+                    "event": "canary_expired",
+                    "execution_id": expired["execution_id"],
+                    "plan_id": expired["plan_id"],
+                    "plan_sha256": expired["plan_sha256"],
+                    "approval_id": expired["approval_id"],
+                    "approval_nonce_hash": expired["approval_nonce_hash"],
+                    "template_id": expired["template_id"],
+                }
+            )
+            expired["audit_id"] = audit_id
+            self.ledger.replace(expired)
+            raise VerificationError("approval_expired", "approval expired")
         if not self.port_checker(self.policy.host, self.policy.port):
             raise VerificationError("canary_port_occupied", "canary localhost port is occupied")
         record = dict(record)
@@ -897,6 +1132,42 @@ class CanaryManager:
             raise VerificationError("approval_actor_mismatch", "approval actor mismatch")
         if require_approval:
             assert_approval_binds_plan(approval, plan_id=str(plan["plan_id"]), plan_sha256=str(plan["plan_sha256"]), now=self.now(), require_status=APPROVED)
+
+    def _looks_like_canary_plan(self, plan: Dict[str, Any]) -> bool:
+        source_spec = plan.get("source_spec")
+        if not isinstance(source_spec, dict):
+            return False
+        metadata = source_spec.get("metadata") or {}
+        if metadata.get("project") != self.policy.project or metadata.get("service") != self.policy.service:
+            return False
+        image = source_spec.get("image") or {}
+        try:
+            reference, digest = _digest_image_parts(self.policy.image)
+        except VerificationError:
+            return False
+        return image.get("reference") == reference and image.get("digest") == digest
+
+    def _record_approval_expired(self, record: Dict[str, Any]) -> bool:
+        try:
+            expires = parse_ts(str(record["approval_expires_at"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VerificationError("approval_expired", "approval expiry invalid") from exc
+        return self.now() >= expires
+
+    def _assert_staged_bundle_active(self, bundle: Dict[str, Any]) -> None:
+        try:
+            expires = parse_ts(str(bundle["staged_bundle_expires_at"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VerificationError("canary_bundle_expired", "canary staged bundle expiry invalid") from exc
+        if self.now() >= expires:
+            raise VerificationError("canary_bundle_expired", "canary staged bundle expired")
+
+    def _record_staged_bundle_expired(self, record: Dict[str, Any]) -> bool:
+        try:
+            expires = parse_ts(str(record["staged_bundle_expires_at"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VerificationError("canary_bundle_expired", "canary staged bundle expiry invalid") from exc
+        return self.now() >= expires
 
     def _assert_canary_plan(self, plan: Dict[str, Any], normalize_spec_to_compose: Callable) -> None:
         source_spec = plan.get("source_spec")
@@ -1036,4 +1307,18 @@ class CanaryManager:
             "cleanup": record.get("cleanup"),
             "audit_id": record.get("audit_id"),
             "primary_error": record.get("primary_error"),
+        }
+
+    def _revocation_result(self, record: Dict[str, Any], *, replay: bool = False) -> Dict[str, Any]:
+        return {
+            "status": "pass",
+            "state": record.get("state"),
+            "replay": replay,
+            "execution_id": record.get("execution_id"),
+            "template_id": record.get("template_id"),
+            "project": self.policy.project,
+            "service": self.policy.service,
+            "plan_sha256": record.get("plan_sha256"),
+            "audit_id": record.get("audit_id"),
+            "error": None,
         }

@@ -27,6 +27,7 @@
         "verify_plan",
         "dry_run",
         "admit_canary_execution",
+        "revoke_canary_admission",
         "deploy_canary",
         "remove_canary"
       ]

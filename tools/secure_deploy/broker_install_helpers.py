@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -15,6 +16,9 @@ BROKER_GROUP = "dockerpilot-secure-broker"
 RUN_DIR = Path("/run/dockerpilot-secure-broker")
 RUNTIME_CONFIG_DEST = Path("/etc/dockerpilot-secure-broker/config.json")
 BACKUP_MANIFEST_MARKER = "install-manifest.sha256"
+CANARY_OPERATIONS = {"admit_canary_execution", "revoke_canary_admission", "deploy_canary", "remove_canary"}
+PLACEHOLDER_DIGEST = "sha256:" + ("a" * 64)
+_DIGEST_IMAGE_RE = re.compile(r"^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$")
 
 
 def resolve_install_expect_user(
@@ -103,6 +107,23 @@ def materialize_runtime_config(template: Mapping[str, Any], *, peer_uid: int) ->
     raw = json.dumps(template, sort_keys=True)
     if '"expected_peer_uid"' in raw:
         raise ValueError("config template must not contain expected_peer_uid")
+    allowed_ops = set(data.get("allowed_operations") or [])
+    if allowed_ops & CANARY_OPERATIONS:
+        try:
+            ttl = int(data.get("canary_staged_bundle_ttl_seconds"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("canary_staged_bundle_ttl_seconds must be set for canary operations") from exc
+        if ttl <= 0 or ttl > 600:
+            raise ValueError("canary_staged_bundle_ttl_seconds out of range")
+        data["canary_staged_bundle_ttl_seconds"] = ttl
+        image = os.environ.get("DOCKERPILOT_CANARY_IMAGE") or str(data.get("canary_image") or "")
+        if not image or image.startswith("REPLACE_"):
+            raise ValueError("DOCKERPILOT_CANARY_IMAGE must be set for canary operations")
+        if not _DIGEST_IMAGE_RE.fullmatch(image):
+            raise ValueError("DOCKERPILOT_CANARY_IMAGE must be a digest-only image reference")
+        if image.endswith("@" + PLACEHOLDER_DIGEST):
+            raise ValueError("DOCKERPILOT_CANARY_IMAGE must not use the placeholder digest")
+        data["canary_image"] = image
     data["expected_peer_uid"] = int(peer_uid)
     return data
 

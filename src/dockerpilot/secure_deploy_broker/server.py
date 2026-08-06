@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from .canary import CanaryManager, CanaryPolicy, WORKDIR
+from .canary import PROJECT, SERVICE, CanaryManager, CanaryPolicy, WORKDIR
 from .errors import BrokerError, ProtocolError, VerificationError
 from .integrity import assert_trusted_artifact
 from .listen_fds import take_systemd_listen_fds
@@ -23,6 +23,9 @@ from .protocol import (
     validate_request,
 )
 from .verifier import BrokerDozeyguardConfig, resolve_broker_dozeyguard_config, verify_plan_independent
+
+CANARY_REQUIRED_OPERATIONS = frozenset({"admit_canary_execution", "deploy_canary", "remove_canary"})
+CANARY_REVOCATION_OPERATION = "revoke_canary_admission"
 
 
 @dataclass
@@ -41,6 +44,7 @@ class BrokerRuntimeConfig:
     canary_workdir: Optional[str] = None
     canary_image: Optional[str] = None
     canary_health_timeout_seconds: int = 60
+    canary_staged_bundle_ttl_seconds: int = 300
     canary_live_mode: bool = True
 
 
@@ -234,7 +238,8 @@ class BrokerServer:
                 "capabilities": {
                     "operations": sorted(self._allowed),
                     "apply_supported": False,
-                    "canary_supported": True,
+                    "canary_supported": CANARY_REQUIRED_OPERATIONS.issubset(self._allowed),
+                    "canary_revocation_supported": CANARY_REVOCATION_OPERATION in self._allowed,
                     "protocol_version": PROTOCOL_VERSION,
                 },
             }
@@ -255,6 +260,10 @@ class BrokerServer:
                 plan_firewall_actions=self._firewall,
             )
             verification["dry_run"] = op == "dry_run"
+            if op == "dry_run" and isinstance(approval, dict):
+                bundle_sha = self._canary_admission_bundle_sha(plan, approval)
+                if bundle_sha:
+                    verification["canary_admission_bundle_sha256"] = bundle_sha
             return {
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": request_id,
@@ -281,6 +290,21 @@ class BrokerServer:
                 "operation": op,
                 "ok": True,
                 "canary_admission": admission,
+            }
+        if op == "revoke_canary_admission":
+            self._assert_artifacts()
+            result = self._canary().revoke_admission(
+                plan_id=str(req.get("plan_id")),
+                plan_sha256=str(req.get("plan_sha256")),
+                approval_id=str(req.get("approval_id")),
+                admission_bundle_sha256=str(req.get("admission_bundle_sha256")),
+            )
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "operation": op,
+                "ok": True,
+                "canary_result": result,
             }
         if op == "deploy_canary":
             self._assert_artifacts()
@@ -320,12 +344,35 @@ class BrokerServer:
 
         return run_broker_dozeyguard_bytes(compose_bytes, config)
 
+    def _canary_admission_bundle_sha(
+        self,
+        plan: Dict[str, Any],
+        approval: Dict[str, Any],
+    ) -> Optional[str]:
+        source_spec = plan.get("source_spec") or {}
+        metadata = source_spec.get("metadata") if isinstance(source_spec, dict) else {}
+        if not isinstance(metadata, dict) or metadata.get("project") != PROJECT or metadata.get("service") != SERVICE:
+            return None
+        try:
+            return self._canary().maybe_stage_admission_bundle(
+                plan=plan,
+                approval=approval,
+                normalize_spec_to_compose=self._normalize,
+            )
+        except VerificationError as exc:
+            # Non-canary dry-runs must remain backwards compatible. If the plan
+            # looks canary-like but violates the broker-owned template, surface it.
+            if exc.code.startswith("canary_") or exc.code.startswith("approval_"):
+                raise
+            return None
+
     def _canary(self) -> CanaryManager:
         if self._canary_manager is None:
             policy = CanaryPolicy(
                 workdir=Path(self.config.canary_workdir) if self.config.canary_workdir else WORKDIR,
                 image=self.config.canary_image or CanaryPolicy().image,
                 health_timeout_seconds=int(self.config.canary_health_timeout_seconds),
+                staged_bundle_ttl_seconds=int(self.config.canary_staged_bundle_ttl_seconds),
                 live_mode=bool(self.config.canary_live_mode),
             )
             self._canary_manager = CanaryManager(policy=policy)
@@ -358,4 +405,5 @@ def build_canary_config(
         expected_artifact_uid=expected_artifact_uid,
         deny_writable_uid=deny_writable_uid,
         socket_activation=False,
+        canary_staged_bundle_ttl_seconds=300,
     )
