@@ -1,5 +1,5 @@
 [Unit]
-Description=DockerPilot Secure Deploy Broker (root dry-run/verify; no apply in #11D.1)
+Description=DockerPilot Secure Deploy Broker (preview-only / dry-run verify; NO canary)
 Documentation=file:///opt/dockerpilot/docs/security/SECURE_DEPLOY_BROKER_PROTOCOL_V1.md
 After=network.target
 
@@ -23,9 +23,14 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 CapabilityBoundingSet=
 AmbientCapabilities=
+# Preview-only: AF_UNIX only. No AF_INET / no loopback / no docker.sock.
+# Production canary unit is deploy/systemd/dockerpilot-secure-broker.service.
 RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 # No TCP listeners. No Flask. No legacy DockerPilotExtras imports.
-# No docker.sock. No UFW/iptables. Apply operations disabled until #11D.2+.
+# No docker.sock. No UFW/iptables. Canary/apply disabled in this example.
+InaccessiblePaths=/var/run/docker.sock
+InaccessiblePaths=-/run/docker.sock
 ReadOnlyPaths=/usr/local/lib/dockerpilot /etc/dockerpilot
 ReadWritePaths=/run/dockerpilot
 

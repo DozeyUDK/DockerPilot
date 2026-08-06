@@ -1,5 +1,5 @@
 [Unit]
-Description=DockerPilot Secure Deploy Broker (verify/dry-run only)
+Description=DockerPilot Secure Deploy Broker (verify/dry-run + closed canary)
 Documentation=file:///usr/libexec/dockerpilot-secure-broker/docs/ROOT_BROKER_SYSTEMD_HARDENING.md
 Requires=dockerpilot-secure-broker.socket
 After=network.target dockerpilot-secure-broker.socket
@@ -39,18 +39,27 @@ RestrictRealtime=true
 RestrictNamespaces=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictAddressFamilies=AF_UNIX
+# Canary needs AF_UNIX (broker + docker.sock) and AF_INET (127.0.0.1 bind check + HTTP health).
+# AF_INET6 is intentionally omitted: canary code uses host 127.0.0.1 only (no ::1).
+# PrivateNetwork must remain unset/false so the broker shares the host netns and can
+# reach the canary published on host loopback 127.0.0.1:18080. PrivateNetwork=true
+# would isolate the unit and break port_is_free() + the final HTTP health gate.
+RestrictAddressFamilies=AF_UNIX AF_INET
+# IP filters apply to IP packets only — they do NOT gate Unix sockets (broker.sock / docker.sock).
 IPAddressDeny=any
+# Narrowest host IP allow for canary HTTP GET / loopback preflight (port is not filterable here).
+IPAddressAllow=127.0.0.1/32
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @reboot @swap @raw-io @debug @module
 
-InaccessiblePaths=/var/run/docker.sock
-InaccessiblePaths=-/run/docker.sock
+# docker.sock is intentionally reachable: canary deploy/remove is broker-owned via
+# `docker compose` over the Unix socket. Extras must never receive this access.
+# Do NOT list /var/run/docker.sock or /run/docker.sock under InaccessiblePaths.
 ReadWritePaths=/var/lib/dockerpilot-secure-broker /run/dockerpilot-secure-broker
 ReadOnlyPaths=/usr/libexec/dockerpilot-secure-broker /etc/dockerpilot-secure-broker
 
-# Apply/deploy/firewall/secret materialization are NOT enabled in this unit.
+# Firewall/secret materialization remain disabled. Canary is the only live Docker path.
 
 [Install]
 WantedBy=multi-user.target
