@@ -113,7 +113,17 @@ htmlcov/
 *~
 
 # Secure Deploy root broker staging outputs (binaries/state; never commit)
+.staging/
 .staging/11d2a/
+secure-deploy-staging/
+secure-deploy-broker-staging/
+
+# Secure Deploy local runtime/state artifacts (never commit)
+secure_deploy_store/
+secure-deploy-store/
+broker.sock
+*.sock
+*.pid
 
 # Dozeyguard component (Rust build artifacts; never commit)
 components/dozeyguard/target/

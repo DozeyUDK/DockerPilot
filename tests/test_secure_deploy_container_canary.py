@@ -222,12 +222,41 @@ def _manager(fix, runner, *, port_free=True, http=(200, "Welcome to nginx"), pre
     )
 
 
-def _bundle_sha(manager, fix, *, plan=None, approval=None):
-    return manager.ledger.save_admission_bundle(
-        plan=plan or fix.plan,
-        approval=approval or fix.approval,
+def _bundle_sha(manager, fix, *, plan=None, approval=None, staged_at=None, staged_bundle_expires_at=None, save_staged=True):
+    plan = plan or fix.plan
+    approval = approval or fix.approval
+    staged_at = staged_at or fix.now().isoformat().replace("+00:00", "Z")
+    staged_bundle_expires_at = staged_bundle_expires_at or (fix.now() + timedelta(seconds=fix.policy.staged_bundle_ttl_seconds)).isoformat().replace("+00:00", "Z")
+    bundle_sha = manager.ledger.save_admission_bundle(
+        plan=plan,
+        approval=approval,
         template_id=fix.mods.TEMPLATE_ID,
+        staged_at=staged_at,
+        staged_bundle_expires_at=staged_bundle_expires_at,
     )
+    request_key = manager.ledger._request_key(
+        plan_id=str(plan["plan_id"]),
+        plan_sha256=str(plan["plan_sha256"]),
+        approval_id=str(approval["approval_id"]),
+    )
+    execution_id = "exec_" + request_key[:24]
+    if save_staged:
+        manager.ledger.save_staged(
+            {
+                "schema_version": 1,
+                "execution_id": execution_id,
+                "template_id": fix.mods.TEMPLATE_ID,
+                "state": "staged",
+                "plan_id": plan["plan_id"],
+                "plan_sha256": plan["plan_sha256"],
+                "approval_id": approval["approval_id"],
+                "admission_bundle_sha256": bundle_sha,
+                "request_key": request_key,
+                "staged_at": staged_at,
+                "staged_bundle_expires_at": staged_bundle_expires_at,
+            }
+        )
+    return bundle_sha
 
 
 def _admit(manager, fix, *, plan_sha256=None, approval=None, bundle_sha=None):
@@ -298,6 +327,29 @@ def test_request_schema_accepts_only_closed_canary_operations(tmp_path):
             "approval_id": fix.approval["approval_id"],
         }
     )
+    mods.validate_request(
+        {
+            **base,
+            "operation": "revoke_canary_admission",
+            "plan_id": fix.plan["plan_id"],
+            "plan_sha256": fix.plan["plan_sha256"],
+            "approval_id": fix.approval["approval_id"],
+            "admission_bundle_sha256": "a" * 64,
+        }
+    )
+    for forbidden in ("template_id", "plan", "approval"):
+        with pytest.raises(mods.ProtocolError):
+            mods.validate_request(
+                {
+                    **base,
+                    "operation": "revoke_canary_admission",
+                    "plan_id": fix.plan["plan_id"],
+                    "plan_sha256": fix.plan["plan_sha256"],
+                    "approval_id": fix.approval["approval_id"],
+                    "admission_bundle_sha256": "a" * 64,
+                    forbidden: mods.TEMPLATE_ID if forbidden == "template_id" else {},
+                }
+            )
     mods.validate_request({**base, "operation": "remove_canary", "canary_execution_id": "exec_" + "a" * 24})
 
     for field, value in {
@@ -375,13 +427,186 @@ def test_admission_loads_broker_owned_bundle_and_binds_actor_ttl_nonce_audit(tmp
     assert fix.approval["nonce"] not in audit_text
     assert "secret" not in audit_text.lower()
 
-    bad_actor = {**fix.approval, "actor": "mallory"}
+    bad_actor = {**fix.approval, "approval_id": "appr_" + "c" * 24, "actor": "mallory"}
     with pytest.raises(fix.mods.VerificationError, match="actor"):
         _admit(manager, fix, approval=bad_actor, bundle_sha=_bundle_sha(manager, fix, approval=bad_actor))
 
     expired = {**fix.approval, "approval_id": "appr_" + "b" * 24, "expires_at": (fix.now() - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")}
     with pytest.raises(fix.mods.VerificationError, match="expired"):
         _admit(manager, fix, approval=expired, bundle_sha=_bundle_sha(manager, fix, approval=expired))
+
+
+def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path):
+    fix = _fixture(tmp_path)
+    mods = fix.mods
+    from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
+
+    manager = _manager(fix, FakeRunner([]))
+    server = BrokerServer(
+        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        run_dozeyguard=None,
+        normalize_spec_to_compose=fix.normalize,
+        plan_firewall_actions=fix.firewall,
+        canary_manager=manager,
+    )
+    base = {
+        "protocol_version": 1,
+        "request_id": "breq_stage_bundle",
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+    }
+
+    dry = server._dispatch(
+        {
+            **base,
+            "operation": "dry_run",
+            "plan": fix.plan,
+            "approval": fix.approval,
+        }
+    )
+
+    mods.validate_response(dry)
+    bundle_sha = dry["verification"]["canary_admission_bundle_sha256"]
+    assert len(bundle_sha) == 64
+    bundle = manager.ledger.load_admission_bundle(bundle_sha)
+    assert bundle["plan"]["plan_id"] == fix.plan["plan_id"]
+    assert bundle["approval"]["approval_id"] == fix.approval["approval_id"]
+
+    admit = server._dispatch(
+        {
+            **base,
+            "request_id": "breq_admit_bundle",
+            "operation": "admit_canary_execution",
+            "template_id": mods.TEMPLATE_ID,
+            "plan_id": fix.plan["plan_id"],
+            "plan_sha256": fix.plan["plan_sha256"],
+            "approval_id": fix.approval["approval_id"],
+            "admission_bundle_sha256": bundle_sha,
+        }
+    )
+    mods.validate_response(admit)
+    assert admit["ok"] is True
+    assert admit["canary_admission"]["status"] == "approved"
+
+
+def test_failed_dry_run_creates_no_bundle(tmp_path):
+    fix = _fixture(tmp_path)
+    mods = fix.mods
+    from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
+
+    manager = _manager(fix, FakeRunner([]))
+    server = BrokerServer(
+        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        run_dozeyguard=None,
+        normalize_spec_to_compose=fix.normalize,
+        plan_firewall_actions=fix.firewall,
+        canary_manager=manager,
+    )
+    bad_plan = json.loads(json.dumps(fix.plan))
+    bad_plan["plan_sha256"] = "0" * 64
+    with pytest.raises(mods.VerificationError, match="plan_sha256"):
+        server._dispatch(
+            {
+                "protocol_version": 1,
+                "request_id": "breq_bad_dry",
+                "operation": "dry_run",
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "plan": bad_plan,
+                "approval": {**fix.approval, "plan_sha256": "0" * 64},
+            }
+        )
+    assert not list(manager.ledger.bundles_dir.glob("*.json"))
+    assert not list(manager.ledger.executions_dir.glob("*.json"))
+
+
+def test_identical_dry_run_is_idempotent_and_conflict_does_not_overwrite(tmp_path):
+    fix = _fixture(tmp_path)
+    from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
+
+    manager = _manager(fix, FakeRunner([]))
+    server = BrokerServer(
+        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        run_dozeyguard=None,
+        normalize_spec_to_compose=fix.normalize,
+        plan_firewall_actions=fix.firewall,
+        canary_manager=manager,
+    )
+    req = {
+        "protocol_version": 1,
+        "request_id": "breq_same_dry",
+        "operation": "dry_run",
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        "plan": fix.plan,
+        "approval": fix.approval,
+    }
+    first = server._dispatch(req)["verification"]["canary_admission_bundle_sha256"]
+    second = server._dispatch({**req, "request_id": "breq_same_dry2"})["verification"]["canary_admission_bundle_sha256"]
+    original_bundle = manager.ledger.load_admission_bundle(first)
+    changed_approval = {**fix.approval, "session_id_hash": "f" * 64}
+    third = server._dispatch({**req, "request_id": "breq_same_dry3", "approval": changed_approval})["verification"]["canary_admission_bundle_sha256"]
+    assert first == second == third
+    assert len(list(manager.ledger.bundles_dir.glob("*.json"))) == 1
+    assert len(list(manager.ledger.executions_dir.glob("*.json"))) == 1
+    assert manager.ledger.load_admission_bundle(first) == original_bundle
+
+
+def test_bundle_binding_unknown_tampered_cross_plan_approval_and_expired_rejected(tmp_path):
+    fix = _fixture(tmp_path)
+    manager = _manager(fix, FakeRunner([]))
+    with pytest.raises(fix.mods.VerificationError, match="missing"):
+        manager.admit(
+            plan_id=fix.plan["plan_id"],
+            plan_sha256=fix.plan["plan_sha256"],
+            approval_id=fix.approval["approval_id"],
+            admission_bundle_sha256="e" * 64,
+            template_id=fix.mods.TEMPLATE_ID,
+            dozeyguard_config=fix.dg_config,
+            run_dozeyguard=fix.run_dg,
+            normalize_spec_to_compose=fix.normalize,
+            plan_firewall_actions=fix.firewall,
+        )
+
+    bundle_sha = _bundle_sha(manager, fix)
+    bundle_path = manager.ledger.bundle_path(bundle_sha)
+    tampered = json.loads(bundle_path.read_text(encoding="utf-8"))
+    tampered["approval_id"] = "appr_" + "d" * 24
+    bundle_path.write_text(json.dumps(tampered, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(fix.mods.VerificationError, match="hash"):
+        _admit(manager, fix, bundle_sha=bundle_sha)
+
+    cross_plan = _fixture(tmp_path / "cross-plan")
+    cross_manager = _manager(cross_plan, FakeRunner([]))
+    cross_bundle = _bundle_sha(cross_manager, cross_plan)
+    with pytest.raises(cross_plan.mods.VerificationError, match="bundle"):
+        cross_manager.admit(
+            plan_id=fix.plan["plan_id"],
+            plan_sha256=fix.plan["plan_sha256"],
+            approval_id=cross_plan.approval["approval_id"],
+            admission_bundle_sha256=cross_bundle,
+            template_id=cross_plan.mods.TEMPLATE_ID,
+            dozeyguard_config=cross_plan.dg_config,
+            run_dozeyguard=cross_plan.run_dg,
+            normalize_spec_to_compose=cross_plan.normalize,
+            plan_firewall_actions=cross_plan.firewall,
+        )
+    with pytest.raises(cross_plan.mods.VerificationError, match="bundle"):
+        cross_manager.admit(
+            plan_id=cross_plan.plan["plan_id"],
+            plan_sha256=cross_plan.plan["plan_sha256"],
+            approval_id=fix.approval["approval_id"],
+            admission_bundle_sha256=cross_bundle,
+            template_id=cross_plan.mods.TEMPLATE_ID,
+            dozeyguard_config=cross_plan.dg_config,
+            run_dozeyguard=cross_plan.run_dg,
+            normalize_spec_to_compose=cross_plan.normalize,
+            plan_firewall_actions=cross_plan.firewall,
+        )
+
+    expired_fix = _fixture(tmp_path / "expired-bundle")
+    expired_manager = _manager(expired_fix, FakeRunner([]))
+    past = (expired_fix.now() - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    expired_bundle = _bundle_sha(expired_manager, expired_fix, staged_bundle_expires_at=past)
+    with pytest.raises(expired_fix.mods.VerificationError, match="expired"):
+        _admit(expired_manager, expired_fix, bundle_sha=expired_bundle)
 
 
 def test_wrong_plan_hash_and_duplicate_nonce_rejected(tmp_path):
@@ -445,6 +670,96 @@ def test_deploy_scans_final_bytes_exact_argv_health_and_success_cleanup(tmp_path
     replay = _deploy(manager, fix)
     assert replay["replay"] is True
     assert len(runner.calls) == 3
+
+
+def test_deploy_rechecks_approval_expiry_before_docker_commands(tmp_path):
+    fix = _fixture(tmp_path)
+    runner = FakeRunner([])
+    manager = _manager(fix, runner)
+    admitted = _admit(manager, fix)
+    record = manager.ledger.get(admitted["execution_id"])
+    expired_at = (fix.now() - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    manager.ledger.replace({**record, "approval_expires_at": expired_at})
+
+    with pytest.raises(fix.mods.VerificationError, match="expired"):
+        _deploy(manager, fix)
+
+    expired = manager.ledger.get(admitted["execution_id"])
+    assert expired["state"] == "expired"
+    assert runner.calls == []
+    audit_text = (fix.policy.workdir / "audit.jsonl").read_text(encoding="utf-8")
+    assert "canary_expired" in audit_text
+
+
+def test_revoke_before_admit_blocks_admit_and_is_idempotent(tmp_path):
+    fix = _fixture(tmp_path)
+    manager = _manager(fix, FakeRunner([]))
+    bundle_sha = _bundle_sha(manager, fix)
+    first = manager.revoke_admission(
+        plan_id=fix.plan["plan_id"],
+        plan_sha256=fix.plan["plan_sha256"],
+        approval_id=fix.approval["approval_id"],
+        admission_bundle_sha256=bundle_sha,
+    )
+    second = manager.revoke_admission(
+        plan_id=fix.plan["plan_id"],
+        plan_sha256=fix.plan["plan_sha256"],
+        approval_id=fix.approval["approval_id"],
+        admission_bundle_sha256=bundle_sha,
+    )
+    assert first["state"] == "revoked"
+    assert second["state"] == "revoked"
+    assert second["replay"] is True
+    with pytest.raises(fix.mods.VerificationError, match="revoked"):
+        _admit(manager, fix, bundle_sha=bundle_sha)
+    audit_text = (fix.policy.workdir / "audit.jsonl").read_text(encoding="utf-8")
+    assert "canary_admission_revoked" in audit_text
+    assert fix.approval["nonce"] not in audit_text
+
+
+def test_revoke_after_admit_blocks_direct_deploy_before_docker_commands(tmp_path):
+    fix = _fixture(tmp_path)
+    runner = FakeRunner([])
+    manager = _manager(fix, runner)
+    bundle_sha = _bundle_sha(manager, fix)
+    _admit(manager, fix, bundle_sha=bundle_sha)
+    revoked = manager.revoke_admission(
+        plan_id=fix.plan["plan_id"],
+        plan_sha256=fix.plan["plan_sha256"],
+        approval_id=fix.approval["approval_id"],
+        admission_bundle_sha256=bundle_sha,
+    )
+    assert revoked["state"] == "revoked"
+    with pytest.raises(fix.mods.VerificationError, match="revoked"):
+        _deploy(manager, fix)
+    assert runner.calls == []
+
+
+def test_revoke_unknown_and_executing_fail_closed(tmp_path):
+    fix = _fixture(tmp_path)
+    manager = _manager(fix, FakeRunner([]))
+    bundle_without_record = _bundle_sha(manager, fix, save_staged=False)
+    with pytest.raises(fix.mods.VerificationError, match="not admitted|missing"):
+        manager.revoke_admission(
+            plan_id=fix.plan["plan_id"],
+            plan_sha256=fix.plan["plan_sha256"],
+            approval_id=fix.approval["approval_id"],
+            admission_bundle_sha256=bundle_without_record,
+        )
+
+    executing_fix = _fixture(tmp_path / "executing")
+    executing_manager = _manager(executing_fix, FakeRunner([]))
+    executing_bundle = _bundle_sha(executing_manager, executing_fix)
+    admitted = _admit(executing_manager, executing_fix, bundle_sha=executing_bundle)
+    record = executing_manager.ledger.get(admitted["execution_id"])
+    executing_manager.ledger.replace({**record, "state": "executing"})
+    with pytest.raises(executing_fix.mods.VerificationError, match="executing"):
+        executing_manager.revoke_admission(
+            plan_id=executing_fix.plan["plan_id"],
+            plan_sha256=executing_fix.plan["plan_sha256"],
+            approval_id=executing_fix.approval["approval_id"],
+            admission_bundle_sha256=executing_bundle,
+        )
 
 
 def test_tamper_after_dozeyguard_before_up_fails_before_up(tmp_path):
@@ -719,6 +1034,9 @@ def test_broker_client_payloads_do_not_include_docker_overrides(monkeypatch):
     monkeypatch.setattr("backend.secure_deploy.broker_client.validate_response", lambda resp: resp)
 
     class Sock:
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
         def close(self):
             return None
 
@@ -729,6 +1047,12 @@ def test_broker_client_payloads_do_not_include_docker_overrides(monkeypatch):
     with pytest.raises(Exception, match="unsupported broker request field"):
         client.request("deploy_canary", project="not-allowed")
     client.admit_canary_execution(
+        plan_id=plan["plan_id"],
+        plan_sha256=plan["plan_sha256"],
+        approval_id=approval["approval_id"],
+        admission_bundle_sha256="d" * 64,
+    )
+    client.revoke_canary_admission(
         plan_id=plan["plan_id"],
         plan_sha256=plan["plan_sha256"],
         approval_id=approval["approval_id"],
@@ -750,9 +1074,21 @@ def test_broker_client_payloads_do_not_include_docker_overrides(monkeypatch):
         "admission_bundle_sha256",
         "template_id",
     }
-    assert captured[1]["operation"] == "deploy_canary"
-    assert set(captured[1]) == {"protocol_version", "request_id", "operation", "client", "plan_id", "plan_sha256", "approval_id"}
-    assert set(captured[2]) == {"protocol_version", "request_id", "operation", "client", "canary_execution_id"}
+    assert captured[1]["operation"] == "revoke_canary_admission"
+    assert set(captured[1]) == {
+        "protocol_version",
+        "request_id",
+        "operation",
+        "client",
+        "plan_id",
+        "plan_sha256",
+        "approval_id",
+        "admission_bundle_sha256",
+    }
+    assert "template_id" not in captured[1]
+    assert captured[2]["operation"] == "deploy_canary"
+    assert set(captured[2]) == {"protocol_version", "request_id", "operation", "client", "plan_id", "plan_sha256", "approval_id"}
+    assert set(captured[3]) == {"protocol_version", "request_id", "operation", "client", "canary_execution_id"}
 
 
 def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression(tmp_path):
@@ -769,6 +1105,11 @@ def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression
         def deploy(self, **kwargs):
             assert "run_dozeyguard_bytes" in kwargs
             return {"status": "pass", "state": "consumed", "replay": False, "execution_id": "exec_" + "a" * 24, "template_id": mods.TEMPLATE_ID, "project": "dockerpilot-secure-canary", "service": "web"}
+
+        def revoke_admission(self, **kwargs):
+            assert "template_id" not in kwargs
+            assert kwargs["admission_bundle_sha256"] == "d" * 64
+            return {"status": "pass", "state": "revoked", "replay": False, "execution_id": "exec_" + "a" * 24, "template_id": mods.TEMPLATE_ID, "project": "dockerpilot-secure-canary", "service": "web"}
 
         def remove(self, **kwargs):
             assert kwargs["execution_id"] == "exec_" + "a" * 24
@@ -791,13 +1132,44 @@ def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression
     caps = server._dispatch({**base, "operation": "capabilities"})["capabilities"]
     assert caps["apply_supported"] is False
     assert caps["canary_supported"] is True
+    assert caps["canary_revocation_supported"] is True
     for resp in [
         server._dispatch({**base, "operation": "admit_canary_execution", "template_id": mods.TEMPLATE_ID, "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
+        server._dispatch({**base, "operation": "revoke_canary_admission", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
         server._dispatch({**base, "operation": "deploy_canary", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"]}),
         server._dispatch({**base, "operation": "remove_canary", "canary_execution_id": "exec_" + "a" * 24}),
     ]:
         mods.validate_response(resp)
         assert resp["ok"] is True
+
+
+def test_old_preview_allowed_operations_do_not_enable_canary_or_revoke(tmp_path):
+    fix = _fixture(tmp_path)
+    from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
+
+    server = BrokerServer(
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=fix.dg_config,
+            expected_peer_uid=os.getuid(),
+            allowed_operations=frozenset({"ping", "capabilities", "verify_plan", "dry_run"}),
+        ),
+        run_dozeyguard=None,
+        normalize_spec_to_compose=fix.normalize,
+        plan_firewall_actions=fix.firewall,
+    )
+    caps = server._dispatch(
+        {
+            "protocol_version": 1,
+            "request_id": "breq_old_caps1",
+            "operation": "capabilities",
+            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        }
+    )["capabilities"]
+    assert caps["apply_supported"] is False
+    assert caps["canary_supported"] is False
+    assert caps["canary_revocation_supported"] is False
+    assert "revoke_canary_admission" not in caps["operations"]
 
 
 def test_extras_secure_deploy_canary_routes_do_not_call_docker(tmp_path):

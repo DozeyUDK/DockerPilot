@@ -123,6 +123,27 @@ def _make_plan(service, actor="admin"):
     return service.generate_plan(spec, actor, request_id="req_test")
 
 
+def _create_approved_plan(client, csrf: str):
+    spec = json.loads(PASS_SPEC.read_text(encoding="utf-8"))
+    plan_resp = client.post("/api/secure-deploy/plan", json={"spec": spec}, headers=_headers(csrf))
+    assert plan_resp.status_code == 201, plan_resp.get_json()
+    plan = plan_resp.get_json()["plan"]
+    approve_resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/approve",
+        json={"plan_sha256": plan["plan_sha256"], "totp_code": _totp()},
+        headers=_headers(csrf),
+    )
+    if approve_resp.status_code != 201:
+        time.sleep(1)
+        approve_resp = client.post(
+            f"/api/secure-deploy/plans/{plan['plan_id']}/approve",
+            json={"plan_sha256": plan["plan_sha256"], "totp_code": _totp()},
+            headers=_headers(csrf),
+        )
+    assert approve_resp.status_code == 201, approve_resp.get_json()
+    return plan, approve_resp.get_json()["approval"]
+
+
 def test_schema_mirrors_and_goldens_still_pass():
     import importlib.util
 
@@ -239,6 +260,161 @@ def test_http_approve_requires_step_up(authed_client):
         )
     assert ok.status_code == 201, ok.get_json()
     assert ok.get_json()["approval"]["status"] == "approved"
+
+
+def test_http_broker_dry_run_does_not_require_client_supplied_admission_bundle(authed_client, monkeypatch):
+    module, client, csrf = authed_client
+    plan, approval = _create_approved_plan(client, csrf)
+    captured = {}
+
+    def fake_dry_run(plan_arg, approval_arg):
+        captured["plan_id"] = plan_arg["plan_id"]
+        captured["approval_id"] = approval_arg["approval_id"]
+        return {
+            "verification": {
+                "status": "pass",
+                "broker_verification_sha256": "b" * 64,
+                "plan_sha256": plan_arg["plan_sha256"],
+                "dozeyguard_exit_code": 0,
+                "blocking_findings": 0,
+                "dry_run": True,
+                "canary_admission_bundle_sha256": "c" * 64,
+                "stages": [{"name": "independent_dozeyguard", "ok": True}],
+            }
+        }
+
+    monkeypatch.setattr(module._secure_deploy_broker, "dry_run", fake_dry_run)
+    resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/broker-dry-run",
+        json={"approval_id": approval["approval_id"]},
+        headers=_headers(csrf),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["verification"]["canary_admission_bundle_sha256"] == "c" * 64
+    assert captured == {"plan_id": plan["plan_id"], "approval_id": approval["approval_id"]}
+
+
+def test_http_canary_admit_passes_bundle_and_deploy_rejects_revoked_approval(authed_client, monkeypatch):
+    module, client, csrf = authed_client
+    plan, approval = _create_approved_plan(client, csrf)
+    bundle_sha = "d" * 64
+    captured = {}
+
+    def fake_admit_canary_execution(**kwargs):
+        captured["admit"] = kwargs
+        return {
+            "canary_admission": {
+                "status": "approved",
+                "execution_id": "exec_" + "a" * 24,
+                "template_id": "dockerpilot-secure-canary-v1",
+            }
+        }
+
+    deploy_calls = []
+
+    def fake_deploy_canary(**kwargs):
+        deploy_calls.append(kwargs)
+        return {"canary_result": {"status": "pass"}}
+
+    monkeypatch.setattr(module._secure_deploy_broker, "admit_canary_execution", fake_admit_canary_execution)
+    monkeypatch.setattr(module._secure_deploy_broker, "deploy_canary", fake_deploy_canary)
+
+    admit_resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/canary/admit",
+        json={"approval_id": approval["approval_id"], "admission_bundle_sha256": bundle_sha},
+        headers=_headers(csrf),
+    )
+
+    assert admit_resp.status_code == 200, admit_resp.get_json()
+    assert captured["admit"]["admission_bundle_sha256"] == bundle_sha
+    assert captured["admit"]["plan_sha256"] == plan["plan_sha256"]
+
+    module._secure_deploy_approvals.revoke(approval["approval_id"], actor="admin")
+    deploy_resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/canary/deploy",
+        json={"approval_id": approval["approval_id"]},
+        headers=_headers(csrf),
+    )
+
+    assert deploy_resp.status_code != 200
+    assert deploy_resp.get_json()["error"]["code"] == "approval_status"
+    assert deploy_calls == []
+
+
+def test_http_revoke_propagates_to_broker_and_pending_blocks_deploy(authed_client, monkeypatch):
+    module, client, csrf = authed_client
+    from backend.secure_deploy.errors import SecureDeployError
+
+    plan, approval = _create_approved_plan(client, csrf)
+    bundle_sha = "e" * 64
+
+    def fake_dry_run(plan_arg, _approval_arg):
+        return {
+            "verification": {
+                "status": "pass",
+                "broker_verification_sha256": "b" * 64,
+                "plan_sha256": plan_arg["plan_sha256"],
+                "dozeyguard_exit_code": 0,
+                "blocking_findings": 0,
+                "dry_run": True,
+                "canary_admission_bundle_sha256": bundle_sha,
+                "stages": [{"name": "independent_dozeyguard", "ok": True}],
+            }
+        }
+
+    monkeypatch.setattr(module._secure_deploy_broker, "dry_run", fake_dry_run)
+    dry_resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/broker-dry-run",
+        json={"approval_id": approval["approval_id"]},
+        headers=_headers(csrf),
+    )
+    assert dry_resp.status_code == 200, dry_resp.get_json()
+    bound = module._secure_deploy_approvals.get(approval["approval_id"])
+    assert bound["canary_admission_bundle_sha256"] == bundle_sha
+
+    revoke_calls = []
+
+    def unavailable_revoke(**kwargs):
+        revoke_calls.append(kwargs)
+        raise SecureDeployError("broker_unavailable", "broker socket missing", 503)
+
+    deploy_calls = []
+    monkeypatch.setattr(module._secure_deploy_broker, "revoke_canary_admission", unavailable_revoke)
+    monkeypatch.setattr(module._secure_deploy_broker, "deploy_canary", lambda **kwargs: deploy_calls.append(kwargs) or {"canary_result": {}})
+
+    revoke_resp = client.post(
+        f"/api/secure-deploy/approvals/{approval['approval_id']}/revoke",
+        json={"totp_code": _totp(now=time.time() + 30)},
+        headers=_headers(csrf),
+    )
+    assert revoke_resp.status_code == 202, revoke_resp.get_json()
+    body = revoke_resp.get_json()
+    assert body["revocation_complete"] is False
+    assert body["approval"]["status"] == "revocation_pending"
+    assert revoke_calls[0]["admission_bundle_sha256"] == bundle_sha
+
+    deploy_resp = client.post(
+        f"/api/secure-deploy/plans/{plan['plan_id']}/canary/deploy",
+        json={"approval_id": approval["approval_id"]},
+        headers=_headers(csrf),
+    )
+    assert deploy_resp.status_code != 200
+    assert deploy_resp.get_json()["error"]["code"] == "approval_status"
+    assert deploy_calls == []
+
+    def confirmed_revoke(**kwargs):
+        return {"canary_result": {"status": "pass", "state": "revoked", "replay": False}}
+
+    monkeypatch.setattr(module._secure_deploy_broker, "revoke_canary_admission", confirmed_revoke)
+    retry_resp = client.post(
+        f"/api/secure-deploy/approvals/{approval['approval_id']}/revoke",
+        json={"totp_code": _totp(now=time.time() - 30)},
+        headers=_headers(csrf),
+    )
+    assert retry_resp.status_code == 200, retry_resp.get_json()
+    assert retry_resp.get_json()["approval"]["status"] == "revoked"
 
 
 def test_broker_canary_dry_run(tmp_path, socket_enabled):

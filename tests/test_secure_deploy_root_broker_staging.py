@@ -17,7 +17,40 @@ STAGING = ROOT / ".staging" / "11d2a"
 BUNDLE = STAGING / "bundle"
 
 
-pytestmark = pytest.mark.skipif(not STAGING.exists(), reason="run build_root_broker_staging.py first")
+def _allow_local_unix_socket_connects() -> None:
+    pytest_socket = pytest.importorskip("pytest_socket")
+    pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fresh_staging_bundle(tmp_path_factory):
+    """Build a fresh offline staging bundle without cargo/sudo/system mutation."""
+    global STAGING, BUNDLE
+    sys.path.insert(0, str(ROOT / "tools" / "secure_deploy"))
+    import build_root_broker_staging as builder
+
+    tmp_root = tmp_path_factory.mktemp("root-broker-staging")
+    fake_src = tmp_root / "fake-dozeyguard-src"
+    fake_src.mkdir()
+    fake_bin = tmp_root / "dozeyguard"
+    fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(fake_bin, 0o755)
+
+    old_staging = builder.STAGING
+    old_bundle = builder.BUNDLE
+    old_build = builder.build_dozeyguard
+    builder.STAGING = tmp_root / "11d2a"
+    builder.BUNDLE = builder.STAGING / "bundle"
+    builder.build_dozeyguard = lambda: (fake_bin, ROOT)
+    try:
+        builder.main()
+        STAGING = builder.STAGING
+        BUNDLE = builder.BUNDLE
+        yield
+    finally:
+        builder.STAGING = old_staging
+        builder.BUNDLE = old_bundle
+        builder.build_dozeyguard = old_build
 
 
 def test_bundle_no_symlinks_or_home_refs():
@@ -72,6 +105,40 @@ def test_config_unknown_field_and_path_traversal():
         BrokerConfig({**base, "dozeyguard_path": "/usr/../etc/passwd"})
     with pytest.raises(BrokerError):
         BrokerConfig({**base, "allowed_operations": ["ping", "apply"]})
+    canary_base = {
+        **base,
+        "allowed_operations": [
+            "ping",
+            "capabilities",
+            "verify_plan",
+            "dry_run",
+            "admit_canary_execution",
+            "revoke_canary_admission",
+            "deploy_canary",
+            "remove_canary",
+        ],
+        "canary_workdir": "/var/lib/dockerpilot-secure-broker/canary/dockerpilot-secure-canary",
+        "canary_image": "docker.io/library/nginx@sha256:" + ("b" * 64),
+        "canary_health_timeout_seconds": 60,
+        "canary_staged_bundle_ttl_seconds": 300,
+        "canary_live_mode": True,
+    }
+    assert BrokerConfig(base).canary_staged_bundle_ttl_seconds == 300
+    assert BrokerConfig(canary_base).canary_image.endswith("b" * 64)
+    with pytest.raises(BrokerError) as canary_missing:
+        BrokerConfig({**canary_base, "canary_image": ""})
+    assert canary_missing.value.code == "config_canary_image"
+    missing_ttl = dict(canary_base)
+    del missing_ttl["canary_staged_bundle_ttl_seconds"]
+    with pytest.raises(BrokerError) as canary_missing_ttl:
+        BrokerConfig(missing_ttl)
+    assert canary_missing_ttl.value.code == "config_canary_ttl"
+    with pytest.raises(BrokerError) as canary_bad_ttl:
+        BrokerConfig({**canary_base, "canary_staged_bundle_ttl_seconds": 0})
+    assert canary_bad_ttl.value.code == "config_canary_ttl"
+    with pytest.raises(BrokerError) as canary_placeholder:
+        BrokerConfig({**canary_base, "canary_image": "docker.io/library/nginx@sha256:" + ("a" * 64)})
+    assert canary_placeholder.value.code == "config_canary_image"
     with pytest.raises(BrokerError) as ei:
         BrokerConfig({**base, "expected_peer_uid": None})
     assert ei.value.code == "config_peer_uid"
@@ -148,6 +215,7 @@ def test_listen_fds_validation(monkeypatch, tmp_path):
 
 
 def test_socket_activation_via_existing_socket(tmp_path):
+    _allow_local_unix_socket_connects()
     sys.path.insert(0, str(ROOT / "src"))
     sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
     from backend.secure_deploy.firewall_planner import plan_firewall_actions
@@ -191,6 +259,7 @@ def test_socket_activation_via_existing_socket(tmp_path):
 
 
 def test_standalone_staging_socket_cleanup(tmp_path):
+    _allow_local_unix_socket_connects()
     sys.path.insert(0, str(ROOT / "src"))
     sys.path.insert(0, str(ROOT / "DockerPilotExtras"))
     from backend.secure_deploy.firewall_planner import plan_firewall_actions
@@ -334,7 +403,16 @@ def test_manifest_hashes():
     assert digest == expected
     assert manifest["dozeyguard_sha256"]
     assert manifest["policy_sha256"]
-    assert set(manifest["allowed_operations"]) == {"ping", "capabilities", "verify_plan", "dry_run"}
+    assert set(manifest["allowed_operations"]) == {
+        "ping",
+        "capabilities",
+        "verify_plan",
+        "dry_run",
+        "admit_canary_execution",
+        "revoke_canary_admission",
+        "deploy_canary",
+        "remove_canary",
+    }
     assert "docker" in manifest["users"]["forbidden_groups"]
     if "forbidden_gids" in manifest["users"]:
         pytest.skip("staging predates #11E GID cleanup; rebuild after clearing root-owned staging debris")
@@ -364,6 +442,12 @@ def test_manifest_hashes():
     assert template["expected_peer_user"] == "dockerpilot-extras"
     assert "expected_peer_uid" not in template
     assert "997" not in json.dumps(template)
+    assert template["request_timeout_seconds"] == 150
+    assert template["canary_workdir"] == "/var/lib/dockerpilot-secure-broker/canary/dockerpilot-secure-canary"
+    assert template["canary_image"] == "REPLACE_WITH_DIGEST_ONLY_CANARY_IMAGE"
+    assert template["canary_health_timeout_seconds"] == 60
+    assert template["canary_staged_bundle_ttl_seconds"] == 300
+    assert template["canary_live_mode"] is True
     install_text = (STAGING / "INSTALL_ROOT_BROKER_CANARY_WITH_SUDO.sh").read_text(encoding="utf-8")
     assert "expected_peer_uid=997" not in install_text
     assert "pwd.getpwnam" in install_text or "getpwnam" in install_text
@@ -374,9 +458,32 @@ def test_manifest_hashes():
     assert "DOCKERPILOT_INSTALL_EXPECT_USER:-dozey" not in install_text
     assert "assert_backup_dir_compatible" in install_text
     assert "write_backup_manifest_marker" in install_text
+    assert "runtime config template validated before mutation" in install_text
+    assert install_text.index("runtime config template validated before mutation") < install_text.index("MUTATING=1")
     rollback_text = (STAGING / "ROLLBACK_ROOT_BROKER_CANARY_WITH_SUDO.sh").read_text(encoding="utf-8")
     assert "assert_backup_dir_compatible" in rollback_text
     assert "EXPECTED_MANIFEST_SHA" in rollback_text
+
+
+def test_corrupt_artifact_and_invalid_image_fail_before_mutation(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "tools" / "secure_deploy"))
+    import build_root_broker_staging as builder
+    import broker_install_helpers as bih
+
+    manifest = json.loads((STAGING / "install-manifest.json").read_text(encoding="utf-8"))
+    corrupt_stage = tmp_path / "corrupt-stage"
+    shutil.copytree(STAGING, corrupt_stage)
+    first = manifest["artifacts"][0]
+    (corrupt_stage / first["staging_path"]).write_text("corrupt\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="sha256 mismatch"):
+        builder.verify_manifest_artifacts(corrupt_stage, manifest)
+
+    template = json.loads(
+        (BUNDLE / "etc/dockerpilot-secure-broker/config.template.json").read_text(encoding="utf-8")
+    )
+    monkeypatch.setenv("DOCKERPILOT_CANARY_IMAGE", "docker.io/library/nginx:latest")
+    with pytest.raises(ValueError, match="digest-only"):
+        bih.materialize_runtime_config(template, peer_uid=1)
 
 
 def test_peer_uid_fail_closed_and_match():
@@ -400,7 +507,7 @@ def test_peer_uid_fail_closed_and_match():
     assert ei_other.value.code == "peer_uid_mismatch"
 
 
-def test_runtime_dir_umask_077_repair(tmp_path):
+def test_runtime_dir_umask_077_repair(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT / "tools" / "secure_deploy"))
     import broker_install_helpers as bih
 
@@ -448,6 +555,32 @@ def test_runtime_dir_umask_077_repair(tmp_path):
     out = bih.materialize_runtime_config(template, peer_uid=4242)
     assert out["expected_peer_uid"] == 4242
     assert "expected_peer_user" not in out
+    canary_template = {
+        **template,
+        "allowed_operations": [
+            "ping",
+            "capabilities",
+            "verify_plan",
+            "dry_run",
+            "admit_canary_execution",
+            "revoke_canary_admission",
+            "deploy_canary",
+            "remove_canary",
+        ],
+        "canary_image": "REPLACE_WITH_DIGEST_ONLY_CANARY_IMAGE",
+        "canary_staged_bundle_ttl_seconds": 300,
+    }
+    with pytest.raises(ValueError, match="DOCKERPILOT_CANARY_IMAGE"):
+        bih.materialize_runtime_config(canary_template, peer_uid=4242)
+    monkeypatch.setenv("DOCKERPILOT_CANARY_IMAGE", "docker.io/library/nginx@sha256:" + ("b" * 64))
+    canary_out = bih.materialize_runtime_config(canary_template, peer_uid=4242)
+    assert canary_out["canary_image"] == "docker.io/library/nginx@sha256:" + ("b" * 64)
+    assert canary_out["canary_staged_bundle_ttl_seconds"] == 300
+    monkeypatch.setenv("DOCKERPILOT_CANARY_IMAGE", "docker.io/library/nginx:latest")
+    with pytest.raises(ValueError, match="digest-only"):
+        bih.materialize_runtime_config(canary_template, peer_uid=4242)
+    with pytest.raises(ValueError, match="TTL|ttl|canary_staged_bundle_ttl_seconds"):
+        bih.materialize_runtime_config({**canary_template, "canary_staged_bundle_ttl_seconds": "bad"}, peer_uid=4242)
     with pytest.raises(ValueError):
         bih.materialize_runtime_config(template, peer_uid=0)
     with pytest.raises(ValueError):
