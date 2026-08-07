@@ -584,7 +584,7 @@ fn dg025_docker_host(service_name: &str, service: &Service, findings: &mut Vec<F
     if service
         .environment_entries()
         .iter()
-        .any(|entry| entry.key == "DOCKER_HOST" && entry.has_literal_value)
+        .any(|entry| entry.key == "DOCKER_HOST")
     {
         findings.push(finding(
             "DG025",
@@ -1011,13 +1011,21 @@ mod tests {
 
     #[test]
     fn dg025_detects_docker_host_without_value_leak() {
-        let findings =
-            scan_service_json(json!({"environment": {"DOCKER_HOST": "tcp://127.0.0.1:2375"}}));
-        let finding = findings
-            .iter()
-            .find(|finding| finding.rule_id == "DG025")
-            .unwrap();
-        assert!(!format!("{finding:?}").contains("2375"));
+        for environment in [
+            json!({"DOCKER_HOST": "tcp://127.0.0.1:2375"}),
+            json!({"DOCKER_HOST": "${DOCKER_HOST}"}),
+            json!({"DOCKER_HOST": null}),
+        ] {
+            let findings = scan_service_json(json!({"environment": environment}));
+            let finding = findings
+                .iter()
+                .find(|finding| finding.rule_id == "DG025")
+                .expect("DOCKER_HOST must always be rejected");
+            assert!(!format!("{finding:?}").contains("2375"));
+        }
+
+        let inherited = scan_service_json(json!({"environment": ["DOCKER_HOST"]}));
+        assert!(has(&inherited, "DG025"));
     }
 
     #[test]
