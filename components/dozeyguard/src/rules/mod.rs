@@ -84,8 +84,7 @@ fn dg002_docker_sock(service_name: &str, service: &Service, findings: &mut Vec<F
         ["/var/run/docker.sock", "/run/docker.sock"]
             .iter()
             .any(|socket| {
-                mount.source.as_deref() == Some(*socket)
-                    || mount.target.as_deref() == Some(*socket)
+                mount.source.as_deref() == Some(*socket) || mount.target.as_deref() == Some(*socket)
             })
     }) {
         findings.push(finding(
@@ -125,10 +124,7 @@ fn dg004_published_ports(
     findings: &mut Vec<Finding>,
 ) {
     for port in service.ports.iter().filter_map(PublishedPort::from_value) {
-        let non_loopback_host = !matches!(
-            port.host_ip.as_deref(),
-            Some("127.0.0.1") | Some("::1")
-        );
+        let non_loopback_host = !matches!(port.host_ip.as_deref(), Some("127.0.0.1") | Some("::1"));
         if non_loopback_host {
             findings.push(finding(
                 "DG004",

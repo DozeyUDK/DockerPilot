@@ -342,8 +342,7 @@ mod tests {
         assert_eq!(public.host_ip.as_deref(), Some("::"));
         assert_eq!(public.published, Some(8080));
 
-        let loopback =
-            parse_port_string("[::1]:18080:80/tcp").expect("loopback IPv6 binding");
+        let loopback = parse_port_string("[::1]:18080:80/tcp").expect("loopback IPv6 binding");
         assert_eq!(loopback.host_ip.as_deref(), Some("::1"));
         assert_eq!(loopback.published, Some(18080));
     }

@@ -71,8 +71,8 @@ impl Policy {
                 .find(|exception| exception.rule == finding.rule_id);
 
             if let Some(exception) = matching {
-                let metadata_present = !exception.reason.trim().is_empty()
-                    && !exception.owner.trim().is_empty();
+                let metadata_present =
+                    !exception.reason.trim().is_empty() && !exception.owner.trim().is_empty();
                 finding.exception_status = if !metadata_present {
                     ExceptionStatus::None
                 } else if exception.expires >= today {
@@ -135,11 +135,7 @@ mod tests {
     #[test]
     fn exception_requires_reason_and_owner() {
         let future = Utc::now().date_naive() + chrono::Duration::days(1);
-        for (reason, owner) in [
-            ("", "security"),
-            ("approved", ""),
-            ("   ", "security"),
-        ] {
+        for (reason, owner) in [("", "security"), ("approved", ""), ("   ", "security")] {
             let mut findings = vec![finding()];
             policy_with_exception(reason, owner, future).apply_exceptions(&mut findings);
             assert_eq!(findings[0].exception_status, ExceptionStatus::None);
