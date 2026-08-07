@@ -271,7 +271,10 @@ fn env_value_is_literal(value: &Value) -> bool {
 }
 
 fn interpolation_has_literal_default(text: &str) -> bool {
-    let Some(body) = text.strip_prefix("${").and_then(|value| value.strip_suffix('}')) else {
+    let Some(body) = text
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    else {
         return false;
     };
     let default = body
@@ -357,8 +360,12 @@ mod tests {
 
     #[test]
     fn environment_literal_detection_rejects_interpolation_defaults() {
-        assert!(!env_value_is_literal(&Value::String("${PASSWORD}".to_string())));
-        assert!(!env_value_is_literal(&Value::String("${PASSWORD:?required}".to_string())));
+        assert!(!env_value_is_literal(&Value::String(
+            "${PASSWORD}".to_string()
+        )));
+        assert!(!env_value_is_literal(&Value::String(
+            "${PASSWORD:?required}".to_string()
+        )));
         assert!(env_value_is_literal(&Value::String(
             "${PASSWORD:-fallback-value}".to_string(),
         )));

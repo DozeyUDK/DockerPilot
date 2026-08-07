@@ -807,10 +807,7 @@ mod tests {
         }
 
         let pinned = format!("nginx@sha256:{}", "a".repeat(64));
-        assert!(!has(
-            &scan_service_json(json!({"image": pinned})),
-            "DG013"
-        ));
+        assert!(!has(&scan_service_json(json!({"image": pinned})), "DG013"));
     }
 
     #[test]
