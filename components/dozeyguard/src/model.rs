@@ -256,10 +256,32 @@ pub fn value_to_string(value: Option<&Value>) -> Option<String> {
 fn env_value_is_literal(value: &Value) -> bool {
     match value {
         Value::Null => false,
-        Value::String(text) => !text.is_empty() && !text.starts_with("${"),
+        Value::String(text) => {
+            if text.is_empty() {
+                return false;
+            }
+            if !text.starts_with("${") {
+                return true;
+            }
+            interpolation_has_literal_default(text)
+        }
         Value::Bool(_) | Value::Number(_) => true,
         Value::Array(_) | Value::Object(_) => false,
     }
+}
+
+fn interpolation_has_literal_default(text: &str) -> bool {
+    let Some(body) = text
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    else {
+        return false;
+    };
+    let default = body
+        .split_once(":-")
+        .map(|(_, value)| value)
+        .or_else(|| body.split_once('-').map(|(_, value)| value));
+    default.is_some_and(|value| !value.is_empty())
 }
 
 fn parse_env_list_item(item: &str) -> EnvironmentEntry {
@@ -335,6 +357,22 @@ fn value_to_u16(value: &Value) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_literal_detection_rejects_interpolation_defaults() {
+        assert!(!env_value_is_literal(&Value::String(
+            "${PASSWORD}".to_string()
+        )));
+        assert!(!env_value_is_literal(&Value::String(
+            "${PASSWORD:?required}".to_string()
+        )));
+        assert!(env_value_is_literal(&Value::String(
+            "${PASSWORD:-fallback-value}".to_string(),
+        )));
+        assert!(env_value_is_literal(&Value::String(
+            "${PASSWORD-fallback-value}".to_string(),
+        )));
+    }
 
     #[test]
     fn parse_port_string_supports_ipv6_bindings() {

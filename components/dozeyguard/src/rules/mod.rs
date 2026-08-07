@@ -137,17 +137,26 @@ fn dg004_published_ports(
             continue;
         }
 
-        if let Some(published) = port.published {
-            if !policy.port_allowed(published) {
-                findings.push(finding(
-                    "DG004",
-                    Severity::High,
-                    service_name,
-                    "ports",
-                    "Published port is outside the allowed local port ranges.",
-                    "Move the host port into an allowed policy range.",
-                ));
-            }
+        let Some(published) = port.published else {
+            findings.push(finding(
+                "DG004",
+                Severity::High,
+                service_name,
+                "ports",
+                "Published port could not be validated against the allowed local port ranges.",
+                "Use a single explicit numeric host port inside an allowed policy range.",
+            ));
+            continue;
+        };
+        if !policy.port_allowed(published) {
+            findings.push(finding(
+                "DG004",
+                Severity::High,
+                service_name,
+                "ports",
+                "Published port is outside the allowed local port ranges.",
+                "Move the host port into an allowed policy range.",
+            ));
         }
     }
 }
@@ -594,12 +603,19 @@ fn dg025_docker_host(service_name: &str, service: &Service, findings: &mut Vec<F
 }
 
 fn image_uses_latest_or_no_tag(image: &str) -> bool {
-    if image.contains('@') {
-        return false;
+    if let Some((reference, digest)) = image.rsplit_once('@') {
+        return reference.is_empty() || reference.contains('@') || !valid_sha256_digest(digest);
     }
 
     let last_segment = image.rsplit('/').next().unwrap_or(image);
     !last_segment.contains(':') || last_segment.ends_with(":latest")
+}
+
+fn valid_sha256_digest(digest: &str) -> bool {
+    let Some(hex) = digest.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn image_registry(image: &str) -> String {
@@ -710,6 +726,13 @@ mod tests {
                 "did not expect DG004 for {port}"
             );
         }
+
+        for port in ["127.0.0.1:8000-8005:80-85", "[::1]:8000-8005:80-85"] {
+            assert!(
+                has(&scan_service_json(json!({"ports": [port]})), "DG004"),
+                "expected fail-closed DG004 for unvalidated range {port}"
+            );
+        }
     }
 
     #[test]
@@ -768,11 +791,23 @@ mod tests {
     }
 
     #[test]
-    fn dg013_detects_latest_image() {
-        assert!(has(
-            &scan_service_json(json!({"image": "nginx:latest"})),
-            "DG013"
-        ));
+    fn dg013_detects_latest_and_invalid_digests() {
+        for image in [
+            "nginx:latest",
+            "nginx@garbage",
+            "nginx@sha256:nothex",
+            "nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nginx@@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(
+                has(&scan_service_json(json!({"image": image})), "DG013"),
+                "expected DG013 for {image}"
+            );
+        }
+
+        let pinned = format!("nginx@sha256:{}", "a".repeat(64));
+        assert!(!has(&scan_service_json(json!({"image": pinned})), "DG013"));
     }
 
     #[test]
@@ -818,14 +853,18 @@ mod tests {
 
     #[test]
     fn dg021_detects_literal_secret_without_value_leak() {
-        let findings =
-            scan_service_json(json!({"environment": {"API_KEY": "SECRET_DO_NOT_PRINT_123"}}));
-        let finding = findings
-            .iter()
-            .find(|finding| finding.rule_id == "DG021")
-            .unwrap();
-        assert!(finding.field.contains("API_KEY"));
-        assert!(!format!("{finding:?}").contains("SECRET_DO_NOT_PRINT_123"));
+        for value in ["SECRET_DO_NOT_PRINT_123", "${API_KEY:-fallback-value}"] {
+            let findings = scan_service_json(json!({"environment": {"API_KEY": value}}));
+            let finding = findings
+                .iter()
+                .find(|finding| finding.rule_id == "DG021")
+                .expect("literal secret must be detected");
+            assert!(finding.field.contains("API_KEY"));
+            assert!(!format!("{finding:?}").contains(value));
+        }
+
+        let referenced = scan_service_json(json!({"environment": {"API_KEY": "${API_KEY}"}}));
+        assert!(!has(&referenced, "DG021"));
     }
 
     #[test]
