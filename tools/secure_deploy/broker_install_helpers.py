@@ -19,6 +19,7 @@ BACKUP_MANIFEST_MARKER = "install-manifest.sha256"
 CANARY_OPERATIONS = {"admit_canary_execution", "revoke_canary_admission", "deploy_canary", "remove_canary"}
 PLACEHOLDER_DIGEST = "sha256:" + ("a" * 64)
 _DIGEST_IMAGE_RE = re.compile(r"^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$")
+_MARKER_MAX_BYTES = 128
 
 
 def resolve_install_expect_user(
@@ -47,11 +48,36 @@ def resolve_install_expect_user(
     return candidate
 
 
+def _read_manifest_marker_nofollow(marker: Path) -> str:
+    """Read a small regular marker without ever following a symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(marker, flags)
+    except OSError as exc:
+        raise ValueError(f"backup manifest marker is not a safe regular file: {marker}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"backup manifest marker is not a regular file: {marker}")
+        if st.st_size > _MARKER_MAX_BYTES:
+            raise ValueError(f"backup manifest marker is oversized: {marker}")
+        raw = os.read(fd, _MARKER_MAX_BYTES + 1)
+        if len(raw) > _MARKER_MAX_BYTES:
+            raise ValueError(f"backup manifest marker is oversized: {marker}")
+        try:
+            return raw.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"backup manifest marker is not ASCII: {marker}") from exc
+    finally:
+        os.close(fd)
+
+
 def assert_backup_dir_compatible(backup_dir: Path, manifest_hash: str) -> None:
     """Refuse to mutate a backup dir bound to a different install manifest.
 
     Empty / missing dirs are OK. Existing dirs without a marker fail closed.
-    Same hash → idempotent (OK).
+    Same hash → idempotent (OK). Marker reads never follow symlinks and never
+    echo foreign marker contents into errors.
     """
     if not manifest_hash or len(manifest_hash) < 32:
         raise ValueError("manifest_hash invalid")
@@ -63,28 +89,52 @@ def assert_backup_dir_compatible(backup_dir: Path, manifest_hash: str) -> None:
     if not children:
         return
     marker = backup_dir / BACKUP_MANIFEST_MARKER
-    if not marker.is_file():
+    if not marker.exists() and not marker.is_symlink():
         raise ValueError(
             f"backup dir {backup_dir} exists without {BACKUP_MANIFEST_MARKER}; "
             "refuse to mutate (foreign or pre-binding backup)"
         )
-    existing = marker.read_text(encoding="utf-8").strip()
+    existing = _read_manifest_marker_nofollow(marker)
     if existing != manifest_hash:
-        raise ValueError(
-            f"backup dir belongs to a different install "
-            f"(have {existing[:16]}… want {manifest_hash[:16]}…)"
-        )
+        raise ValueError("backup dir belongs to a different install manifest")
 
 
 def write_backup_manifest_marker(backup_dir: Path, manifest_hash: str) -> None:
-    """Record the install manifest hash for this backup directory."""
+    """Record the install manifest hash for this backup directory safely."""
     assert_backup_dir_compatible(backup_dir, manifest_hash)
     backup_dir.mkdir(parents=True, exist_ok=True)
     marker = backup_dir / BACKUP_MANIFEST_MARKER
-    if marker.exists() and marker.is_symlink():
-        raise ValueError(f"refusing symlink marker: {marker}")
-    marker.write_text(manifest_hash.strip() + "\n", encoding="utf-8")
-    os.chmod(marker, 0o644)
+
+    # Existing compatible marker is already correct; avoid reopening it for write.
+    if marker.exists() or marker.is_symlink():
+        existing = _read_manifest_marker_nofollow(marker)
+        if existing != manifest_hash:
+            raise ValueError("backup dir belongs to a different install manifest")
+        return
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        fd = os.open(marker, flags, 0o644)
+    except OSError as exc:
+        raise ValueError(f"refusing unsafe backup manifest marker creation: {marker}") from exc
+    try:
+        payload = (manifest_hash.strip() + "\n").encode("ascii")
+        written = 0
+        while written < len(payload):
+            count = os.write(fd, payload[written:])
+            if count <= 0:
+                raise OSError("short write while creating backup manifest marker")
+            written += count
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.chmod(marker, 0o644, follow_symlinks=False)
 
 
 def materialize_runtime_config(template: Mapping[str, Any], *, peer_uid: int) -> Dict[str, Any]:
