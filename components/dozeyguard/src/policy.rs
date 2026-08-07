@@ -71,8 +71,11 @@ impl Policy {
                 .find(|exception| exception.rule == finding.rule_id);
 
             if let Some(exception) = matching {
-                let _metadata_present = !exception.reason.is_empty() && !exception.owner.is_empty();
-                finding.exception_status = if exception.expires >= today {
+                let metadata_present =
+                    !exception.reason.trim().is_empty() && !exception.owner.trim().is_empty();
+                finding.exception_status = if !metadata_present {
+                    ExceptionStatus::None
+                } else if exception.expires >= today {
                     ExceptionStatus::Active
                 } else {
                     ExceptionStatus::Expired
@@ -92,5 +95,66 @@ impl Policy {
             .filter_map(|range| range.split_once('-'))
             .filter_map(|(start, end)| Some((start.parse::<u16>().ok()?, end.parse::<u16>().ok()?)))
             .any(|(start, end)| (start..=end).contains(&port))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::finding::{ExceptionStatus, Severity};
+
+    fn finding() -> Finding {
+        Finding::new(
+            "DG001",
+            Severity::Critical,
+            "app",
+            "privileged",
+            "test",
+            "test",
+        )
+    }
+
+    fn policy_with_exception(reason: &str, owner: &str, expires: NaiveDate) -> Policy {
+        Policy {
+            services: BTreeMap::from([(
+                "app".to_string(),
+                ServicePolicy {
+                    class: None,
+                    exceptions: vec![PolicyException {
+                        rule: "DG001".to_string(),
+                        reason: reason.to_string(),
+                        owner: owner.to_string(),
+                        expires,
+                    }],
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exception_requires_reason_and_owner() {
+        let future = Utc::now().date_naive() + chrono::Duration::days(1);
+        for (reason, owner) in [("", "security"), ("approved", ""), ("   ", "security")] {
+            let mut findings = vec![finding()];
+            policy_with_exception(reason, owner, future).apply_exceptions(&mut findings);
+            assert_eq!(findings[0].exception_status, ExceptionStatus::None);
+            assert!(findings[0].blocks_at(Severity::High));
+        }
+    }
+
+    #[test]
+    fn valid_exception_is_active_until_expiry() {
+        let today = Utc::now().date_naive();
+        let mut active = vec![finding()];
+        policy_with_exception("approved", "security", today).apply_exceptions(&mut active);
+        assert_eq!(active[0].exception_status, ExceptionStatus::Active);
+        assert!(!active[0].blocks_at(Severity::High));
+
+        let mut expired = vec![finding()];
+        policy_with_exception("approved", "security", today - chrono::Duration::days(1))
+            .apply_exceptions(&mut expired);
+        assert_eq!(expired[0].exception_status, ExceptionStatus::Expired);
+        assert!(expired[0].blocks_at(Severity::High));
     }
 }

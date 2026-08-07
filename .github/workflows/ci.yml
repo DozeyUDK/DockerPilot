@@ -36,6 +36,28 @@ jobs:
       run: |
         python -m compileall -q src tests
 
+  dozeyguard:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Check formatting
+      working-directory: components/dozeyguard
+      run: cargo fmt --check
+
+    - name: Run Clippy
+      working-directory: components/dozeyguard
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run DozeyGuard tests
+      working-directory: components/dozeyguard
+      run: cargo test --all-targets
+
   windows-smoke:
     runs-on: windows-latest
     steps:

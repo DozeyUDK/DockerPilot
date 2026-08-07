@@ -81,8 +81,11 @@ fn dg001_privileged(service_name: &str, service: &Service, findings: &mut Vec<Fi
 
 fn dg002_docker_sock(service_name: &str, service: &Service, findings: &mut Vec<Finding>) {
     if service_mounts(service).iter().any(|mount| {
-        mount.source.as_deref() == Some("/var/run/docker.sock")
-            || mount.target.as_deref() == Some("/var/run/docker.sock")
+        ["/var/run/docker.sock", "/run/docker.sock"]
+            .iter()
+            .any(|socket| {
+                mount.source.as_deref() == Some(*socket) || mount.target.as_deref() == Some(*socket)
+            })
     }) {
         findings.push(finding(
             "DG002",
@@ -121,8 +124,8 @@ fn dg004_published_ports(
     findings: &mut Vec<Finding>,
 ) {
     for port in service.ports.iter().filter_map(PublishedPort::from_value) {
-        let public_host = matches!(port.host_ip.as_deref(), None | Some("0.0.0.0") | Some("::"));
-        if public_host {
+        let non_loopback_host = !matches!(port.host_ip.as_deref(), Some("127.0.0.1") | Some("::1"));
+        if non_loopback_host {
             findings.push(finding(
                 "DG004",
                 Severity::High,
@@ -577,7 +580,7 @@ fn dg025_docker_host(service_name: &str, service: &Service, findings: &mut Vec<F
     if service
         .environment_entries()
         .iter()
-        .any(|entry| entry.key == "DOCKER_HOST" && entry.has_literal_value)
+        .any(|entry| entry.key == "DOCKER_HOST")
     {
         findings.push(finding(
             "DG025",
@@ -666,11 +669,16 @@ mod tests {
     }
 
     #[test]
-    fn dg002_detects_docker_socket() {
-        assert!(has(
-            &scan_service_json(json!({"volumes": ["/var/run/docker.sock:/var/run/docker.sock"]})),
-            "DG002"
-        ));
+    fn dg002_detects_docker_socket_aliases() {
+        for socket in ["/var/run/docker.sock", "/run/docker.sock"] {
+            assert!(
+                has(
+                    &scan_service_json(json!({"volumes": [format!("{socket}:{socket}")]})),
+                    "DG002"
+                ),
+                "expected DG002 for {socket}"
+            );
+        }
     }
 
     #[test]
@@ -682,11 +690,26 @@ mod tests {
     }
 
     #[test]
-    fn dg004_detects_public_port() {
-        assert!(has(
-            &scan_service_json(json!({"ports": ["8080:80"]})),
-            "DG004"
-        ));
+    fn dg004_requires_explicit_loopback_binding() {
+        for port in [
+            "8080:80",
+            "0.0.0.0:8080:80",
+            "192.168.1.10:8080:80",
+            "10.0.0.5:8080:80",
+            "[::]:8080:80",
+        ] {
+            assert!(
+                has(&scan_service_json(json!({"ports": [port]})), "DG004"),
+                "expected DG004 for {port}"
+            );
+        }
+
+        for port in ["127.0.0.1:8080:80", "[::1]:8080:80"] {
+            assert!(
+                !has(&scan_service_json(json!({"ports": [port]})), "DG004"),
+                "did not expect DG004 for {port}"
+            );
+        }
     }
 
     #[test]
@@ -984,13 +1007,21 @@ mod tests {
 
     #[test]
     fn dg025_detects_docker_host_without_value_leak() {
-        let findings =
-            scan_service_json(json!({"environment": {"DOCKER_HOST": "tcp://127.0.0.1:2375"}}));
-        let finding = findings
-            .iter()
-            .find(|finding| finding.rule_id == "DG025")
-            .unwrap();
-        assert!(!format!("{finding:?}").contains("2375"));
+        for environment in [
+            json!({"DOCKER_HOST": "tcp://127.0.0.1:2375"}),
+            json!({"DOCKER_HOST": "${DOCKER_HOST}"}),
+            json!({"DOCKER_HOST": null}),
+        ] {
+            let findings = scan_service_json(json!({"environment": environment}));
+            let finding = findings
+                .iter()
+                .find(|finding| finding.rule_id == "DG025")
+                .expect("DOCKER_HOST must always be rejected");
+            assert!(!format!("{finding:?}").contains("2375"));
+        }
+
+        let inherited = scan_service_json(json!({"environment": ["DOCKER_HOST"]}));
+        assert!(has(&inherited, "DG025"));
     }
 
     #[test]
