@@ -188,8 +188,55 @@ def create_secure_deploy_resources(
                 require_secure_deploy_access()
                 data = _parse_json()
                 _require_step_up(data)
-                record = approval_service.revoke(approval_id, actor=get_actor())
-                return _envelope({"success": True, "approval": redact_for_log(record)})
+                actor = get_actor()
+                current = approval_service.get(approval_id)
+                bundle_sha = current.get("canary_admission_bundle_sha256")
+                broker_revocation = None
+                if isinstance(bundle_sha, str) and bundle_sha:
+                    try:
+                        broker_resp = broker_client.revoke_canary_admission(
+                            plan_id=str(current.get("plan_id") or ""),
+                            plan_sha256=str(current.get("plan_sha256") or ""),
+                            approval_id=approval_id,
+                            admission_bundle_sha256=bundle_sha,
+                        )
+                        broker_revocation = broker_resp.get("canary_result") or {}
+                    except SecureDeployError as exc:
+                        pending = approval_service.mark_revocation_pending(
+                            approval_id,
+                            actor=actor,
+                            error_code=exc.code,
+                            error_message=exc.message,
+                        )
+                        return _envelope(
+                            {
+                                "success": True,
+                                "revocation_complete": False,
+                                "approval": redact_for_log(pending),
+                                "local_revocation": {"status": pending.get("status")},
+                                "broker_revocation": {
+                                    "status": "pending",
+                                    "error": {"code": exc.code, "message": exc.message},
+                                },
+                            },
+                            202,
+                        )
+                    record = approval_service.confirm_broker_revoked(
+                        approval_id,
+                        actor=actor,
+                        broker_status=str(broker_revocation.get("state") or "revoked"),
+                    )
+                else:
+                    record = approval_service.revoke(approval_id, actor=actor)
+                return _envelope(
+                    {
+                        "success": True,
+                        "revocation_complete": True,
+                        "approval": redact_for_log(record),
+                        "local_revocation": {"status": record.get("status")},
+                        "broker_revocation": broker_revocation,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 return _handle(exc)
 
@@ -218,12 +265,91 @@ def create_secure_deploy_resources(
                     "dozeyguard_exit_code": verification.get("dozeyguard_exit_code"),
                     "blocking_findings": verification.get("blocking_findings"),
                     "dry_run": True,
+                    "canary_admission_bundle_sha256": verification.get("canary_admission_bundle_sha256"),
                     "stages": [
                         {"name": s.get("name"), "ok": s.get("ok")}
                         for s in (verification.get("stages") or [])
                     ],
                 }
+                bundle_sha = verification.get("canary_admission_bundle_sha256")
+                if isinstance(bundle_sha, str):
+                    approval_service.bind_canary_admission_bundle(
+                        approval_id,
+                        plan_id=plan_id,
+                        plan_sha256=str(plan.get("plan_sha256") or ""),
+                        admission_bundle_sha256=bundle_sha,
+                    )
                 return _envelope({"success": True, "verification": summary})
+            except Exception as exc:  # noqa: BLE001
+                return _handle(exc)
+
+    class SecureDeployCanaryAdmit(Resource):
+        def post(self, plan_id: str):
+            try:
+                require_secure_deploy_access()
+                data = _parse_json()
+                approval_id = data.get("approval_id")
+                if not isinstance(approval_id, str):
+                    raise SecureDeployError("invalid_json", "approval_id required", 400)
+                admission_bundle_sha256 = data.get("admission_bundle_sha256")
+                if not isinstance(admission_bundle_sha256, str):
+                    raise SecureDeployError("invalid_json", "admission_bundle_sha256 required", 400)
+                stored = service.get_plan(plan_id)
+                plan = stored.get("plan") or {}
+                approval = approval_service.get(approval_id)
+                if approval.get("plan_id") != plan_id:
+                    raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
+                if approval.get("plan_sha256") != plan.get("plan_sha256"):
+                    raise ValidationFailedError("approval hash mismatch", code="approval_plan_mismatch")
+                if approval.get("actor") != get_actor():
+                    raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
+                if approval.get("status") != "approved":
+                    raise ValidationFailedError("approval not active", code="approval_status")
+                resp = broker_client.admit_canary_execution(
+                    plan_id=plan_id,
+                    plan_sha256=str(plan.get("plan_sha256") or ""),
+                    approval_id=approval_id,
+                    admission_bundle_sha256=admission_bundle_sha256,
+                )
+                return _envelope({"success": True, "canary_admission": resp.get("canary_admission") or {}})
+            except Exception as exc:  # noqa: BLE001
+                return _handle(exc)
+
+    class SecureDeployCanaryDeploy(Resource):
+        def post(self, plan_id: str):
+            try:
+                require_secure_deploy_access()
+                data = _parse_json()
+                approval_id = data.get("approval_id")
+                if not isinstance(approval_id, str):
+                    raise SecureDeployError("invalid_json", "approval_id required", 400)
+                stored = service.get_plan(plan_id)
+                plan = stored.get("plan") or {}
+                approval = approval_service.get(approval_id)
+                if approval.get("plan_id") != plan_id:
+                    raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
+                if approval.get("plan_sha256") != plan.get("plan_sha256"):
+                    raise ValidationFailedError("approval hash mismatch", code="approval_plan_mismatch")
+                if approval.get("actor") != get_actor():
+                    raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
+                if approval.get("status") != "approved":
+                    raise ValidationFailedError("approval not active", code="approval_status")
+                resp = broker_client.deploy_canary(
+                    plan_id=plan_id,
+                    plan_sha256=str(plan.get("plan_sha256") or ""),
+                    approval_id=approval_id,
+                )
+                return _envelope({"success": True, "canary_result": resp.get("canary_result") or {}})
+            except Exception as exc:  # noqa: BLE001
+                return _handle(exc)
+
+    class SecureDeployCanaryRemove(Resource):
+        def post(self, canary_execution_id: str):
+            try:
+                require_secure_deploy_access()
+                _parse_json()
+                resp = broker_client.remove_canary(canary_execution_id=canary_execution_id)
+                return _envelope({"success": True, "canary_result": resp.get("canary_result") or {}})
             except Exception as exc:  # noqa: BLE001
                 return _handle(exc)
 
@@ -237,4 +363,7 @@ def create_secure_deploy_resources(
         SecureDeployApprovalDetail,
         SecureDeployApprovalRevoke,
         SecureDeployBrokerDryRun,
+        SecureDeployCanaryAdmit,
+        SecureDeployCanaryDeploy,
+        SecureDeployCanaryRemove,
     )

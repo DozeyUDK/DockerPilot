@@ -50,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         expected_artifact_gid=0 if os.geteuid() == 0 else None,
         socket_activation=cfg.socket_activation,
         allowed_operations=cfg.allowed_operations,
+        canary_workdir=cfg.canary_workdir,
+        canary_image=cfg.canary_image,
+        canary_health_timeout_seconds=cfg.canary_health_timeout_seconds,
+        canary_staged_bundle_ttl_seconds=cfg.canary_staged_bundle_ttl_seconds,
+        canary_live_mode=cfg.canary_live_mode,
     )
     server = BrokerServer(
         runtime,

@@ -19,8 +19,19 @@ from .errors import ScannerError, SecureDeployError
 from .store import new_id
 
 DEFAULT_TIMEOUT = 15.0
+CANARY_EXECUTION_TIMEOUT = 150.0
 CLIENT_NAME = "dockerpilot-extras"
 CLIENT_VERSION = os.environ.get("DOCKERPILOT_EXTRAS_VERSION", "0.9.0-pre.2")
+ALLOWED_REQUEST_FIELDS = frozenset(
+    {
+        "plan_id",
+        "plan_sha256",
+        "approval_id",
+        "admission_bundle_sha256",
+        "template_id",
+        "canary_execution_id",
+    }
+)
 
 
 class BrokerClient:
@@ -45,7 +56,16 @@ class BrokerClient:
             raise SecureDeployError("broker_unavailable", f"broker connect failed: {exc}", 503) from exc
         return sock
 
-    def request(self, operation: str, *, plan: Optional[Dict[str, Any]] = None, approval: Optional[Dict[str, Any]] = None, reconnect: bool = False) -> Dict[str, Any]:
+    def request(
+        self,
+        operation: str,
+        *,
+        plan: Optional[Dict[str, Any]] = None,
+        approval: Optional[Dict[str, Any]] = None,
+        reconnect: bool = False,
+        timeout: Optional[float] = None,
+        **fields: Any,
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "protocol_version": PROTOCOL_VERSION,
             "request_id": new_id("breq"),
@@ -56,15 +76,31 @@ class BrokerClient:
             payload["plan"] = plan
         if approval is not None:
             payload["approval"] = approval
+        unknown = set(fields) - ALLOWED_REQUEST_FIELDS
+        if unknown:
+            raise SecureDeployError(
+                "broker_request_field",
+                f"unsupported broker request field: {sorted(unknown)[0]}",
+                400,
+            )
+        payload.update(fields)
 
-        attempts = 2 if reconnect and operation in {"ping", "capabilities", "verify_plan", "dry_run"} else 1
+        attempts = (
+            2
+            if reconnect
+            and operation
+            in {"ping", "capabilities", "verify_plan", "dry_run", "admit_canary_execution", "revoke_canary_admission", "deploy_canary"}
+            else 1
+        )
         last_exc: Exception | None = None
+        response_timeout = timeout if timeout is not None else self.timeout
         for _ in range(attempts):
             sock = None
             try:
                 sock = self._connect()
+                sock.settimeout(response_timeout)
                 send_message(sock, payload)
-                resp = recv_message(sock, timeout=self.timeout)
+                resp = recv_message(sock, timeout=response_timeout)
                 validate_response(resp)
                 if not resp.get("ok"):
                     err = resp.get("error") or {}
@@ -95,3 +131,51 @@ class BrokerClient:
 
     def verify_plan(self, plan: Dict[str, Any], approval: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.request("verify_plan", plan=plan, approval=approval, reconnect=True)
+
+    def admit_canary_execution(
+        self,
+        *,
+        plan_id: str,
+        plan_sha256: str,
+        approval_id: str,
+        admission_bundle_sha256: str,
+    ) -> Dict[str, Any]:
+        return self.request(
+            "admit_canary_execution",
+            plan_id=plan_id,
+            plan_sha256=plan_sha256,
+            approval_id=approval_id,
+            admission_bundle_sha256=admission_bundle_sha256,
+            template_id="dockerpilot-secure-canary-v1",
+            reconnect=True,
+        )
+
+    def deploy_canary(self, *, plan_id: str, plan_sha256: str, approval_id: str) -> Dict[str, Any]:
+        return self.request(
+            "deploy_canary",
+            plan_id=plan_id,
+            plan_sha256=plan_sha256,
+            approval_id=approval_id,
+            reconnect=True,
+            timeout=CANARY_EXECUTION_TIMEOUT,
+        )
+
+    def revoke_canary_admission(
+        self,
+        *,
+        plan_id: str,
+        plan_sha256: str,
+        approval_id: str,
+        admission_bundle_sha256: str,
+    ) -> Dict[str, Any]:
+        return self.request(
+            "revoke_canary_admission",
+            plan_id=plan_id,
+            plan_sha256=plan_sha256,
+            approval_id=approval_id,
+            admission_bundle_sha256=admission_bundle_sha256,
+            reconnect=True,
+        )
+
+    def remove_canary(self, *, canary_execution_id: str) -> Dict[str, Any]:
+        return self.request("remove_canary", canary_execution_id=canary_execution_id)

@@ -2171,6 +2171,9 @@ def _verify_secure_deploy_step_up(code: str) -> bool:
     SecureDeployApprovalDetail,
     SecureDeployApprovalRevoke,
     SecureDeployBrokerDryRun,
+    SecureDeployCanaryAdmit,
+    SecureDeployCanaryDeploy,
+    SecureDeployCanaryRemove,
 ) = create_secure_deploy_resources(
     Resource=Resource,
     request=request,
@@ -2243,6 +2246,9 @@ register_api_routes(
     SecureDeployApprovalDetail=SecureDeployApprovalDetail,
     SecureDeployApprovalRevoke=SecureDeployApprovalRevoke,
     SecureDeployBrokerDryRun=SecureDeployBrokerDryRun,
+    SecureDeployCanaryAdmit=SecureDeployCanaryAdmit,
+    SecureDeployCanaryDeploy=SecureDeployCanaryDeploy,
+    SecureDeployCanaryRemove=SecureDeployCanaryRemove,
 )
 
 

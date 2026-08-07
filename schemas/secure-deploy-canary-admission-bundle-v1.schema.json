@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockerpilot.local/schemas/secure-deploy-canary-admission-bundle-v1.schema.json",
+  "title": "SecureDeployCanaryAdmissionBundle",
+  "description": "Broker-owned immutable admission material for the fixed Secure Deploy canary template. This file is not supplied in the broker request frame.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "template_id",
+    "plan_id",
+    "plan_sha256",
+    "approval_id",
+    "staged_at",
+    "staged_bundle_expires_at",
+    "plan",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "template_id": {
+      "type": "string",
+      "const": "dockerpilot-secure-canary-v1"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "approval_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "staged_at": { "type": "string", "minLength": 20, "maxLength": 40 },
+    "staged_bundle_expires_at": { "type": "string", "minLength": 20, "maxLength": 40 },
+    "plan": { "type": "object" },
+    "approval": { "type": "object" }
+  }
+}

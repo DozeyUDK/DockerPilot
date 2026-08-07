@@ -17,6 +17,7 @@ from .errors import ScannerError, ValidationFailedError
 DEFAULT_MAX_INPUT = 2 * 1024 * 1024
 DEFAULT_TIMEOUT = 15
 DEFAULT_MAX_OUTPUT = 2 * 1024 * 1024
+CONTROLLED_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 @dataclass
@@ -88,7 +89,7 @@ def run_dozeyguard_scan(compose_obj: Dict[str, Any], config: DozeyguardConfig) -
     ]
 
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": CONTROLLED_PATH,
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
     }

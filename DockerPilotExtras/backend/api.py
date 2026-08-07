@@ -62,6 +62,9 @@ def register_api_routes(
     SecureDeployApprovalDetail=None,
     SecureDeployApprovalRevoke=None,
     SecureDeployBrokerDryRun=None,
+    SecureDeployCanaryAdmit=None,
+    SecureDeployCanaryDeploy=None,
+    SecureDeployCanaryRemove=None,
 ):
     """Register all API resources and routes."""
     api.add_resource(HealthCheck, "/api/health")
@@ -134,3 +137,16 @@ def register_api_routes(
                 SecureDeployBrokerDryRun,
                 "/api/secure-deploy/plans/<string:plan_id>/broker-dry-run",
             )
+            if SecureDeployCanaryAdmit is not None:
+                api.add_resource(
+                    SecureDeployCanaryAdmit,
+                    "/api/secure-deploy/plans/<string:plan_id>/canary/admit",
+                )
+                api.add_resource(
+                    SecureDeployCanaryDeploy,
+                    "/api/secure-deploy/plans/<string:plan_id>/canary/deploy",
+                )
+                api.add_resource(
+                    SecureDeployCanaryRemove,
+                    "/api/secure-deploy/canary/executions/<string:canary_execution_id>/remove",
+                )

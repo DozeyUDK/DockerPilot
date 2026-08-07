@@ -420,6 +420,7 @@ raise SystemExit(main())
         "secure-deploy-broker-request-v1.schema.json",
         "secure-deploy-broker-response-v1.schema.json",
         "secure-deploy-approval-v1.schema.json",
+        "secure-deploy-canary-admission-bundle-v1.schema.json",
         "deployment-plan-v1.schema.json",
         "secure-deployment-spec-v1.schema.json",
     ]:
@@ -463,12 +464,22 @@ raise SystemExit(main())
     # Install-time template: name-based peer identity. Installer resolves UID via
     # getpwnam and writes root-owned config.json with numeric expected_peer_uid.
     # Runtime BrokerConfig rejects expected_peer_user and requires the integer.
+    allowed_operations = [
+        "ping",
+        "capabilities",
+        "verify_plan",
+        "dry_run",
+        "admit_canary_execution",
+        "revoke_canary_admission",
+        "deploy_canary",
+        "remove_canary",
+    ]
     config_template = {
         "protocol_version": 1,
         "socket_activation": True,
         "socket_path": f"{DEST_PREFIX['run']}/broker.sock",
         "max_frame_bytes": 2097152,
-        "request_timeout_seconds": 15,
+        "request_timeout_seconds": 150,
         "expected_peer_user": "dockerpilot-extras",
         "dozeyguard_path": f"{DEST_PREFIX['libexec']}/bin/dozeyguard",
         "policy_path": f"{DEST_PREFIX['etc']}/policy.toml",
@@ -476,7 +487,12 @@ raise SystemExit(main())
         "expected_policy_sha256": policy_sha,
         "schemas_root": f"{DEST_PREFIX['libexec']}/schemas",
         "state_root": f"{DEST_PREFIX['var']}",
-        "allowed_operations": ["ping", "capabilities", "verify_plan", "dry_run"],
+        "allowed_operations": allowed_operations,
+        "canary_workdir": f"{DEST_PREFIX['var']}/canary/dockerpilot-secure-canary",
+        "canary_image": "REPLACE_WITH_DIGEST_ONLY_CANARY_IMAGE",
+        "canary_health_timeout_seconds": 60,
+        "canary_staged_bundle_ttl_seconds": 300,
+        "canary_live_mode": True,
     }
     write_text(
         etc / "config.template.json",
@@ -494,6 +510,10 @@ raise SystemExit(main())
     staging_config["schemas_root"] = str(libexec / "schemas")
     staging_config["state_root"] = str(var)
     staging_config["expected_peer_uid"] = os.getuid()
+    staging_config["canary_image"] = (
+        "docker.io/library/nginx@"
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
     write_text(
         STAGING / "config.staging.json",
         json.dumps(staging_config, indent=2, sort_keys=True) + "\n",
@@ -584,7 +604,7 @@ raise SystemExit(main())
         "dozeyguard_git": version,
         "dozeyguard_sha256": binary_sha,
         "policy_sha256": policy_sha,
-        "allowed_operations": ["ping", "capabilities", "verify_plan", "dry_run"],
+        "allowed_operations": allowed_operations,
         "artifacts": artifacts,
         "users": {
             "extras_user": "dockerpilot-extras",
@@ -800,6 +820,23 @@ for art in manifest.get("artifacts") or []:
     if sha256_file(src) != expected_sha:
         raise SystemExit(f"sha256 mismatch for {dest}")
 print("all manifest artifacts verified before mutation")
+PY
+
+# Validate generated runtime config inputs before any host mutation. Use a
+# non-root placeholder UID here; the exact dockerpilot-extras UID is resolved
+# again during the mutating phase after the account is guaranteed to exist.
+python3 - <<'PY'
+import importlib.util, json, os
+from pathlib import Path
+staging = Path(os.environ["STAGING_OVERRIDE"])
+helpers_path = staging / "broker_install_helpers.py"
+spec = importlib.util.spec_from_file_location("broker_install_helpers", helpers_path)
+helpers = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(helpers)
+template = json.loads((staging / "bundle/etc/dockerpilot-secure-broker/config.template.json").read_text(encoding="utf-8"))
+helpers.materialize_runtime_config(template, peer_uid=1)
+print("runtime config template validated before mutation")
 PY
 
 mkdir -p "$BACKUP_DIR"
