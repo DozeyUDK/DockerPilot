@@ -298,6 +298,16 @@ fn parse_mount_string(text: &str) -> Mount {
 
 fn parse_port_string(text: &str) -> Option<PublishedPort> {
     let without_protocol = text.split('/').next().unwrap_or(text);
+
+    if let Some(ipv6) = without_protocol.strip_prefix('[') {
+        let (host_ip, remainder) = ipv6.split_once("]:")?;
+        let (published, _target) = remainder.split_once(':')?;
+        return Some(PublishedPort {
+            host_ip: Some(host_ip.to_string()),
+            published: published.parse().ok(),
+        });
+    }
+
     let parts: Vec<&str> = without_protocol.split(':').collect();
     match parts.as_slice() {
         [published, _target] => Some(PublishedPort {
@@ -319,5 +329,22 @@ fn value_to_u16(value: &Value) -> Option<u16> {
             .and_then(|number| u16::try_from(number).ok()),
         Value::String(text) => text.parse().ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_port_string_supports_ipv6_bindings() {
+        let public = parse_port_string("[::]:8080:80").expect("public IPv6 binding");
+        assert_eq!(public.host_ip.as_deref(), Some("::"));
+        assert_eq!(public.published, Some(8080));
+
+        let loopback =
+            parse_port_string("[::1]:18080:80/tcp").expect("loopback IPv6 binding");
+        assert_eq!(loopback.host_ip.as_deref(), Some("::1"));
+        assert_eq!(loopback.published, Some(18080));
     }
 }
