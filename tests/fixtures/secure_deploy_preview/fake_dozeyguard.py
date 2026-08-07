@@ -2,20 +2,48 @@
 """Fake dozeyguard for Secure Deploy adapter tests (no Docker)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
-from pathlib import Path
+from typing import Any
 
-# Allow importing dockerpilot from repo src
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "src"))
 
-from dockerpilot.secure_deploy.canonical import sha256_canonical, sha256_hex  # noqa: E402
+def _canonicalize(obj: Any) -> Any:
+    if obj is None or isinstance(obj, bool):
+        return obj
+    if isinstance(obj, int) and not isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            raise ValueError("non-finite floats are not allowed in canonical JSON")
+        return obj
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, dict):
+        return {key: _canonicalize(obj[key]) for key in sorted(obj.keys())}
+    if isinstance(obj, (list, tuple)):
+        return [_canonicalize(item) for item in obj]
+    raise TypeError(f"unsupported type for canonical JSON: {type(obj)!r}")
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_canonical(obj: Any) -> str:
+    canonical = _canonicalize(obj)
+    raw = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return _sha256_hex(raw)
 
 
 def main() -> int:
     raw = sys.stdin.buffer.read()
-    input_sha = sha256_hex(raw)
+    input_sha = _sha256_hex(raw)
     mode = "pass"
     if b"FORCE_FAIL" in raw:
         mode = "fail"
@@ -33,7 +61,6 @@ def main() -> int:
                 "error": {"code": "parse_error", "message": "forced error"},
             },
         }
-        # no result_sha256 required for error path consumed as scanner error
         print(json.dumps(report))
         return 1
 
@@ -74,7 +101,7 @@ def main() -> int:
         "findings": findings,
         "result": {"status": status, "exit_code": exit_code},
     }
-    result_sha = sha256_canonical(payload)
+    result_sha = _sha256_canonical(payload)
     payload["result"]["result_sha256"] = result_sha
     print(json.dumps(payload))
     return exit_code

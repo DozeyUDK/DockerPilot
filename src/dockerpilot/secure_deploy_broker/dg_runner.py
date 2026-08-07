@@ -13,6 +13,7 @@ from .errors import VerificationError
 from .verifier import BrokerDozeyguardConfig
 
 _OUTPUT_LIMIT = 1024 * 1024
+_CONTROLLED_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 def run_broker_dozeyguard(compose_obj: Dict[str, Any], config: BrokerDozeyguardConfig) -> Dict[str, Any]:
@@ -38,7 +39,7 @@ def run_broker_dozeyguard_bytes(payload: bytes, config: BrokerDozeyguardConfig) 
         "--max-input-bytes",
         str(2 * 1024 * 1024),
     ]
-    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    env = {"PATH": _CONTROLLED_PATH, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
     try:
         proc = subprocess.Popen(
             argv,
