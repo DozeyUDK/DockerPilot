@@ -853,18 +853,45 @@ mod tests {
 
     #[test]
     fn dg021_detects_literal_secret_without_value_leak() {
-        for value in ["SECRET_DO_NOT_PRINT_123", "${API_KEY:-fallback-value}"] {
-            let findings = scan_service_json(json!({"environment": {"API_KEY": value}}));
-            let finding = findings
-                .iter()
-                .find(|finding| finding.rule_id == "DG021")
-                .expect("literal secret must be detected");
-            assert!(finding.field.contains("API_KEY"));
-            assert!(!format!("{finding:?}").contains(value));
+        let leaking = [
+            "SECRET_DO_NOT_PRINT_123",
+            "${API_KEY:-fallback-value}",
+            "${API_KEY-fallback-value}",
+        ];
+        for value in leaking {
+            for environment in [
+                json!({"API_KEY": value}),
+                json!([format!("API_KEY={value}")]),
+            ] {
+                let findings = scan_service_json(json!({"environment": environment}));
+                let finding = findings
+                    .iter()
+                    .find(|finding| finding.rule_id == "DG021")
+                    .expect("literal secret must be detected");
+                assert!(finding.field.contains("API_KEY"));
+                let rendered = format!("{finding:?}");
+                assert!(!rendered.contains(value));
+                assert!(!rendered.contains("SECRET_DO_NOT_PRINT"));
+                assert!(!rendered.contains("fallback-value"));
+            }
         }
 
-        let referenced = scan_service_json(json!({"environment": {"API_KEY": "${API_KEY}"}}));
-        assert!(!has(&referenced, "DG021"));
+        for environment in [
+            json!({"API_KEY": "${API_KEY}"}),
+            json!({"API_KEY": "${API_KEY:?required}"}),
+            json!({"API_KEY": "${API_KEY:?must-be-set}"}),
+            json!({"API_KEY": ""}),
+            json!(["API_KEY=${API_KEY}"]),
+            json!(["API_KEY=${API_KEY:?required}"]),
+            json!(["API_KEY="]),
+            json!(["API_KEY"]),
+        ] {
+            let findings = scan_service_json(json!({"environment": environment}));
+            assert!(
+                !has(&findings, "DG021"),
+                "did not expect DG021 for {environment}"
+            );
+        }
     }
 
     #[test]
