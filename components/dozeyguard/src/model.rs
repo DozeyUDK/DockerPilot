@@ -256,39 +256,69 @@ pub fn value_to_string(value: Option<&Value>) -> Option<String> {
 fn env_value_is_literal(value: &Value) -> bool {
     match value {
         Value::Null => false,
-        Value::String(text) => {
-            if text.is_empty() {
-                return false;
-            }
-            if !text.starts_with("${") {
-                return true;
-            }
-            interpolation_has_literal_default(text)
-        }
+        Value::String(text) => string_env_value_is_literal(text),
         Value::Bool(_) | Value::Number(_) => true,
         Value::Array(_) | Value::Object(_) => false,
     }
 }
 
-fn interpolation_has_literal_default(text: &str) -> bool {
+fn string_env_value_is_literal(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    interpolation_embeds_literal(text)
+}
+
+/// True when a Compose value can embed a literal from the file rather than a
+/// pure environment reference. Malformed interpolations fail closed.
+fn interpolation_embeds_literal(text: &str) -> bool {
     let Some(body) = text
         .strip_prefix("${")
         .and_then(|value| value.strip_suffix('}'))
     else {
-        return false;
+        return true;
     };
-    let default = body
-        .split_once(":-")
-        .map(|(_, value)| value)
-        .or_else(|| body.split_once('-').map(|(_, value)| value));
-    default.is_some_and(|value| !value.is_empty())
+    interpolation_body_embeds_literal(body)
+}
+
+fn interpolation_body_embeds_literal(body: &str) -> bool {
+    let ident_len = env_ident_len(body);
+    if ident_len == 0 {
+        return true;
+    }
+    let rest = &body[ident_len..];
+    if rest.is_empty() {
+        return false;
+    }
+    if let Some(word) = rest.strip_prefix(":-").or_else(|| rest.strip_prefix('-')) {
+        return !word.is_empty();
+    }
+    if let Some(word) = rest.strip_prefix(":+").or_else(|| rest.strip_prefix('+')) {
+        return !word.is_empty();
+    }
+    if rest.starts_with(":?") || rest.starts_with('?') {
+        return false;
+    }
+    true
+}
+
+fn env_ident_len(body: &str) -> usize {
+    let mut chars = body.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return 0,
+    }
+    1 + chars
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .count()
 }
 
 fn parse_env_list_item(item: &str) -> EnvironmentEntry {
     if let Some((key, value)) = item.split_once('=') {
         return EnvironmentEntry {
             key: key.to_string(),
-            has_literal_value: !value.is_empty() && !value.starts_with("${"),
+            has_literal_value: string_env_value_is_literal(value),
         };
     }
 
@@ -360,18 +390,66 @@ mod tests {
 
     #[test]
     fn environment_literal_detection_rejects_interpolation_defaults() {
+        assert!(env_value_is_literal(&Value::String(
+            "literal-secret".into()
+        )));
+        assert!(!env_value_is_literal(&Value::String("${PASSWORD}".into())));
         assert!(!env_value_is_literal(&Value::String(
-            "${PASSWORD}".to_string()
+            "${PASSWORD:?required}".into()
         )));
         assert!(!env_value_is_literal(&Value::String(
-            "${PASSWORD:?required}".to_string()
+            "${PASSWORD:?must-be-set}".into()
         )));
         assert!(env_value_is_literal(&Value::String(
-            "${PASSWORD:-fallback-value}".to_string(),
+            "${PASSWORD:-fallback-value}".into(),
         )));
         assert!(env_value_is_literal(&Value::String(
-            "${PASSWORD-fallback-value}".to_string(),
+            "${PASSWORD-fallback-value}".into(),
         )));
+        assert!(!env_value_is_literal(&Value::String(
+            "${PASSWORD:-}".into()
+        )));
+        assert!(!env_value_is_literal(&Value::String("${PASSWORD-}".into())));
+        assert!(env_value_is_literal(&Value::String(
+            "${PASSWORD:+alt-secret}".into()
+        )));
+        assert!(env_value_is_literal(&Value::String(
+            "${PASSWORD:-secret}suffix".into()
+        )));
+        assert!(!env_value_is_literal(&Value::String(
+            " ${PASSWORD} ".into()
+        )));
+        assert!(!env_value_is_literal(&Value::String("".into())));
+        assert!(!env_value_is_literal(&Value::Null));
+    }
+
+    #[test]
+    fn env_list_literal_detection_matches_map_values() {
+        for value in [
+            "literal-secret",
+            "${PASSWORD:-fallback-value}",
+            "${PASSWORD-fallback-value}",
+            "value=with=equals",
+            "$$escaped",
+        ] {
+            let entry = parse_env_list_item(&format!("PASSWORD={value}"));
+            assert_eq!(entry.key, "PASSWORD");
+            assert!(
+                entry.has_literal_value,
+                "expected literal value for {value}"
+            );
+        }
+        for value in ["", "${PASSWORD}", "${PASSWORD:?required}"] {
+            let entry = parse_env_list_item(&format!("PASSWORD={value}"));
+            assert_eq!(entry.key, "PASSWORD");
+            assert!(
+                !entry.has_literal_value,
+                "did not expect literal value for {value}"
+            );
+        }
+        let inherited = parse_env_list_item("PASSWORD");
+        assert_eq!(inherited.key, "PASSWORD");
+        assert!(!inherited.has_literal_value);
     }
 
     #[test]
