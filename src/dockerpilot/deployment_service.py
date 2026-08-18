@@ -16,6 +16,10 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from .deployment_helpers import (
+    get_resource_limits as _get_resource_limits_impl,
+    normalize_volumes as _normalize_volumes_impl,
+)
 from .models import DeploymentConfig
 
 
@@ -1975,32 +1979,7 @@ class DeploymentServiceMixin:
 
     def _get_resource_limits(self, config: DeploymentConfig) -> dict:
         """Convert resource limits to Docker API format"""
-        limits = {}
-        
-        if config.cpu_limit:
-            # Convert CPU limit (e.g., "1.5" -> 1500000000 nanoseconds)
-            try:
-                cpu_limit = float(config.cpu_limit) * 1000000000
-                limits['nano_cpus'] = int(cpu_limit)
-            except:
-                pass
-        
-        if config.memory_limit:
-            # Convert memory limit (e.g., "1g" -> bytes)
-            try:
-                memory_str = config.memory_limit.lower()
-                if memory_str.endswith('g'):
-                    memory_bytes = int(float(memory_str[:-1]) * 1024 * 1024 * 1024)
-                elif memory_str.endswith('m'):
-                    memory_bytes = int(float(memory_str[:-1]) * 1024 * 1024)
-                else:
-                    memory_bytes = int(memory_str)
-                
-                limits['mem_limit'] = memory_bytes
-            except:
-                pass
-        
-        return limits
+        return _get_resource_limits_impl(config)
 
     def _normalize_volumes(self, volumes: Dict[str, str]) -> list:
         """Convert volumes from config format to Docker API format.
@@ -2014,43 +1993,7 @@ class DeploymentServiceMixin:
         - Already formatted as list: ['volume:/path'] -> unchanged
         - Already formatted as dict with bind/mode: {'/host': {'bind': '/container', 'mode': 'rw'}} -> ['/host:/container:rw']
         """
-        if not volumes:
-            return []
-        
-        # Handle case where volumes might already be a list (from previous normalization)
-        if isinstance(volumes, list):
-            return volumes
-        
-        # Handle case where volumes might not be a dict (defensive programming)
-        if not isinstance(volumes, dict):
-            self.logger.warning(f"Volumes is not a dict or list, got {type(volumes)}: {volumes}")
-            return []
-        
-        normalized = []
-        for key, value in volumes.items():
-            if isinstance(value, dict):
-                # Already in correct format with bind and mode
-                # Format: {'/host/path': {'bind': '/container/path', 'mode': 'rw'}}
-                if 'bind' in value:
-                    bind_path = value['bind']
-                    mode = value.get('mode', 'rw')
-                    normalized.append(f"{key}:{bind_path}:{mode}")
-                else:
-                    self.logger.warning(f"Volume dict for '{key}' missing 'bind', skipping: {value}")
-            elif isinstance(value, str):
-                # Check if it's a named volume (doesn't start with / or ./)
-                # Named volumes don't have leading slash in Docker
-                if not key.startswith('/') and not key.startswith('./') and not key.startswith('../'):
-                    # Named volume: format as 'volume_name:/container/path'
-                    normalized.append(f"{key}:{value}")
-                else:
-                    # Bind mount: format as '/host/path:/container/path'
-                    normalized.append(f"{key}:{value}")
-            else:
-                # Unknown format, log warning and skip
-                self.logger.warning(f"Unknown volume format for key '{key}': {type(value)} - {value}")
-        
-        return normalized
+        return _normalize_volumes_impl(volumes, self.logger)
 
     def _should_run_parallel_tests(self) -> bool:
         """Determine if parallel tests should be run"""
