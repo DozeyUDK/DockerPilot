@@ -571,3 +571,96 @@ fn secure_fixture_json_sha_stable_under_bounded_input() {
         second["result"]["result_sha256"]
     );
 }
+
+const POLICY_SENTINEL: &str = "POLICY_SECRET_DO_NOT_PRINT_987";
+
+fn scan_json_with_policy(policy: &std::path::Path) -> std::process::Output {
+    Command::new(bin())
+        .args([
+            "scan",
+            "--input",
+            &fixture("secure-compose.json"),
+            "--input-format",
+            "compose-json",
+            "--policy",
+            policy.to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn missing_policy_is_policy_error_without_path_contents() {
+    let output = scan_json_with_policy(std::path::Path::new(
+        "/nonexistent/dozeyguard-missing-policy.toml",
+    ));
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["contract_version"], 1);
+    assert_eq!(value["result"]["status"], "error");
+    assert_eq!(value["result"]["error"]["code"], "policy_error");
+    assert_eq!(value["policy"]["sha256"], "");
+    let message = value["result"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("failed to read policy file"));
+    assert!(!message.contains("input exceeds"));
+}
+
+#[test]
+fn invalid_utf8_policy_is_policy_error_without_content_leak() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("invalid-utf8.toml");
+    let mut bytes = POLICY_SENTINEL.as_bytes().to_vec();
+    bytes.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let output = scan_json_with_policy(&path);
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["contract_version"], 1);
+    assert_eq!(value["result"]["error"]["code"], "policy_error");
+    assert!(value["result"]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("UTF-8"));
+    assert!(!stdout.contains(POLICY_SENTINEL));
+    assert!(!stderr.contains(POLICY_SENTINEL));
+    assert_eq!(
+        value["policy"]["sha256"].as_str().unwrap().len(),
+        64,
+        "in-limit invalid UTF-8 policy is hashed, not inlined"
+    );
+}
+
+#[test]
+fn oversized_policy_is_policy_error_without_content_or_partial_hash() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("huge-policy.toml");
+    let mut payload = format!("# {POLICY_SENTINEL}\n").into_bytes();
+    payload.resize(1024 * 1024 + 1, b'x');
+    std::fs::write(&path, &payload).unwrap();
+
+    let output = scan_json_with_policy(&path);
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["contract_version"], 1);
+    assert_eq!(value["result"]["status"], "error");
+    assert_eq!(value["result"]["error"]["code"], "policy_error");
+    let message = value["result"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("policy file exceeds"));
+    assert!(!message.contains("input exceeds"));
+    assert!(!message.contains("input_too_large"));
+    assert_eq!(
+        value["policy"]["sha256"], "",
+        "oversized policy must not be hashed from a truncated prefix"
+    );
+    assert!(!stdout.contains(POLICY_SENTINEL));
+    assert!(!stderr.contains(POLICY_SENTINEL));
+    assert!(!stdout.contains(&"x".repeat(64)));
+}

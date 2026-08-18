@@ -2,7 +2,23 @@
 
 use std::io::Read;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use thiserror::Error;
+
+/// Reader produced more than `limit` bytes. Display keeps the historical
+/// input-limit wording used by the Compose JSON path.
+#[derive(Debug, Error)]
+#[error("input exceeds max-input-bytes limit ({actual} > {limit})")]
+pub struct SizeLimitExceeded {
+    pub actual: usize,
+    pub limit: usize,
+}
+
+pub fn is_size_limit_exceeded(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<SizeLimitExceeded>().is_some())
+}
 
 /// Read at most `max_bytes` from `reader`.
 ///
@@ -16,13 +32,13 @@ pub fn read_bounded<R: Read>(reader: R, max_bytes: usize) -> Result<Vec<u8>> {
     reader
         .take(u64::try_from(limit).unwrap_or(u64::MAX))
         .read_to_end(&mut buffer)
-        .context("failed to read input")?;
+        .context("failed to read")?;
     if buffer.len() > max_bytes {
-        bail!(
-            "input exceeds max-input-bytes limit ({} > {})",
-            buffer.len(),
-            max_bytes
-        );
+        return Err(SizeLimitExceeded {
+            actual: buffer.len(),
+            limit: max_bytes,
+        }
+        .into());
     }
     Ok(buffer)
 }
@@ -108,5 +124,14 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("too large"));
+    }
+
+    #[test]
+    fn size_limit_error_survives_anyhow_context() {
+        let err = read_bounded(Cursor::new(vec![b'a'; 3]), 2)
+            .unwrap_err()
+            .context("wrapper");
+        assert!(is_size_limit_exceeded(&err));
+        assert!(format!("{err:#}").contains("input exceeds"));
     }
 }
