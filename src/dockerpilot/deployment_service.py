@@ -25,6 +25,10 @@ from .deployment_helpers import (
     get_resource_limits as _get_resource_limits_impl,
     normalize_volumes as _normalize_volumes_impl,
 )
+from .image_preparation import (
+    ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
+    prepare_image as _prepare_image_impl,
+)
 from .models import DeploymentConfig
 
 
@@ -172,47 +176,12 @@ class DeploymentServiceMixin:
 
     def _ensure_image_from_existing_container(self, image_tag: str, container_name: Optional[str]) -> bool:
         """Try to satisfy image requirement by aliasing image used by existing container."""
-        if not container_name:
-            return False
-
-        try:
-            container = self.client.containers.get(container_name)
-        except docker.errors.NotFound:
-            return False
-        except Exception as exc:
-            self.logger.debug(f"Could not inspect container {container_name} for image fallback: {exc}")
-            return False
-
-        source_image = container.image
-        if not source_image:
-            return False
-
-        if image_tag in (source_image.tags or []):
-            self.logger.info(f"Using image {image_tag} from existing container {container_name}")
-            return True
-
-        if "@" in image_tag:
-            # Digest references cannot be re-tagged with Docker tag semantics.
-            self.logger.info(
-                f"Using digest image from existing container {container_name} (skipping local retag for {image_tag})"
-            )
-            return True
-
-        if ":" in image_tag and image_tag.rfind(":") > image_tag.rfind("/"):
-            repository, tag = image_tag.rsplit(":", 1)
-        else:
-            repository, tag = image_tag, "latest"
-        try:
-            source_image.tag(repository, tag=tag)
-            self.logger.info(
-                f"Tagged existing container image {container.id[:12]} as {repository}:{tag} for deployment fallback"
-            )
-            return True
-        except Exception as exc:
-            self.logger.warning(
-                f"Could not tag image from container {container_name} as {image_tag}: {exc}"
-            )
-            return False
+        return _ensure_image_from_existing_container_impl(
+            image_tag,
+            container_name,
+            client=self.client,
+            logger=self.logger,
+        )
 
     def deploy_from_config(self, config_path: str, deployment_type: str = "rolling") -> bool:
         """Deploy using configuration file"""
@@ -1419,46 +1388,16 @@ class DeploymentServiceMixin:
         return True
 
     def _prepare_image(self, image_tag: str, build_config: dict = None, container_name: Optional[str] = None):
-        """Prepare image for deployment - check if exists, pull, or build.
-        
-        Args:
-            image_tag: Docker image tag to prepare
-            build_config: Optional build configuration dict
-            container_name: Optional running container name for local-image fallback
-        
-        Returns:
-            tuple: (success: bool, message: str)
-        """
-        # Check if image already exists locally
-        try:
-            self.client.images.get(image_tag)
-            self.logger.info(f"Image {image_tag} already exists locally")
-            return True, "Image already exists"
-        except docker.errors.ImageNotFound:
-            pass
-
-        if self._ensure_image_from_existing_container(image_tag, container_name):
-            return True, "Image resolved from existing container"
-        
-        # If build_config is provided and has dockerfile_path, try to build
-        if build_config and build_config.get('dockerfile_path'):
-            build_success = self._build_image_enhanced(image_tag, build_config)
-            if build_success:
-                return True, "Image built successfully"
-            # If build failed, try to pull as fallback
-            self.logger.warning(f"Build failed, trying to pull image {image_tag}")
-        
-        # Try to pull image from registry
-        try:
-            self.logger.info(f"Pulling image {image_tag} from registry...")
-            self.client.images.pull(image_tag)
-            return True, "Image pulled successfully"
-        except Exception as pull_error:
-            if self._ensure_image_from_existing_container(image_tag, container_name):
-                return True, "Image resolved from existing container after pull failure"
-            error_msg = f"Failed to pull image {image_tag}: {pull_error}"
-            self.logger.error(error_msg)
-            return False, error_msg
+        """Prepare image for deployment - check if exists, pull, or build."""
+        return _prepare_image_impl(
+            image_tag,
+            build_config,
+            container_name,
+            client=self.client,
+            logger=self.logger,
+            ensure_existing_image=self._ensure_image_from_existing_container,
+            build_image=self._build_image_enhanced,
+        )
 
     def _build_image_enhanced(self, image_tag: str, build_config: dict) -> bool:
         """Enhanced image building with advanced features"""
