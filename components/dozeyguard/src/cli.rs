@@ -1,17 +1,21 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::finding::{scan_exit_code, Severity};
-use crate::input::read_bounded;
+use crate::input::{is_size_limit_exceeded, read_bounded, SizeLimitExceeded};
 use crate::output;
 use crate::parser;
 use crate::policy::Policy;
 use crate::rules;
 use crate::{DEFAULT_MAX_INPUT_BYTES, HARD_MAX_INPUT_BYTES, JSON_CONTRACT_VERSION};
+
+/// Policy files are expected to be small. Bound repository-controlled policy
+/// input so a malformed or hostile file cannot force an unbounded allocation.
+const MAX_POLICY_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -123,10 +127,7 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
         Ok(bytes) => bytes,
         Err(error) => {
             let message = format!("{error:#}");
-            let code = if error
-                .chain()
-                .any(|cause| cause.to_string().contains("input exceeds"))
-            {
+            let code = if is_size_limit_exceeded(&error) {
                 "input_too_large"
             } else {
                 "input_error"
@@ -135,21 +136,33 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
         }
     };
 
-    let policy_text = match fs::read_to_string(&args.policy) {
-        Ok(text) => text,
+    let policy_bytes = match read_policy_bounded(&args.policy, MAX_POLICY_BYTES) {
+        Ok(bytes) => bytes,
         Err(error) => {
             return Ok(emit_error(
                 &args,
                 "policy_error",
-                format!("failed to read policy file: {error}"),
+                format!("{error:#}"),
                 Some(&input),
                 None,
             ));
         }
     };
-    let policy_bytes = policy_text.as_bytes();
 
-    let policy = match Policy::from_toml(&policy_text) {
+    let policy_text = match std::str::from_utf8(&policy_bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            return Ok(emit_error(
+                &args,
+                "policy_error",
+                "policy file is not valid UTF-8".to_string(),
+                Some(&input),
+                Some(&policy_bytes),
+            ));
+        }
+    };
+
+    let policy = match Policy::from_toml(policy_text) {
         Ok(policy) => policy,
         Err(_) => {
             return Ok(emit_error(
@@ -157,7 +170,7 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
                 "policy_error",
                 "failed to parse policy TOML".to_string(),
                 Some(&input),
-                Some(policy_bytes),
+                Some(&policy_bytes),
             ));
         }
     };
@@ -170,7 +183,7 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
                 "input_error",
                 "input is not valid UTF-8".to_string(),
                 Some(&input),
-                Some(policy_bytes),
+                Some(&policy_bytes),
             ));
         }
     };
@@ -184,7 +197,7 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
                     "parse_error",
                     "failed to parse Compose JSON".to_string(),
                     Some(&input),
-                    Some(policy_bytes),
+                    Some(&policy_bytes),
                 ));
             }
         },
@@ -200,7 +213,7 @@ fn scan(args: ScanArgs) -> anyhow::Result<i32> {
             args.fail_on,
             services,
             &input,
-            policy_bytes,
+            &policy_bytes,
         )?,
         OutputFormat::Markdown => output::markdown::render(&findings),
     };
@@ -222,15 +235,84 @@ fn read_input(input: &str, max_bytes: usize) -> anyhow::Result<Vec<u8>> {
             let len = meta.len();
             let max = u64::try_from(max_bytes).unwrap_or(u64::MAX);
             if len > max {
-                bail!(
-                    "input exceeds max-input-bytes limit ({} > {})",
-                    len,
-                    max_bytes
-                );
+                let actual = usize::try_from(len).unwrap_or(usize::MAX);
+                return Err(SizeLimitExceeded {
+                    actual,
+                    limit: max_bytes,
+                }
+                .into());
             }
         }
     }
 
     let file = fs::File::open(input).context("failed to read input file")?;
     read_bounded(file, max_bytes).context("failed to read input file")
+}
+
+fn read_policy_bounded(path: &Path, max_bytes: usize) -> anyhow::Result<Vec<u8>> {
+    // Metadata is only a fast-path rejection. The bounded reader is
+    // authoritative for TOCTOU growth and non-regular paths.
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.is_file() {
+            let len = meta.len();
+            let max = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            if len > max {
+                bail!("policy file exceeds {max_bytes}-byte limit ({len} > {max_bytes})");
+            }
+        }
+    }
+
+    let file = fs::File::open(path).context("failed to read policy file")?;
+    match read_bounded(file, max_bytes) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if is_size_limit_exceeded(&error) => {
+            bail!("policy file exceeds {max_bytes}-byte limit")
+        }
+        Err(error) => Err(error).context("failed to read policy file"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::Path;
+
+    #[test]
+    fn policy_reader_accepts_exact_limit() {
+        let mut policy = tempfile::NamedTempFile::new().unwrap();
+        policy.write_all(b"12345678").unwrap();
+        policy.flush().unwrap();
+
+        let bytes = read_policy_bounded(policy.path(), 8).unwrap();
+        assert_eq!(bytes, b"12345678");
+    }
+
+    #[test]
+    fn policy_reader_rejects_limit_plus_one() {
+        let mut policy = tempfile::NamedTempFile::new().unwrap();
+        policy.write_all(b"123456789").unwrap();
+        policy.flush().unwrap();
+
+        let error = read_policy_bounded(policy.path(), 8)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("policy file exceeds"));
+        assert!(error.contains("8-byte limit"));
+        assert!(!error.contains("123456789"));
+        assert!(!error.contains("input exceeds"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_reader_rejects_non_regular_oversize_without_input_semantics() {
+        let path = Path::new("/dev/zero");
+        if !path.exists() {
+            return;
+        }
+        let error = read_policy_bounded(path, 8).unwrap_err().to_string();
+        assert!(error.contains("policy file exceeds"));
+        assert!(!error.contains("input exceeds"));
+        assert!(!error.contains("failed to read input"));
+    }
 }
