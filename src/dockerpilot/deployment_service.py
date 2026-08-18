@@ -16,6 +16,11 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from .build_source import (
+    discover_dockerfile_candidates as _discover_dockerfile_candidates_impl,
+    inspect_build_source as _inspect_build_source_impl,
+    is_dockerfile_candidate as _is_dockerfile_candidate_impl,
+)
 from .deployment_helpers import (
     get_resource_limits as _get_resource_limits_impl,
     normalize_volumes as _normalize_volumes_impl,
@@ -57,116 +62,22 @@ class DeploymentServiceMixin:
 
     def inspect_build_source(self, dockerfile_path: str) -> dict[str, Any]:
         """Inspect a build source path and report how Dockerfile resolution will behave."""
-        requested_path = Path(dockerfile_path).expanduser()
-        if not requested_path.is_absolute():
-            requested_path = Path.cwd() / requested_path
-        requested_path = requested_path.resolve(strict=False)
-
-        if requested_path.is_file():
-            if self._is_dockerfile_candidate(requested_path):
-                return {
-                    "status": "ready",
-                    "requested_path": requested_path,
-                    "context_path": requested_path.parent,
-                    "dockerfile_name": requested_path.name,
-                    "selected_path": requested_path,
-                    "auto_detected": False,
-                    "candidates": [requested_path],
-                    "message": f"Using Dockerfile file {requested_path}.",
-                }
-            return {
-                "status": "invalid",
-                "requested_path": requested_path,
-                "context_path": requested_path.parent,
-                "dockerfile_name": requested_path.name,
-                "selected_path": None,
-                "auto_detected": False,
-                "candidates": [],
-                "message": f"{requested_path} is a file, but it does not look like a Dockerfile.",
-            }
-
-        explicit_dockerfile = requested_path / "Dockerfile"
-        if explicit_dockerfile.exists():
-            return {
-                "status": "ready",
-                "requested_path": requested_path,
-                "context_path": requested_path,
-                "dockerfile_name": "Dockerfile",
-                "selected_path": explicit_dockerfile,
-                "auto_detected": False,
-                "candidates": [explicit_dockerfile],
-                "message": f"Using Dockerfile at {explicit_dockerfile}.",
-            }
-
-        candidates = self._discover_dockerfile_candidates(requested_path)
-        if len(candidates) == 1:
-            candidate = candidates[0]
-            return {
-                "status": "ready",
-                "requested_path": requested_path,
-                "context_path": candidate.parent,
-                "dockerfile_name": candidate.name,
-                "selected_path": candidate,
-                "auto_detected": True,
-                "candidates": candidates,
-                "message": f"No Dockerfile found directly in {requested_path}. Auto-detected {candidate}.",
-            }
-
-        if len(candidates) > 1:
-            return {
-                "status": "multiple",
-                "requested_path": requested_path,
-                "context_path": requested_path,
-                "dockerfile_name": None,
-                "selected_path": None,
-                "auto_detected": False,
-                "candidates": candidates,
-                "message": f"Found multiple Dockerfile candidates under {requested_path}.",
-            }
-
-        return {
-            "status": "missing",
-            "requested_path": requested_path,
-            "context_path": requested_path,
-            "dockerfile_name": None,
-            "selected_path": None,
-            "auto_detected": False,
-            "candidates": [],
-            "message": f"No Dockerfile found in {requested_path}.",
-        }
+        return _inspect_build_source_impl(
+            dockerfile_path,
+            is_candidate=self._is_dockerfile_candidate,
+            discover_candidates=self._discover_dockerfile_candidates,
+        )
 
     def _is_dockerfile_candidate(self, candidate: Path) -> bool:
         """Return True if the filename matches a Dockerfile-style pattern."""
-        lowered = candidate.name.lower()
-        return lowered == "dockerfile" or lowered.startswith("dockerfile.")
+        return _is_dockerfile_candidate_impl(candidate)
 
     def _discover_dockerfile_candidates(self, search_root: Path) -> list[Path]:
         """Search for Dockerfile-like files in the directory and one level below it."""
-        if not search_root.exists() or not search_root.is_dir():
-            return []
-
-        candidates: list[Path] = []
-        seen: set[Path] = set()
-
-        def add_candidate(candidate: Path) -> None:
-            resolved = candidate.resolve(strict=False)
-            if resolved in seen or not candidate.is_file() or not self._is_dockerfile_candidate(candidate):
-                return
-            seen.add(resolved)
-            candidates.append(candidate)
-
-        for child in sorted(search_root.iterdir(), key=lambda item: item.name.lower()):
-            if child.is_file():
-                add_candidate(child)
-
-        for child in sorted(search_root.iterdir(), key=lambda item: item.name.lower()):
-            if not child.is_dir():
-                continue
-            for nested in sorted(child.iterdir(), key=lambda item: item.name.lower()):
-                if nested.is_file():
-                    add_candidate(nested)
-
-        return candidates
+        return _discover_dockerfile_candidates_impl(
+            search_root,
+            is_candidate=self._is_dockerfile_candidate,
+        )
 
     def create_dockerfile_template(self, destination: str, template_name: str) -> bool:
         """Create a starter Dockerfile in the requested directory."""
