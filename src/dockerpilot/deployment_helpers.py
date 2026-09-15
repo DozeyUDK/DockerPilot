@@ -1,8 +1,31 @@
 """Small deployment helpers extracted from :mod:`dockerpilot.deployment_service`."""
 
+from dataclasses import fields
 from typing import Any
 
 from .models import DeploymentConfig
+
+
+def deployment_config_from_dict(deployment: dict, logger: Any) -> DeploymentConfig:
+    """Build ``DeploymentConfig`` while preserving legacy normalization rules."""
+    deployment = deployment or {}
+    if not isinstance(deployment, dict):
+        raise ValueError("deployment config must be a dictionary")
+
+    normalized = dict(deployment)
+    for key in ("volumes", "port_mapping", "environment", "build_args"):
+        if normalized.get(key) is None or not isinstance(normalized.get(key), dict):
+            normalized[key] = {}
+
+    model_fields = {field.name for field in fields(DeploymentConfig)}
+    extra_keys = sorted(key for key in normalized if key not in model_fields)
+    if extra_keys:
+        logger.warning(
+            f"Ignoring unsupported deployment config field(s): {', '.join(extra_keys)}"
+        )
+
+    filtered = {key: value for key, value in normalized.items() if key in model_fields}
+    return DeploymentConfig(**filtered)
 
 
 def get_resource_limits(config: DeploymentConfig) -> dict:
