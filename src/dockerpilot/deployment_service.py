@@ -29,7 +29,10 @@ from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
     prepare_image as _prepare_image_impl,
 )
-from .health_checks import advanced_health_check as _advanced_health_check_impl
+from .health_checks import (
+    advanced_health_check as _advanced_health_check_impl,
+    detect_health_check_endpoint as _detect_health_check_endpoint_impl,
+)
 from .models import DeploymentConfig
 
 
@@ -1524,63 +1527,14 @@ class DeploymentServiceMixin:
 
         return success
 
-    def _detect_health_check_endpoint(self, image_tag: str) -> str:
-        """Detect appropriate health check endpoint based on image name
-        
-        Uses configuration from:
-        1. User config (self.config from YAML) - highest priority
-        2. Default config file (health-checks-defaults.json) - fallback
-        
-        Returns:
-            str: Health check endpoint path, or None for non-HTTP services
-        """
-        image_lower = image_tag.lower()
-        
-        # Load defaults from JSON file
-        defaults = self._load_health_check_defaults()
-        default_health_checks = defaults.get('health_checks', {})
-        
-        # User config overrides defaults
-        user_health_checks = self.config.get('health_checks', {})
-        
-        # Merge: user config takes precedence over defaults
-        non_http_services = user_health_checks.get(
-            'non_http_services',
-            default_health_checks.get('non_http_services', [])
+    def _detect_health_check_endpoint(self, image_tag: str) -> Optional[str]:
+        """Select a health-check endpoint for an image."""
+        return _detect_health_check_endpoint_impl(
+            image_tag,
+            defaults=self._load_health_check_defaults(),
+            config=self.config,
+            logger=self.logger,
         )
-        
-        endpoint_mappings = {
-            **default_health_checks.get('endpoint_mappings', {}),  # Defaults first
-            **user_health_checks.get('endpoint_mappings', {})      # User overrides
-        }
-        
-        default_endpoint = user_health_checks.get(
-            'default_endpoint',
-            default_health_checks.get('default_endpoint', '/health')
-        )
-        
-        # Check for non-HTTP services
-        for service in non_http_services:
-            if service in image_lower:
-                self.logger.info(f"Detected non-HTTP service ({service}) - skipping HTTP health check")
-                return None
-        
-        # Additional hardcoded non-HTTP services (infrastructure containers)
-        infrastructure_services = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
-        for infra_service in infrastructure_services:
-            if infra_service in image_lower:
-                self.logger.info(f"Detected infrastructure service ({infra_service}) - skipping HTTP health check")
-                return None
-        
-        # Try to find matching endpoint mapping
-        for image_pattern, endpoint in endpoint_mappings.items():
-            if image_pattern.lower() in image_lower:
-                self.logger.info(f"Detected image pattern '{image_pattern}' -> endpoint '{endpoint}'")
-                return endpoint
-        
-        # Use default endpoint
-        self.logger.info(f"Using default health check endpoint: {default_endpoint}")
-        return default_endpoint
     
     def _advanced_health_check(self, port: str, endpoint: Optional[str], timeout: int, max_retries: int) -> bool:
         """Run the retrying HTTP health check."""
