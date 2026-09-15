@@ -1,5 +1,7 @@
 """Characterization tests for DeploymentServiceMixin helper behavior."""
 
+import pytest
+
 from dockerpilot.deployment_service import DeploymentServiceMixin
 from dockerpilot.models import DeploymentConfig
 
@@ -30,6 +32,89 @@ def make_config(*, cpu_limit=None, memory_limit=None) -> DeploymentConfig:
         cpu_limit=cpu_limit,
         memory_limit=memory_limit,
     )
+
+
+def test_deployment_config_normalizes_mapping_fields_without_mutating_input():
+    service = make_service()
+    raw = {
+        "image_tag": "example:v1",
+        "container_name": "example",
+        "port_mapping": None,
+        "environment": ["INVALID=list"],
+        "volumes": "invalid-volume",
+        "build_args": None,
+    }
+
+    config = service._deployment_config_from_dict(raw)
+
+    assert config.port_mapping == {}
+    assert config.environment == {}
+    assert config.volumes == {}
+    assert config.build_args == {}
+    assert raw["port_mapping"] is None
+    assert raw["environment"] == ["INVALID=list"]
+    assert raw["volumes"] == "invalid-volume"
+
+
+def test_deployment_config_preserves_supported_optional_values():
+    service = make_service()
+
+    config = service._deployment_config_from_dict(
+        {
+            "image_tag": "example:v2",
+            "container_name": "example",
+            "port_mapping": {"80/tcp": "8080"},
+            "environment": {"APP_ENV": "test"},
+            "volumes": {"data": "/data"},
+            "build_args": {"VERSION": "2"},
+            "network": "app-network",
+            "command": ["python", "app.py"],
+        }
+    )
+
+    assert config.image_tag == "example:v2"
+    assert config.port_mapping == {"80/tcp": "8080"}
+    assert config.environment == {"APP_ENV": "test"}
+    assert config.volumes == {"data": "/data"}
+    assert config.build_args == {"VERSION": "2"}
+    assert config.network == "app-network"
+    assert config.command == ["python", "app.py"]
+
+
+def test_deployment_config_warns_for_sorted_unknown_fields_and_ignores_them():
+    service = make_service()
+
+    config = service._deployment_config_from_dict(
+        {
+            "image_tag": "example:latest",
+            "container_name": "example",
+            "port_mapping": {},
+            "environment": {},
+            "volumes": {},
+            "zeta": 1,
+            "alpha": 2,
+        }
+    )
+
+    assert not hasattr(config, "alpha")
+    assert not hasattr(config, "zeta")
+    assert service.logger.warnings == [
+        "Ignoring unsupported deployment config field(s): alpha, zeta"
+    ]
+
+
+def test_deployment_config_rejects_truthy_non_dictionary_input():
+    service = make_service()
+
+    with pytest.raises(ValueError, match="deployment config must be a dictionary"):
+        service._deployment_config_from_dict(["invalid"])
+
+
+def test_deployment_config_preserves_falsy_non_dictionary_legacy_error():
+    service = make_service()
+
+    with pytest.raises(TypeError, match="required positional arguments"):
+        service._deployment_config_from_dict([])
 
 
 def test_get_resource_limits_converts_cpu_and_gigabyte_memory():
