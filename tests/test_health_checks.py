@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import requests
 
 from dockerpilot.deployment_service import DeploymentServiceMixin
-from dockerpilot.health_checks import advanced_health_check
+from dockerpilot.health_checks import advanced_health_check, detect_health_check_endpoint
 
 
 class RecordingLogger:
@@ -26,6 +26,120 @@ class FakeClock:
 
     def __call__(self) -> float:
         return next(self._values)
+
+
+def test_detect_endpoint_uses_user_mapping_over_default_mapping():
+    logger = RecordingLogger()
+
+    endpoint = detect_health_check_endpoint(
+        "registry/team/NGINX:v1",
+        defaults={
+            "health_checks": {
+                "endpoint_mappings": {"nginx": "/default"},
+                "default_endpoint": "/health",
+            }
+        },
+        config={
+            "health_checks": {
+                "endpoint_mappings": {"nginx": "/custom"},
+            }
+        },
+        logger=logger,
+    )
+
+    assert endpoint == "/custom"
+    assert logger.infos == [
+        "Detected image pattern 'nginx' -> endpoint '/custom'"
+    ]
+
+
+def test_detect_endpoint_user_non_http_list_replaces_default_list():
+    logger = RecordingLogger()
+    defaults = {
+        "health_checks": {
+            "non_http_services": ["redis"],
+            "default_endpoint": "/ready",
+        }
+    }
+    config = {"health_checks": {"non_http_services": ["postgres"]}}
+
+    assert detect_health_check_endpoint(
+        "redis:7",
+        defaults=defaults,
+        config=config,
+        logger=logger,
+    ) == "/ready"
+    assert detect_health_check_endpoint(
+        "postgres:17",
+        defaults=defaults,
+        config=config,
+        logger=logger,
+    ) is None
+
+
+def test_detect_endpoint_skips_known_infrastructure_images():
+    logger = RecordingLogger()
+
+    assert detect_health_check_endpoint(
+        "registry.k8s.io/kicbase:v0.0.47",
+        defaults={},
+        config={},
+        logger=logger,
+    ) is None
+    assert logger.infos == [
+        "Detected infrastructure service (kicbase) - skipping HTTP health check"
+    ]
+
+
+def test_detect_endpoint_uses_configured_and_builtin_defaults():
+    configured_logger = RecordingLogger()
+    builtin_logger = RecordingLogger()
+
+    assert detect_health_check_endpoint(
+        "example/app:v1",
+        defaults={"health_checks": {"default_endpoint": "/live"}},
+        config={},
+        logger=configured_logger,
+    ) == "/live"
+    assert detect_health_check_endpoint(
+        "example/app:v1",
+        defaults={},
+        config={},
+        logger=builtin_logger,
+    ) == "/health"
+    assert configured_logger.infos == ["Using default health check endpoint: /live"]
+    assert builtin_logger.infos == ["Using default health check endpoint: /health"]
+
+
+def test_detect_endpoint_wrapper_preserves_dynamic_defaults_loader(monkeypatch):
+    calls = []
+
+    def fake_impl(image_tag, *, defaults, config, logger):
+        calls.append((image_tag, defaults, config, logger))
+        return "/sentinel"
+
+    monkeypatch.setattr(
+        "dockerpilot.deployment_service._detect_health_check_endpoint_impl",
+        fake_impl,
+    )
+
+    class Service(DeploymentServiceMixin):
+        def _load_health_check_defaults(self):
+            return {"health_checks": {"default_endpoint": "/default"}}
+
+    service = Service()
+    service.config = {"health_checks": {"default_endpoint": "/custom"}}
+    service.logger = RecordingLogger()
+
+    assert service._detect_health_check_endpoint("example:v1") == "/sentinel"
+    assert calls == [
+        (
+            "example:v1",
+            {"health_checks": {"default_endpoint": "/default"}},
+            service.config,
+            service.logger,
+        )
+    ]
 
 
 def test_none_endpoint_skips_request_and_succeeds():
