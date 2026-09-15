@@ -1,9 +1,49 @@
 """Small deployment helpers extracted from :mod:`dockerpilot.deployment_service`."""
 
 from dataclasses import fields
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Optional
+
+import docker
 
 from .models import DeploymentConfig
+
+
+NetworkGet = Callable[[str], Any]
+Warn = Callable[[str], None]
+
+
+def resolve_runtime_network(
+    requested_network: Optional[str],
+    *,
+    get_network: NetworkGet,
+    warn: Warn,
+) -> Optional[str]:
+    """Resolve a Docker network name using the legacy fallback rules."""
+    if requested_network is None:
+        return "bridge"
+
+    network = str(requested_network).strip()
+    if not network:
+        return "bridge"
+    if network in {"bridge", "host", "none"}:
+        return network
+
+    try:
+        get_network(network)
+        return network
+    except docker.errors.NotFound:
+        warn(
+            f"Docker network '{network}' not found on current host. "
+            "Falling back to 'bridge'."
+        )
+        return "bridge"
+    except Exception as exc:
+        warn(
+            f"Could not validate docker network '{network}' ({exc}). "
+            "Falling back to 'bridge'."
+        )
+        return "bridge"
 
 
 def deployment_config_from_dict(deployment: dict, logger: Any) -> DeploymentConfig:

@@ -1,5 +1,8 @@
 """Characterization tests for DeploymentServiceMixin helper behavior."""
 
+from types import SimpleNamespace
+
+import docker
 import pytest
 
 from dockerpilot.deployment_service import DeploymentServiceMixin
@@ -115,6 +118,98 @@ def test_deployment_config_preserves_falsy_non_dictionary_legacy_error():
 
     with pytest.raises(TypeError, match="required positional arguments"):
         service._deployment_config_from_dict([])
+
+
+class FakeNetworks:
+    def __init__(self, *, result=None, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.get_calls: list[str] = []
+
+    def get(self, network):
+        self.get_calls.append(network)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        (None, "bridge"),
+        ("", "bridge"),
+        ("   ", "bridge"),
+        (" bridge ", "bridge"),
+        ("host", "host"),
+        ("none", "none"),
+    ],
+)
+def test_runtime_network_handles_defaults_and_builtin_networks_without_lookup(
+    requested, expected
+):
+    service = make_service()
+    networks = FakeNetworks(error=AssertionError("lookup must not run"))
+    service.client = SimpleNamespace(networks=networks)
+
+    assert service._resolve_runtime_network(requested) == expected
+    assert networks.get_calls == []
+
+
+def test_runtime_network_default_does_not_require_initialized_client_or_logger():
+    service = DeploymentServiceMixin()
+
+    assert service._resolve_runtime_network(None) == "bridge"
+
+
+def test_runtime_network_returns_existing_custom_network():
+    service = make_service()
+    networks = FakeNetworks(result=object())
+    service.client = SimpleNamespace(networks=networks)
+
+    assert service._resolve_runtime_network(" app-network ") == "app-network"
+    assert networks.get_calls == ["app-network"]
+    assert service.logger.warnings == []
+
+
+def test_runtime_network_falls_back_when_custom_network_is_missing():
+    service = make_service()
+    networks = FakeNetworks(error=docker.errors.NotFound("missing"))
+    service.client = SimpleNamespace(networks=networks)
+
+    assert service._resolve_runtime_network("app-network") == "bridge"
+    assert networks.get_calls == ["app-network"]
+    assert service.logger.warnings == [
+        "Docker network 'app-network' not found on current host. Falling back to 'bridge'."
+    ]
+
+
+def test_runtime_network_falls_back_when_lookup_fails():
+    service = make_service()
+    networks = FakeNetworks(error=RuntimeError("daemon unavailable"))
+    service.client = SimpleNamespace(networks=networks)
+
+    assert service._resolve_runtime_network("app-network") == "bridge"
+    assert networks.get_calls == ["app-network"]
+    assert service.logger.warnings == [
+        "Could not validate docker network 'app-network' (daemon unavailable). "
+        "Falling back to 'bridge'."
+    ]
+
+
+def test_runtime_network_falls_back_when_network_collection_access_fails():
+    class FailingClient:
+        @property
+        def networks(self):
+            raise RuntimeError("client unavailable")
+
+    service = make_service()
+    service.client = FailingClient()
+
+    assert service._resolve_runtime_network("app-network") == "bridge"
+    assert service.logger.warnings == [
+        "Could not validate docker network 'app-network' (client unavailable). "
+        "Falling back to 'bridge'."
+    ]
 
 
 def test_get_resource_limits_converts_cpu_and_gigabyte_memory():

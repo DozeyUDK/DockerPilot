@@ -24,6 +24,7 @@ from .deployment_helpers import (
     deployment_config_from_dict as _deployment_config_from_dict_impl,
     get_resource_limits as _get_resource_limits_impl,
     normalize_volumes as _normalize_volumes_impl,
+    resolve_runtime_network as _resolve_runtime_network_impl,
 )
 from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
@@ -140,28 +141,11 @@ class DeploymentServiceMixin:
 
     def _resolve_runtime_network(self, requested_network: Optional[str]) -> Optional[str]:
         """Return safe network name for container start, falling back to bridge if missing."""
-        if requested_network is None:
-            return "bridge"
-
-        network = str(requested_network).strip()
-        if not network:
-            return "bridge"
-        if network in {"bridge", "host", "none"}:
-            return network
-
-        try:
-            self.client.networks.get(network)
-            return network
-        except docker.errors.NotFound:
-            self.logger.warning(
-                f"Docker network '{network}' not found on current host. Falling back to 'bridge'."
-            )
-            return "bridge"
-        except Exception as exc:
-            self.logger.warning(
-                f"Could not validate docker network '{network}' ({exc}). Falling back to 'bridge'."
-            )
-            return "bridge"
+        return _resolve_runtime_network_impl(
+            requested_network,
+            get_network=lambda network: self.client.networks.get(network),
+            warn=lambda message: self.logger.warning(message),
+        )
 
     def _ensure_image_from_existing_container(self, image_tag: str, container_name: Optional[str]) -> bool:
         """Try to satisfy image requirement by aliasing image used by existing container."""
