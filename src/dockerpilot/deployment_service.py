@@ -29,6 +29,7 @@ from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
     prepare_image as _prepare_image_impl,
 )
+from .health_checks import advanced_health_check as _advanced_health_check_impl
 from .models import DeploymentConfig
 
 
@@ -1581,42 +1582,15 @@ class DeploymentServiceMixin:
         self.logger.info(f"Using default health check endpoint: {default_endpoint}")
         return default_endpoint
     
-    def _advanced_health_check(self, port: str, endpoint: str, timeout: int, max_retries: int) -> bool:
-        """Advanced health check with detailed reporting
-        
-        Returns True if health check passes or if endpoint is None (skip check)
-        """
-        # Skip health check if endpoint is None (for non-HTTP services like SSH, Redis, etc.)
-        if endpoint is None:
-            self.logger.info("Skipping HTTP health check (non-HTTP service)")
-            return True
-        
-        url = f"http://localhost:{port}{endpoint}"
-        
-        for attempt in range(max_retries):
-            try:
-                start_time = time.time()
-                # Use longer timeout for first attempts (service may be starting)
-                request_timeout = 10 if attempt < 3 else 5
-                response = requests.get(url, timeout=request_timeout)
-                response_time = time.time() - start_time
-                
-                # Accept 200-299 status codes as successful health checks
-                if 200 <= response.status_code < 300:
-                    self.logger.info(f"Health check passed (attempt {attempt + 1}): {response_time:.2f}s (status {response.status_code})")
-                    return True
-                else:
-                    self.logger.warning(f"Health check returned {response.status_code} (attempt {attempt + 1})")
-                    
-            except requests.exceptions.RequestException as e:
-                self.logger.warning(f"Health check failed (attempt {attempt + 1}): {e}")
-            
-            if attempt < max_retries - 1:
-                # Longer wait between retries for first attempts
-                wait_time = 5 if attempt < 3 else 3
-                time.sleep(wait_time)
-        
-        return False
+    def _advanced_health_check(self, port: str, endpoint: Optional[str], timeout: int, max_retries: int) -> bool:
+        """Run the retrying HTTP health check."""
+        return _advanced_health_check_impl(
+            port,
+            endpoint,
+            timeout,
+            max_retries,
+            logger=self.logger,
+        )
 
     def _comprehensive_container_validation(self, container, config: DeploymentConfig, 
                                           port: str, target_name: str) -> tuple:
