@@ -576,6 +576,8 @@ if TEXTUAL_AVAILABLE:
             self._selection_syncing = False
             self._command_running = False
             self._targets_refreshing = False
+            self._form_render_lock = asyncio.Lock()
+            self._form_render_requests = 0
 
         def compose(self) -> ComposeResult:
             yield Header()
@@ -689,6 +691,22 @@ if TEXTUAL_AVAILABLE:
             command: Optional[CommandNode],
             values: Optional[Dict[str, Any]] = None,
         ) -> None:
+            """Render one complete form at a time so rapid tree navigation stays ordered."""
+            self._form_render_requests += 1
+            self._set_run_state(self._command_running)
+            try:
+                async with self._form_render_lock:
+                    await self._render_command_form_locked(command, values)
+            finally:
+                self._form_render_requests -= 1
+                self._set_run_state(self._command_running)
+
+        async def _render_command_form_locked(
+            self,
+            command: Optional[CommandNode],
+            values: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            """Replace the command form while the caller holds the render lock."""
             previous_command = self.selected_command
             if previous_command and self.command_widgets:
                 self.command_drafts[previous_command.path] = self._snapshot_widget_values(
@@ -913,7 +931,11 @@ if TEXTUAL_AVAILABLE:
                 return [line.strip() for line in str(value or "").splitlines() if line.strip()]
 
         def _controls_busy(self) -> bool:
-            return self._command_running or self._targets_refreshing
+            return (
+                self._command_running
+                or self._targets_refreshing
+                or self._form_render_requests > 0
+            )
 
         def _refresh_preview(self) -> None:
             preview = self.query_one("#preview", Static)
@@ -1012,11 +1034,13 @@ if TEXTUAL_AVAILABLE:
             status.update("Refreshing live Docker targets...")
             try:
                 status_message = await self._refresh_available_targets_async()
-                # Capture after the await, since the user may have continued editing or navigated.
-                command = self.selected_command
-                values = self._snapshot_widget_values(self.command_widgets)
-                if command:
-                    await self._render_command_form(command, values)
+                # Capture only a fully rendered form after the await. Navigation may
+                # have completed while Docker discovery was running.
+                async with self._form_render_lock:
+                    command = self.selected_command
+                    values = self._snapshot_widget_values(self.command_widgets)
+                    if command:
+                        await self._render_command_form_locked(command, values)
                 status.update(status_message)
             finally:
                 self._targets_refreshing = False

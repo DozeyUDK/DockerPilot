@@ -131,6 +131,44 @@ def test_navigation_restores_per_command_draft_values():
     asyncio.run(scenario())
 
 
+def test_overlapping_form_renders_finish_in_request_order(monkeypatch):
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            first_command = command(app, 'container', 'run')
+            final_command = command(app, 'container', 'rename')
+            first_mount_started = asyncio.Event()
+            release_first_mount = asyncio.Event()
+            original_mount = app._mount_argument_widget
+
+            async def delayed_mount(container, argument, widget_store, selected=None, values=None):
+                if selected is first_command and not first_mount_started.is_set():
+                    first_mount_started.set()
+                    await release_first_mount.wait()
+                await original_mount(container, argument, widget_store, selected, values)
+
+            monkeypatch.setattr(app, '_mount_argument_widget', delayed_mount)
+            first_render = asyncio.create_task(app._render_command_form(first_command))
+            await first_mount_started.wait()
+            final_render = asyncio.create_task(app._render_command_form(final_command))
+            try:
+                await pilot.pause()
+                assert app.query_one('#run-command', Button).disabled
+            finally:
+                release_first_mount.set()
+            await asyncio.gather(first_render, final_render)
+
+            assert app.selected_command is final_command
+            assert set(app.command_widgets) == {argument.dest for argument in final_command.arguments}
+            assert set(app.selector_specs) == {'name'}
+            assert len(app.query('#command-form .arg-row')) == len(final_command.arguments)
+            assert all(widget.is_mounted for widget in app.command_widgets.values())
+            assert 'container rename' in str(app.query_one('#selected-command', Static).render())
+
+    asyncio.run(scenario())
+
+
 def test_tui_required_fields_and_manual_selector_hints_are_explicit():
     async def scenario():
         backend = FakePilot()
