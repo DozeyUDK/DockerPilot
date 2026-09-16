@@ -101,11 +101,37 @@ This will automatically:
 ## Features
 
 - **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
+- **Pipeline Workbench** - Start from Node.js CI, Python CI or delivery profiles, inspect the ordered stages, and resolve configuration errors before generation
+- **Preview Freshness** - Editing the configuration marks the previous output as outdated; regenerate before saving or downloading it
 - **Container CI/CD Flow** - Build, test, scan, deploy, smoke and rollback-ready templates
 - **Environment Promotion** - Workflow dev → staging → prod
 - **Status and Monitoring** - Check Docker and DockerPilot status
 
 ## Architecture
+
+### Pipeline profiles
+
+In **CI/CD Pipelines**, choose a profile and apply it to fill the stages and test
+settings. Project name, image, Dockerfile and selected CI provider are retained.
+CI profiles build, test and scan without deployment. The delivery profile also
+deploys and runs a smoke test; supply your application's HTTP(S) health URL.
+Profiles are editable starting points, not running CI integrations.
+
+Tests run inside the image, so it must contain the selected test tools and code.
+Runners need Docker and registry credentials; deployment jobs additionally need
+DockerPilot and a deployment configuration. Review the generated file and add it
+to your GitLab or Jenkins repository to run it. Generating or downloading a file
+does not execute a pipeline. **Save** writes it to the Extras server's configured
+pipeline directory, not to your source repository.
+
+Stage order is always build → test → scan → deploy → smoke. Smoke tests require
+deployment, an HTTP(S) URL and 1–60 retries. The `{env}` URL placeholder is only
+supported by GitLab with multi-environment deployment enabled. API generation and
+integration return HTTP 400 with field errors for invalid configurations.
+
+Frontend checks: `cd DockerPilotExtras/frontend && npm ci && npm test && npm run build`.
+
+### Components
 
 - **Backend**: Flask (Python) - REST API
 - **Frontend**: React + Vite - Single Page Application

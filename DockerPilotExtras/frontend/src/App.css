@@ -29,6 +29,33 @@
   --shadow-hover: rgba(0, 0, 0, 0.5);
 }
 
+.pipeline-stage-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.stage-chip {
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.stage-chip-active {
+  border-color: #667eea;
+  color: var(--text-primary);
+  background: rgba(102, 126, 234, 0.14);
+}
+
+.field-error {
+  display: block;
+  color: #dc3545;
+  margin-top: 0.25rem;
+}
+
 .App {
   min-height: 100vh;
   display: flex;
@@ -796,4 +823,3 @@ pre {
   background: rgba(255, 255, 255, 0.3) !important;
   transform: scale(1.1);
 }
-

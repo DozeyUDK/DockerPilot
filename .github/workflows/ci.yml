@@ -93,9 +93,25 @@ jobs:
         pip install -e .[test]
         pip install -r DockerPilotExtras/requirements.txt
 
-    - name: Run Extras tests
+    - name: Run full suite with Extras dependencies
       run: |
-        pytest tests/test_extras_setup_checks.py tests/test_extras_preflight.py tests/test_extras_api_preflight.py tests/test_extras_api_status.py tests/test_extras_pipeline_generator.py
+        pytest tests/
+
+  extras-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: DockerPilotExtras/frontend
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: DockerPilotExtras/frontend/package-lock.json
+    - run: npm ci
+    - run: npm test
+    - run: npm run build
 
   package:
     runs-on: ubuntu-latest

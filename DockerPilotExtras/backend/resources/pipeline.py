@@ -27,7 +27,11 @@ def create_pipeline_resources(
 
         def post(self):
             try:
-                data = request.get_json()
+                data = request.get_json(silent=True)
+
+                errors = PipelineGenerator.validate_config(data)
+                if errors:
+                    return {"error": "Check the pipeline configuration.", "fields": errors}, 400
 
                 pipeline_type = data.get("type", "gitlab")
                 project_name = data.get("project_name", "myapp")
@@ -186,7 +190,11 @@ def create_pipeline_resources(
 
         def post(self):
             try:
-                data = request.get_json()
+                data = request.get_json(silent=True)
+
+                errors = PipelineGenerator.validate_config(data)
+                if errors:
+                    return {"error": "Check the pipeline configuration.", "fields": errors}, 400
 
                 pipeline_type = data.get("type", "gitlab")
                 project_name = data.get("project_name", "myapp")

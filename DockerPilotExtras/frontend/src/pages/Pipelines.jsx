@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { pipelineAPI, dockerAPI, fileBrowserAPI } from '../services/api'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme } from '../contexts/ThemeContext'
+import { PIPELINE_PRESETS, applyPreset, formSnapshot, isSnapshotCurrent, orderedStages, validatePipelineForm } from '../utils/pipelineWorkbench.mjs'
 import '../App.css'
 
 function Pipelines() {
@@ -12,13 +13,13 @@ function Pipelines() {
     project_name: '',
     docker_image: 'myapp:latest',
     dockerfile: './Dockerfile',
-    stages: ['build', 'test', 'scan', 'deploy'],
+    stages: ['build', 'test', 'scan'],
     env_vars: 'ENV=production',
     test_commands: 'npm test\nnpm run lint',
     deploy_strategy: 'rolling',
     image_tag_strategy: 'branch-sha',
-    enable_environments: true,
-    enable_rollback_job: true,
+    enable_environments: false,
+    enable_rollback_job: false,
     scan_severity: 'HIGH,CRITICAL',
     scan_fail_on_findings: true,
     smoke_test_url: '',
@@ -33,6 +34,10 @@ function Pipelines() {
   const [filename, setFilename] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
+  const [validationErrors, setValidationErrors] = useState({})
+  const generationRequest = useRef(0)
+  const [generatedType, setGeneratedType] = useState('gitlab')
+  const [generatedSnapshot, setGeneratedSnapshot] = useState(null)
   const [dockerImages, setDockerImages] = useState([])
   const [dockerImagesFull, setDockerImagesFull] = useState([])
   const [dockerfiles, setDockerfiles] = useState([])
@@ -147,29 +152,48 @@ function Pipelines() {
     }))
   }
 
+  const handlePreset = (presetName) => {
+    setFormData(prev => applyPreset(prev, presetName))
+    setValidationErrors({})
+    setMessage({ type: 'success', text: `${PIPELINE_PRESETS[presetName].label} preset applied.` })
+  }
+
   const handleGenerate = async () => {
+    const errors = validatePipelineForm(formData)
+    setValidationErrors(errors)
+    if (Object.keys(errors).length > 0) {
+      setMessage({ type: 'error', text: 'Fix the highlighted fields before generating.' })
+      return
+    }
     setLoading(true)
     setMessage(null)
+    const requestSnapshot = formSnapshot(formData)
+    const requestId = ++generationRequest.current
     
     try {
       const response = await pipelineAPI.generate(formData)
+      if (requestId !== generationRequest.current) return
       if (response.data.success) {
         setGeneratedPipeline(response.data.content)
         setFilename(response.data.filename)
-        setMessage({ type: 'success', text: 'Pipeline generated successfully!' })
+        setGeneratedType(response.data.type || formData.type)
+        setGeneratedSnapshot(requestSnapshot)
+        setMessage({ type: 'success', text: 'Preview generated for the submitted configuration.' })
       }
     } catch (error) {
+      if (requestId !== generationRequest.current) return
+      setValidationErrors(error.response?.data?.fields || {})
       setMessage({ 
         type: 'error', 
         text: error.response?.data?.error || 'Error generating pipeline' 
       })
     } finally {
-      setLoading(false)
+      if (requestId === generationRequest.current) setLoading(false)
     }
   }
 
   const handleSave = async () => {
-    if (!generatedPipeline) {
+    if (!previewIsCurrent) {
       setMessage({ type: 'error', text: 'Generate pipeline first' })
       return
     }
@@ -191,7 +215,7 @@ function Pipelines() {
   }
 
   const handleDownload = () => {
-    if (!generatedPipeline) return
+    if (!previewIsCurrent) return
     
     const blob = new Blob([generatedPipeline], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
@@ -203,6 +227,9 @@ function Pipelines() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
+
+  const previewMatchesForm = Boolean(generatedPipeline && isSnapshotCurrent(formData, generatedSnapshot))
+  const previewIsCurrent = previewMatchesForm && !loading
 
   return (
     <div>
@@ -218,6 +245,31 @@ function Pipelines() {
         {/* Left: Configuration Form */}
         <div className="card">
           <h3 className="card-title">Pipeline Configuration</h3>
+
+          <div className="form-group">
+            <label>Start with a preset:</label>
+            <div className="btn-group">
+              {Object.entries(PIPELINE_PRESETS).map(([name, preset]) => (
+                <button key={name} type="button" className="btn btn-secondary" onClick={() => handlePreset(name)}>
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <small style={{ color: 'var(--text-secondary)' }}>Node.js and Python presets run build, test, and scan. Delivery adds deploy and smoke checks. Presets keep your project, image, Dockerfile, and provider choices.</small>
+            <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.25rem' }}>Delivery requires Docker and DockerPilot on the runner; test tools must be present in the image.</small>
+          </div>
+
+          <div className="form-group">
+            <label>Stage overview:</label>
+            <div className="pipeline-stage-overview">
+              {orderedStages(formData.stages).map(({ stage, selected }, index) => (
+                <span key={stage} className={selected ? 'stage-chip stage-chip-active' : 'stage-chip'}>
+                  {index + 1}. {stage}{selected ? ' ✓' : ''}
+                </span>
+              ))}
+            </div>
+            <small style={{ color: 'var(--text-secondary)' }}>Selected stages run in this order.</small>
+          </div>
           
           <div className="form-group">
             <label>Pipeline type:</label>
@@ -236,6 +288,7 @@ function Pipelines() {
               onChange={handleChange}
               placeholder="myapp"
             />
+            {validationErrors.project_name && <small className="field-error">{validationErrors.project_name}</small>}
           </div>
 
           <div className="form-group">
@@ -303,7 +356,7 @@ function Pipelines() {
                       key={idx}
                       onClick={() => {
                         setFormData(prev => ({ ...prev, docker_image: img.name }))
-                        setImageSearch('')
+                                            setImageSearch('')
                       }}
                       style={{
                         padding: '0.5rem',
@@ -330,6 +383,7 @@ function Pipelines() {
                 {dockerImages.length} images available
               </small>
             )}
+            {validationErrors.docker_image && <small className="field-error">{validationErrors.docker_image}</small>}
           </div>
 
           <div className="form-group">
@@ -397,7 +451,7 @@ function Pipelines() {
                       key={idx}
                       onClick={() => {
                         setFormData(prev => ({ ...prev, dockerfile: df.relative }))
-                        setDockerfileSearch('')
+                                            setDockerfileSearch('')
                       }}
                       style={{
                         padding: '0.5rem',
@@ -420,6 +474,7 @@ function Pipelines() {
                 {dockerfiles.length} Dockerfiles found
               </small>
             )}
+            {validationErrors.dockerfile && <small className="field-error">{validationErrors.dockerfile}</small>}
           </div>
 
           <div className="form-group">
@@ -437,6 +492,7 @@ function Pipelines() {
                 </div>
               ))}
             </div>
+            {validationErrors.stages && <small className="field-error">{validationErrors.stages}</small>}
           </div>
 
           <div className="form-group">
@@ -459,6 +515,7 @@ function Pipelines() {
                 rows="3"
                 placeholder="npm test&#10;npm run lint"
               />
+              {validationErrors.test_commands && <small className="field-error">{validationErrors.test_commands}</small>}
             </div>
           )}
 
@@ -539,6 +596,7 @@ function Pipelines() {
                 onChange={handleChange}
                 placeholder="https://dev.example.com/health or https://{env}.example.com/health"
               />
+              {validationErrors.smoke_test_url && <small className="field-error">{validationErrors.smoke_test_url}</small>}
               <label style={{ marginTop: '0.5rem' }}>Smoke retries:</label>
               <input
                 type="number"
@@ -548,6 +606,7 @@ function Pipelines() {
                 value={formData.smoke_test_retries}
                 onChange={handleChange}
               />
+              {validationErrors.smoke_test_retries && <small className="field-error">{validationErrors.smoke_test_retries}</small>}
             </div>
           )}
 
@@ -614,29 +673,37 @@ function Pipelines() {
             <button 
               className="btn btn-secondary" 
               onClick={handleSave}
-              disabled={!generatedPipeline}
+              disabled={!previewIsCurrent}
             >
               Save
             </button>
             <button 
               className="btn btn-success" 
               onClick={handleDownload}
-              disabled={!generatedPipeline}
+              disabled={!previewIsCurrent}
             >
               Download
             </button>
           </div>
           
+          {generatedPipeline && !previewMatchesForm && (
+            <div className="alert alert-warning">Configuration changed. Generate again to refresh this preview.</div>
+          )}
           {loading && <div className="spinner"></div>}
           
           {generatedPipeline && (
+            <>
+            <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
+              Preview syntax: {generatedType === 'gitlab' ? 'GitLab CI (YAML)' : 'Jenkins (Groovy)'}
+            </small>
             <SyntaxHighlighter
-              language={formData.type === 'gitlab' ? 'yaml' : 'groovy'}
+              language={generatedType === 'gitlab' ? 'yaml' : 'groovy'}
               style={vscDarkPlus}
               customStyle={{ borderRadius: '4px' }}
             >
               {generatedPipeline}
             </SyntaxHighlighter>
+            </>
           )}
           
           {!generatedPipeline && !loading && (
@@ -961,4 +1028,3 @@ function Pipelines() {
 }
 
 export default Pipelines
-
