@@ -34,6 +34,8 @@ from .image_preparation import (
 from .health_checks import (
     advanced_health_check as _advanced_health_check_impl,
     detect_health_check_endpoint as _detect_health_check_endpoint_impl,
+    run_parallel_tests as _run_parallel_tests_impl,
+    should_run_parallel_tests as _should_run_parallel_tests_impl,
 )
 from .models import DeploymentConfig
 
@@ -1745,29 +1747,16 @@ class DeploymentServiceMixin:
 
     def _should_run_parallel_tests(self) -> bool:
         """Determine if parallel tests should be run"""
-        return self.config.get('testing', {}).get('parallel_tests_enabled', False)
+        return _should_run_parallel_tests_impl(self.config)
 
     def _run_parallel_tests(self, port: str, config: DeploymentConfig) -> bool:
         """Run parallel tests against new deployment"""
-        test_config = self.config.get('testing', {})
-        test_endpoints = test_config.get('endpoints', ['/health'])
-        
-        base_url = f"http://localhost:{port}"
-        
-        for endpoint in test_endpoints:
-            try:
-                url = f"{base_url}{endpoint}"
-                response = requests.get(url, timeout=5)
-                
-                if response.status_code != 200:
-                    self.logger.error(f"Parallel test failed for {endpoint}: {response.status_code}")
-                    return False
-                    
-            except Exception as e:
-                self.logger.error(f"Parallel test error for {endpoint}: {e}")
-                return False
-        
-        return True
+        return _run_parallel_tests_impl(
+            port,
+            self.config,
+            request_get=lambda url, **kwargs: requests.get(url, **kwargs),
+            log_error=lambda message: self.logger.error(message),
+        )
 
     def _monitor_canary_performance(self, port: str, duration: int) -> bool:
         """Monitor canary deployment performance"""
