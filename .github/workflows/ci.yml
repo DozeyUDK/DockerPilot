@@ -26,7 +26,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[test]
+        pip install -e .[test,tui]
     
     - name: Run tests
       run: |
@@ -71,11 +71,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[test]
+        pip install -e .[test,tui]
 
     - name: Run smoke tests
       run: |
-        pytest tests/test_cli_parser.py tests/test_cli_tui.py tests/test_main.py tests/test_build_fallback.py tests/test_cli_handlers.py
+        pytest tests/test_cli_parser.py tests/test_cli_tui.py tests/test_tui_runtime.py tests/test_main.py tests/test_build_fallback.py tests/test_cli_handlers.py
 
   extras-tests:
     runs-on: ubuntu-latest
@@ -90,7 +90,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[test]
+        pip install -e .[test,tui]
         pip install -r DockerPilotExtras/requirements.txt
 
     - name: Run full suite with Extras dependencies

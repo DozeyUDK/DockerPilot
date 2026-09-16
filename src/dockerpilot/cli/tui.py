@@ -428,9 +428,11 @@ def capture_cli_execution(
 
 
 try:
+    from rich.text import Text
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
+    from textual.css.query import NoMatches
     from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, LoadingIndicator, RichLog, Select, SelectionList, Static, TextArea, Tree
 
     TEXTUAL_AVAILABLE = True
@@ -572,6 +574,7 @@ if TEXTUAL_AVAILABLE:
             self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
             self._selection_syncing = False
             self._command_running = False
+            self._targets_refreshing = False
 
         def compose(self) -> ComposeResult:
             yield Header()
@@ -672,7 +675,11 @@ if TEXTUAL_AVAILABLE:
             for argument in self.global_arguments:
                 await self._mount_argument_widget(container, argument, self.global_widgets)
 
-        async def _render_command_form(self, command: Optional[CommandNode]) -> None:
+        async def _render_command_form(
+            self,
+            command: Optional[CommandNode],
+            values: Optional[Dict[str, Any]] = None,
+        ) -> None:
             container = self.query_one("#command-form", Vertical)
             await container.remove_children()
             self.command_widgets = {}
@@ -693,7 +700,7 @@ if TEXTUAL_AVAILABLE:
             self.selected_command = command
             title.update(f"Selected: {' '.join(command.path)}")
             help_text.update(command.help_text or "Configure the arguments below, then click Run Command.")
-            run_button.disabled = not command.is_leaf
+            run_button.disabled = self._controls_busy() or not command.is_leaf
 
             if not command.is_leaf:
                 await container.mount(Static("This group has subcommands. Pick one from the tree.", classes="arg-help"))
@@ -705,7 +712,13 @@ if TEXTUAL_AVAILABLE:
                 await container.mount(Static("This command has no command-specific arguments.", classes="arg-help"))
             else:
                 for argument in command.arguments:
-                    await self._mount_argument_widget(container, argument, self.command_widgets, command)
+                    await self._mount_argument_widget(
+                        container,
+                        argument,
+                        self.command_widgets,
+                        command,
+                        values,
+                    )
 
             self._refresh_preview()
 
@@ -715,6 +728,7 @@ if TEXTUAL_AVAILABLE:
             argument: ArgumentSpec,
             widget_store: Dict[str, Any],
             command: Optional[CommandNode] = None,
+            values: Optional[Dict[str, Any]] = None,
         ) -> None:
             row = Vertical(classes="arg-row")
             label_text = argument.label
@@ -724,7 +738,8 @@ if TEXTUAL_AVAILABLE:
             await container.mount(row)
             await row.mount(Label(label_text))
 
-            default_value = "" if argument.default in (None, False) else str(argument.default)
+            value = (values or {}).get(argument.dest, argument.default)
+            default_value = "" if value in (None, False) else str(value)
 
             selector_spec = infer_resource_selector(command, argument) if command else None
 
@@ -732,21 +747,34 @@ if TEXTUAL_AVAILABLE:
                 entries = self.available_targets.get(selector_spec.resource_type, [])
                 self.selector_specs[argument.dest] = selector_spec
                 if entries:
-                    widget = SelectionList(*entries, classes="resource-selector")
+                    selected_values = self._selector_values(value)
+                    available_values = {entry_value for _, entry_value in entries}
+                    selected_values = [item for item in selected_values if item in available_values]
+                    if selector_spec.mode == "single":
+                        selected_values = selected_values[:1]
+                    widget = SelectionList(
+                        *[
+                            (label, entry_value, entry_value in selected_values)
+                            for label, entry_value in entries
+                        ],
+                        classes="resource-selector",
+                    )
                     widget.styles.height = selector_height(
                         len(entries),
                         single=selector_spec.mode == "single",
                     )
                 else:
-                    widget = TextArea("", language=None, classes="multi-input")
+                    widget = TextArea(
+                        self._textarea_value(value), language=None, classes="multi-input"
+                    )
             elif argument.is_bool:
-                widget = Checkbox(argument.help_text or "Enable this option", value=bool(argument.default))
+                widget = Checkbox(argument.help_text or "Enable this option", value=bool(value))
             elif argument.choices:
                 options = [(choice, choice) for choice in argument.choices]
-                select_value = str(argument.default) if argument.default in argument.choices else Select.BLANK
+                select_value = str(value) if str(value) in argument.choices else Select.BLANK
                 widget = Select(options, value=select_value, allow_blank=not argument.required)
             elif argument.multiple:
-                widget = TextArea(default_value, language=None, classes="multi-input")
+                widget = TextArea(self._textarea_value(value), language=None, classes="multi-input")
             else:
                 placeholder = argument.metavar or argument.dest.replace("_", "-")
                 widget = Input(value=default_value, placeholder=str(placeholder))
@@ -819,10 +847,51 @@ if TEXTUAL_AVAILABLE:
                     else:
                         values[dest] = list(widget.selected)
                 elif isinstance(widget, TextArea):
-                    values[dest] = widget.text
+                    selector_spec = self.selector_specs.get(dest)
+                    if selector_spec and selector_spec.mode == "multi":
+                        values[dest] = split_multi_value(widget.text)
+                    else:
+                        values[dest] = widget.text
                 else:
                     values[dest] = widget.value
             return values
+
+        def _snapshot_widget_values(self, widget_store: Dict[str, Any]) -> Dict[str, Any]:
+            """Capture editable widget state without parsing partially typed shell values."""
+            values: Dict[str, Any] = {}
+            for dest, widget in widget_store.items():
+                if isinstance(widget, TextArea):
+                    values[dest] = widget.text
+                elif isinstance(widget, Checkbox):
+                    values[dest] = widget.value
+                elif isinstance(widget, Select):
+                    values[dest] = None if widget.is_blank() else widget.value
+                elif isinstance(widget, SelectionList):
+                    values[dest] = list(widget.selected)
+                else:
+                    values[dest] = widget.value
+            return values
+
+        @staticmethod
+        def _textarea_value(value: Any) -> str:
+            """Convert selector/list values to the editable multiline representation."""
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return "" if value is None else str(value)
+
+        @staticmethod
+        def _selector_values(value: Any) -> List[str]:
+            """Normalize saved selector values without losing a TextArea fallback."""
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+            try:
+                return split_multi_value(value)
+            except ValueError:
+                # A partially typed shell value cannot match a live resource yet.
+                return [line.strip() for line in str(value or "").splitlines() if line.strip()]
+
+        def _controls_busy(self) -> bool:
+            return self._command_running or self._targets_refreshing
 
         def _refresh_preview(self) -> None:
             preview = self.query_one("#preview", Static)
@@ -830,35 +899,57 @@ if TEXTUAL_AVAILABLE:
                 preview.update("Command preview will appear here.")
                 return
 
-            argv = build_command_argv(
-                self.selected_command,
-                self._values_from_widgets(self.command_widgets),
-                global_arguments=self.global_arguments,
-                global_values=self._values_from_widgets(self.global_widgets),
-            )
-            preview.update(f"$ dockerpilot {' '.join(shlex.quote(part) for part in argv)}")
+            try:
+                argv = build_command_argv(
+                    self.selected_command,
+                    self._values_from_widgets(self.command_widgets),
+                    global_arguments=self.global_arguments,
+                    global_values=self._values_from_widgets(self.global_widgets),
+                )
+            except ValueError as exc:
+                preview.update(Text(f"Command preview error: {exc}"))
+                return
+            preview.update(Text(f"$ dockerpilot {' '.join(shlex.quote(part) for part in argv)}"))
 
         def _validate_required_arguments(self) -> Tuple[bool, str]:
             if not self.selected_command or not self.selected_command.is_leaf:
                 return False, "Pick a concrete command first."
 
-            command_values = self._values_from_widgets(self.command_widgets)
-            global_values = self._values_from_widgets(self.global_widgets)
+            try:
+                command_values = self._values_from_widgets(self.command_widgets)
+                global_values = self._values_from_widgets(self.global_widgets)
+                for spec in [*self.global_arguments, *self.selected_command.arguments]:
+                    value = (global_values if spec.dest in global_values else command_values).get(spec.dest)
+                    is_required = spec.required
+                    if self.selected_command and spec in self.selected_command.arguments:
+                        is_required = should_tui_require_value(self.selected_command, spec)
 
-            for spec in [*self.global_arguments, *self.selected_command.arguments]:
-                value = (global_values if spec.dest in global_values else command_values).get(spec.dest)
-                is_required = spec.required
-                if self.selected_command and spec in self.selected_command.arguments:
-                    is_required = should_tui_require_value(self.selected_command, spec)
+                    if spec.is_bool or not is_required:
+                        continue
+                    if spec.multiple and not split_multi_value(value):
+                        return False, f"Missing required values for {spec.label}."
+                    selector_spec = self.selector_specs.get(spec.dest)
+                    if (
+                        selector_spec
+                        and selector_spec.mode == "single"
+                        and isinstance(self.command_widgets.get(spec.dest), TextArea)
+                        and len(self._selector_values(value)) > 1
+                    ):
+                        return False, f"Select only one value for {spec.label}."
+                    if isinstance(value, list) and not value:
+                        return False, f"Missing required value for {spec.label}."
+                    if value is None or not str(value).strip():
+                        return False, f"Missing required value for {spec.label}."
 
-                if spec.is_bool or not is_required:
-                    continue
-                if spec.multiple and not split_multi_value(value):
-                    return False, f"Missing required values for {spec.label}."
-                if isinstance(value, list) and not value:
-                    return False, f"Missing required value for {spec.label}."
-                if value is None or not str(value).strip():
-                    return False, f"Missing required value for {spec.label}."
+                # Optional multi-value fields may also call shlex.split during serialization.
+                build_command_argv(
+                    self.selected_command,
+                    command_values,
+                    global_arguments=self.global_arguments,
+                    global_values=global_values,
+                )
+            except ValueError as exc:
+                return False, f"Invalid shell-style value: {exc}"
 
             return True, ""
 
@@ -872,22 +963,49 @@ if TEXTUAL_AVAILABLE:
                 self.query_one("#results", RichLog).clear()
                 self.query_one("#status", Static).update("Output panel cleared.")
             elif event.button.id == "refresh-targets":
-                status = self.query_one("#status", Static)
-                status.update("Refreshing live Docker targets...")
-                status_message = await self._refresh_available_targets_async()
-                status.update(status_message)
-                if self.selected_command:
-                    await self._render_command_form(self.selected_command)
+                await self._refresh_targets()
             elif event.button.id == "close-tui":
-                self.exit(None)
+                self.action_quit()
 
         def _set_run_state(self, running: bool) -> None:
             """Enable or disable controls around command execution."""
             self._command_running = running
-            run_button = self.query_one("#run-command", Button)
-            refresh_button = self.query_one("#refresh-targets", Button)
-            run_button.disabled = running or not (self.selected_command and self.selected_command.is_leaf)
-            refresh_button.disabled = running
+            try:
+                run_button = self.query_one("#run-command", Button)
+                refresh_button = self.query_one("#refresh-targets", Button)
+            except NoMatches:
+                return
+            run_button.disabled = self._controls_busy() or not (self.selected_command and self.selected_command.is_leaf)
+            refresh_button.disabled = self._controls_busy()
+
+        async def _refresh_targets(self) -> None:
+            """Reload live selectors while retaining the form the user sees on completion."""
+            status = self.query_one("#status", Static)
+            if self._controls_busy():
+                status.update("A command or target refresh is already running.")
+                return
+
+            self._targets_refreshing = True
+            self._set_run_state(self._command_running)
+            status.update("Refreshing live Docker targets...")
+            try:
+                status_message = await self._refresh_available_targets_async()
+                # Capture after the await, since the user may have continued editing or navigated.
+                command = self.selected_command
+                values = self._snapshot_widget_values(self.command_widgets)
+                if command:
+                    await self._render_command_form(command, values)
+                status.update(status_message)
+            finally:
+                self._targets_refreshing = False
+                self._set_run_state(self._command_running)
+
+        def action_quit(self) -> None:
+            """Keep the app mounted until a pending command or refresh finishes."""
+            if self._controls_busy():
+                self.query_one("#status", Static).update("Wait for the current command or target refresh to finish.")
+                return
+            self.exit(None)
 
         def _append_result_block(self, command_text: str, return_code: Optional[int], output: str) -> None:
             """Append a command result block to the output panel."""
@@ -903,46 +1021,48 @@ if TEXTUAL_AVAILABLE:
             results.write("")
 
         def _start_run(self) -> None:
-            if self._command_running:
-                self.query_one("#status", Static).update("A command is already running.")
+            if self._controls_busy():
+                self.query_one("#status", Static).update("A command or target refresh is already running.")
                 return
+            # Claim execution before scheduling so repeated clicks or Ctrl+R cannot race.
+            self._set_run_state(True)
             asyncio.create_task(self._run_selected_command())
 
         async def _run_selected_command(self) -> None:
-            valid, message = self._validate_required_arguments()
             status = self.query_one("#status", Static)
-            if not valid or not self.selected_command:
-                status.update(message or "Select a runnable command first.")
-                return
-
-            argv = build_command_argv(
-                self.selected_command,
-                self._values_from_widgets(self.command_widgets),
-                global_arguments=self.global_arguments,
-                global_values=self._values_from_widgets(self.global_widgets),
-            )
-            command_values = self._values_from_widgets(self.command_widgets)
-            command_text = " ".join(shlex.quote(part) for part in argv)
-
-            if should_launch_in_external_terminal(self.selected_command):
-                self.exit(TuiCommandHandoff(argv=argv))
-                return
-
-            blocking_reason = requires_tty_or_live_ui(self.selected_command, command_values)
-            if blocking_reason:
-                self._append_result_block(
-                    command_text,
-                    None,
-                    f"Inline execution skipped.\n{blocking_reason}",
-                )
-                status.update(blocking_reason)
-                return
-
-            self._set_run_state(True)
-            status.update(f"Running inside TUI: dockerpilot {command_text}")
-            results_widget = self.query_one("#results", RichLog)
-            panel_width = max(60, getattr(results_widget.size, "width", 0) or getattr(results_widget.content_size, "width", 0) or 120)
+            command_text = "<unavailable>"
             try:
+                valid, message = self._validate_required_arguments()
+                if not valid or not self.selected_command:
+                    status.update(message or "Select a runnable command first.")
+                    return
+
+                argv = build_command_argv(
+                    self.selected_command,
+                    self._values_from_widgets(self.command_widgets),
+                    global_arguments=self.global_arguments,
+                    global_values=self._values_from_widgets(self.global_widgets),
+                )
+                command_values = self._values_from_widgets(self.command_widgets)
+                command_text = " ".join(shlex.quote(part) for part in argv)
+
+                if should_launch_in_external_terminal(self.selected_command):
+                    self.exit(TuiCommandHandoff(argv=argv))
+                    return
+
+                blocking_reason = requires_tty_or_live_ui(self.selected_command, command_values)
+                if blocking_reason:
+                    self._append_result_block(
+                        command_text,
+                        None,
+                        f"Inline execution skipped.\n{blocking_reason}",
+                    )
+                    status.update(blocking_reason)
+                    return
+
+                status.update(f"Running inside TUI: dockerpilot {command_text}")
+                results_widget = self.query_one("#results", RichLog)
+                panel_width = max(60, getattr(results_widget.size, "width", 0) or getattr(results_widget.content_size, "width", 0) or 120)
                 return_code, output = await asyncio.to_thread(
                     capture_cli_execution,
                     self.pilot_instance,
