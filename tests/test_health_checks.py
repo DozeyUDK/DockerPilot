@@ -3,9 +3,15 @@
 from types import SimpleNamespace
 
 import requests
+import pytest
 
 from dockerpilot.deployment_service import DeploymentServiceMixin
-from dockerpilot.health_checks import advanced_health_check, detect_health_check_endpoint
+from dockerpilot.health_checks import (
+    advanced_health_check,
+    detect_health_check_endpoint,
+    run_parallel_tests,
+    should_run_parallel_tests,
+)
 
 
 class RecordingLogger:
@@ -292,3 +298,196 @@ def test_mixin_wrapper_delegates_with_legacy_signature(monkeypatch):
 
     assert service._advanced_health_check("8080", "/health", 30, 4) == "sentinel"
     assert calls == [("8080", "/health", 30, 4, service.logger)]
+
+
+def test_parallel_test_flag_preserves_missing_false_and_configured_value():
+    assert should_run_parallel_tests({}) is False
+    assert should_run_parallel_tests({"testing": {}}) is False
+    assert should_run_parallel_tests(
+        {"testing": {"parallel_tests_enabled": "enabled"}}
+    ) == "enabled"
+
+
+def test_parallel_tests_use_default_endpoint_and_exact_request_timeout():
+    calls = []
+
+    def request_get(url, *, timeout):
+        calls.append((url, timeout))
+        return SimpleNamespace(status_code=200)
+
+    assert run_parallel_tests(
+        "8080",
+        {},
+        request_get=request_get,
+        log_error=lambda message: None,
+    ) is True
+    assert calls == [("http://localhost:8080/health", 5)]
+
+
+def test_parallel_tests_run_custom_endpoints_in_order():
+    calls = []
+
+    def request_get(url, *, timeout):
+        calls.append((url, timeout))
+        return SimpleNamespace(status_code=200)
+
+    assert run_parallel_tests(
+        "9000",
+        {"testing": {"endpoints": ["/ready", "/live"]}},
+        request_get=request_get,
+        log_error=lambda message: None,
+    ) is True
+    assert calls == [
+        ("http://localhost:9000/ready", 5),
+        ("http://localhost:9000/live", 5),
+    ]
+
+
+def test_parallel_tests_fail_fast_on_non_200_response():
+    calls = []
+    errors = []
+
+    def request_get(url, *, timeout):
+        calls.append(url)
+        return SimpleNamespace(status_code=204)
+
+    assert run_parallel_tests(
+        "8080",
+        {"testing": {"endpoints": ["/ready", "/never"]}},
+        request_get=request_get,
+        log_error=errors.append,
+    ) is False
+    assert calls == ["http://localhost:8080/ready"]
+    assert errors == ["Parallel test failed for /ready: 204"]
+
+
+def test_parallel_tests_log_request_error_and_stop():
+    errors = []
+
+    def request_get(url, *, timeout):
+        raise RuntimeError("connection refused")
+
+    assert run_parallel_tests(
+        "8080",
+        {"testing": {"endpoints": ["/ready", "/never"]}},
+        request_get=request_get,
+        log_error=errors.append,
+    ) is False
+    assert errors == ["Parallel test error for /ready: connection refused"]
+
+
+def test_parallel_tests_accept_empty_endpoint_list_without_requests():
+    def unexpected(*args, **kwargs):
+        raise AssertionError("request must not run")
+
+    assert run_parallel_tests(
+        "8080",
+        {"testing": {"endpoints": []}},
+        request_get=unexpected,
+        log_error=unexpected,
+    ) is True
+
+
+def test_parallel_test_helpers_preserve_malformed_config_errors():
+    with pytest.raises(AttributeError):
+        should_run_parallel_tests({"testing": None})
+
+    with pytest.raises(AttributeError):
+        run_parallel_tests(
+            "8080",
+            {"testing": None},
+            request_get=lambda *args, **kwargs: None,
+            log_error=lambda message: None,
+        )
+
+    with pytest.raises(TypeError):
+        run_parallel_tests(
+            "8080",
+            {"testing": {"endpoints": None}},
+            request_get=lambda *args, **kwargs: None,
+            log_error=lambda message: None,
+        )
+
+
+def test_parallel_tests_preserve_logger_failure_retry_and_propagation():
+    messages = []
+
+    def failing_log_error(message):
+        messages.append(message)
+        raise RuntimeError("logger unavailable")
+
+    with pytest.raises(RuntimeError, match="logger unavailable"):
+        run_parallel_tests(
+            "8080",
+            {},
+            request_get=lambda *args, **kwargs: SimpleNamespace(status_code=503),
+            log_error=failing_log_error,
+        )
+
+    assert messages == [
+        "Parallel test failed for /health: 503",
+        "Parallel test error for /health: logger unavailable",
+    ]
+
+
+def test_parallel_test_wrapper_does_not_eagerly_access_request_or_logger(monkeypatch):
+    def fake_run(port, config, *, request_get, log_error):
+        return True
+
+    monkeypatch.setattr(
+        "dockerpilot.deployment_service._run_parallel_tests_impl",
+        fake_run,
+    )
+    service = DeploymentServiceMixin()
+    service.config = {}
+
+    assert service._run_parallel_tests("8080", make_config_for_parallel_test()) is True
+
+
+def test_parallel_test_wrappers_preserve_config_and_lazy_collaborators(monkeypatch):
+    flag_calls = []
+    run_calls = []
+
+    def fake_flag(config):
+        flag_calls.append(config)
+        return "flag"
+
+    def fake_run(port, config, *, request_get, log_error):
+        run_calls.append((port, config))
+        assert request_get("http://test", timeout=1).status_code == 200
+        log_error("sentinel")
+        return "run"
+
+    monkeypatch.setattr(
+        "dockerpilot.deployment_service._should_run_parallel_tests_impl",
+        fake_flag,
+    )
+    monkeypatch.setattr(
+        "dockerpilot.deployment_service._run_parallel_tests_impl",
+        fake_run,
+    )
+    monkeypatch.setattr(
+        "dockerpilot.deployment_service.requests.get",
+        lambda url, **kwargs: SimpleNamespace(status_code=200),
+    )
+
+    class Logger:
+        def __init__(self):
+            self.errors = []
+
+        def error(self, message):
+            self.errors.append(message)
+
+    service = DeploymentServiceMixin()
+    service.config = {"testing": {"parallel_tests_enabled": True}}
+    service.logger = Logger()
+
+    assert service._should_run_parallel_tests() == "flag"
+    assert service._run_parallel_tests("8080", make_config_for_parallel_test()) == "run"
+    assert flag_calls == [service.config]
+    assert run_calls == [("8080", service.config)]
+    assert service.logger.errors == ["sentinel"]
+
+
+def make_config_for_parallel_test():
+    return SimpleNamespace()
