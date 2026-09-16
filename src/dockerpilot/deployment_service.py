@@ -26,6 +26,7 @@ from .deployment_helpers import (
     normalize_volumes as _normalize_volumes_impl,
     resolve_runtime_network as _resolve_runtime_network_impl,
 )
+from .deployment_history import record_deployment as _record_deployment_impl
 from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
     prepare_image as _prepare_image_impl,
@@ -1801,42 +1802,18 @@ class DeploymentServiceMixin:
     def _record_deployment(self, deployment_id: str, config: DeploymentConfig, 
                           deployment_type: str, success: bool, duration: timedelta, target_env: str = None):
         """Record deployment in history"""
-        deployment_record = {
-            'id': deployment_id,
-            'timestamp': datetime.now().isoformat(),
-            'type': deployment_type,
-            'image_tag': config.image_tag,
-            'container_name': config.container_name,
-            'success': success,
-            'duration_seconds': duration.total_seconds()
-        }
-        
-        # Add environment information if provided
-        if target_env:
-            deployment_record['environment'] = target_env
-        
-        self.deployment_history.append(deployment_record)
-        
-        # Save to file
-        try:
-            history_file = "deployment_history.json"
-            history_data = []
-            
-            if Path(history_file).exists():
-                with open(history_file, 'r') as f:
-                    history_data = json.load(f)
-            
-            history_data.append(deployment_record)
-            
-            # Keep only last 100 deployments
-            if len(history_data) > 100:
-                history_data = history_data[-100:]
-            
-            with open(history_file, 'w') as f:
-                json.dump(history_data, f, indent=2)
-                
-        except Exception as e:
-            self.logger.error(f"Failed to save deployment history: {e}")
+        return _record_deployment_impl(
+            deployment_id,
+            config,
+            deployment_type,
+            success,
+            duration,
+            target_env,
+            append_record=lambda record: self.deployment_history.append(record),
+            log_error=lambda message: self.logger.error(message),
+            now=datetime.now,
+            history_file="deployment_history.json",
+        )
 
     def show_deployment_history(self, limit: int = 10):
         """Show deployment history"""
