@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip('textual')
-from textual.widgets import Button, Static
+from textual.widgets import Button, Label, Static
 
 from dockerpilot.cli import tui
 from dockerpilot.cli.parser import build_cli_parser
@@ -16,11 +16,16 @@ class FakePilot:
     def __init__(self):
         self.containers = [{'name': 'web', 'state': 'running', 'image': 'demo'},
                            {'name': 'api', 'state': 'running', 'image': 'demo'}]
+        self.error = None
 
     def list_containers(self, **kwargs):
+        if self.error:
+            raise self.error
         return list(self.containers)
 
     def list_images(self, **kwargs):
+        if self.error:
+            raise self.error
         return []
 
 
@@ -84,6 +89,67 @@ def test_refresh_preserves_options_and_surviving_selections():
             await pilot.pause()
             assert app.command_widgets['timeout'].value == '47'
             assert app.command_widgets['name'].selected == ['web']
+    asyncio.run(scenario())
+
+
+def test_failed_refresh_keeps_cached_targets_and_form_values():
+    async def scenario():
+        backend = FakePilot()
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'restart'))
+            app.command_widgets['timeout'].value = '47'
+            app.command_widgets['name'].select('web')
+            backend.error = RuntimeError('temporary discovery failure')
+            await app.on_button_pressed(Button.Pressed(app.query_one('#refresh-targets', Button)))
+            await pilot.pause()
+            assert [value for _, value in app.available_targets['container']] == ['web', 'api']
+            assert app.command_widgets['name'].selected == ['web']
+            assert app.command_widgets['timeout'].value == '47'
+            assert 'temporary discovery failure' in str(app.query_one('#status', Static).render())
+
+    asyncio.run(scenario())
+
+
+def test_navigation_restores_per_command_draft_values():
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            run_command = command(app, 'container', 'run')
+            await app._render_command_form(run_command)
+            app.command_widgets['image'].value = 'demo:v2'
+            app.command_widgets['name'].value = 'demo-app'
+            app.command_widgets['env'].load_text('MODE=test\nOWNER=team')
+            await app._render_command_form(command(app, 'container', 'list'))
+            await app._render_command_form(run_command)
+            assert app.command_widgets['image'].value == 'demo:v2'
+            assert app.command_widgets['name'].value == 'demo-app'
+            assert app.command_widgets['env'].text == 'MODE=test\nOWNER=team'
+
+    asyncio.run(scenario())
+
+
+def test_tui_required_fields_and_manual_selector_hints_are_explicit():
+    async def scenario():
+        backend = FakePilot()
+        backend.containers = []
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'run'))
+            for field in ('image', 'name'):
+                label = app.command_widgets[field].parent.query_one(Label)
+                assert f'{field} *' in str(label.render())
+
+            await app._render_command_form(command(app, 'container', 'rename'))
+            help_text = ' '.join(
+                str(widget.render()) for widget in app.command_widgets['name'].parent.query(Static)
+            )
+            assert 'Enter one value.' in help_text
+            assert 'one value per line' not in help_text
+
     asyncio.run(scenario())
 
 
