@@ -34,6 +34,7 @@ from .image_preparation import (
 from .health_checks import (
     advanced_health_check as _advanced_health_check_impl,
     detect_health_check_endpoint as _detect_health_check_endpoint_impl,
+    monitor_canary_performance as _monitor_canary_performance_impl,
     run_parallel_tests as _run_parallel_tests_impl,
     should_run_parallel_tests as _should_run_parallel_tests_impl,
 )
@@ -1760,33 +1761,15 @@ class DeploymentServiceMixin:
 
     def _monitor_canary_performance(self, port: str, duration: int) -> bool:
         """Monitor canary deployment performance"""
-        start_time = time.time()
-        error_count = 0
-        total_requests = 0
-        
-        while time.time() - start_time < duration:
-            try:
-                response = requests.get(f"http://localhost:{port}/health", timeout=2)
-                total_requests += 1
-                
-                if response.status_code != 200:
-                    error_count += 1
-                
-                # Stop if error rate is too high (>10%)
-                if total_requests > 10 and (error_count / total_requests) > 0.1:
-                    self.logger.error(f"Canary error rate too high: {error_count}/{total_requests}")
-                    return False
-                    
-            except:
-                error_count += 1
-                total_requests += 1
-            
-            time.sleep(1)
-        
-        error_rate = error_count / total_requests if total_requests > 0 else 0
-        self.logger.info(f"Canary monitoring complete: {error_count}/{total_requests} errors ({error_rate:.2%})")
-        
-        return error_rate < 0.05  # Accept if error rate < 5%
+        return _monitor_canary_performance_impl(
+            port,
+            duration,
+            request_get=lambda url, **kwargs: requests.get(url, **kwargs),
+            clock=lambda: time.time(),
+            sleep=lambda seconds: time.sleep(seconds),
+            log_error=lambda message: self.logger.error(message),
+            log_info=lambda message: self.logger.info(message),
+        )
 
     def _record_deployment(self, deployment_id: str, config: DeploymentConfig, 
                           deployment_type: str, success: bool, duration: timedelta, target_env: str = None):
