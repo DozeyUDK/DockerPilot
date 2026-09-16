@@ -10,6 +10,7 @@ import requests
 RequestGet = Callable[..., Any]
 Sleep = Callable[[float], None]
 Clock = Callable[[], float]
+LogError = Callable[[str], None]
 
 
 def detect_health_check_endpoint(
@@ -125,3 +126,37 @@ def advanced_health_check(
             sleep(wait_time)
 
     return False
+
+
+def should_run_parallel_tests(config: dict[str, Any]) -> Any:
+    """Return the legacy parallel-test configuration flag without coercion."""
+    return config.get("testing", {}).get("parallel_tests_enabled", False)
+
+
+def run_parallel_tests(
+    port: str,
+    config: dict[str, Any],
+    *,
+    request_get: RequestGet,
+    log_error: LogError,
+) -> bool:
+    """Run the configured deployment endpoints using the legacy fail-fast rules."""
+    test_config = config.get("testing", {})
+    test_endpoints = test_config.get("endpoints", ["/health"])
+    base_url = f"http://localhost:{port}"
+
+    for endpoint in test_endpoints:
+        try:
+            url = f"{base_url}{endpoint}"
+            response = request_get(url, timeout=5)
+
+            if response.status_code != 200:
+                log_error(
+                    f"Parallel test failed for {endpoint}: {response.status_code}"
+                )
+                return False
+        except Exception as exc:
+            log_error(f"Parallel test error for {endpoint}: {exc}")
+            return False
+
+    return True
