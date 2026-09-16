@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 git = ["GitPython>=3.1.0"]
-test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+test = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "pytest-socket>=0.7.0"]
 tui = ["textual>=0.89.0,<1.0.0"]
 mcp = [
     "mcp>=1.0.0",

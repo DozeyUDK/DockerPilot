@@ -50,7 +50,9 @@ def test_status_endpoint_local_context(monkeypatch):
     client = backend_app_module.app.test_client()
 
     monkeypatch.setattr(backend_app_module, "get_selected_server_config", lambda: None)
-    monkeypatch.setattr(backend_app_module, "get_dockerpilot", lambda: _FakePilot())
+    # Resources capture get_dockerpilot during registration; seed its cache so
+    # the test never constructs a real client or probes the Docker daemon.
+    monkeypatch.setattr(backend_app_module, "_dockerpilot_instances", {"local": _FakePilot()})
 
     response = client.get("/api/status")
     payload = response.get_json()

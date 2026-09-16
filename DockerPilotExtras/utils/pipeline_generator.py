@@ -3,11 +3,63 @@ Utility module for pipeline generation
 """
 
 import yaml
+from urllib.parse import urlsplit
 from typing import Dict, List, Optional
 
 
 class PipelineGenerator:
     """Generator for CI/CD pipelines."""
+
+    @staticmethod
+    def validate_config(data) -> Dict[str, str]:
+        """Validate generation requests before generating or saving any files."""
+        if not isinstance(data, dict):
+            return {"body": "Provide a JSON object."}
+        errors = {}
+        if data.get("type", "gitlab") not in ("gitlab", "jenkins"):
+            errors["type"] = "Choose GitLab CI or Jenkins."
+        for key in ("project_name", "docker_image", "dockerfile"):
+            if key in data and (not isinstance(data[key], str) or not data[key].strip()):
+                errors[key] = "Enter a non-empty value."
+        stages = data.get("stages", ["build", "test", "deploy"])
+        allowed = ("build", "test", "scan", "deploy", "smoke")
+        if not isinstance(stages, list) or not stages or any(
+            not isinstance(stage, str) or stage not in allowed for stage in stages
+        ):
+            errors["stages"] = "Select at least one supported stage."
+            stages = []
+        if "env_vars" in data and not isinstance(data["env_vars"], str):
+            errors["env_vars"] = "Enter variables as KEY=value lines."
+        if "test" in stages and "test_commands" in data:
+            commands = data["test_commands"]
+            if isinstance(commands, str):
+                commands = commands.splitlines()
+            if not isinstance(commands, list) or not commands or any(
+                not isinstance(command, str) for command in commands
+            ) or not any(command.strip() for command in commands):
+                errors["test_commands"] = "Enter at least one container test command."
+        for key in ("use_cache", "enable_environments", "enable_rollback_job", "scan_fail_on_findings"):
+            if key in data and not isinstance(data[key], bool):
+                errors[key] = "Use a boolean value."
+        if "smoke" in stages:
+            if "deploy" not in stages:
+                errors["stages"] = "Smoke tests require the deploy stage."
+            url = data.get("smoke_test_url", "")
+            try:
+                parsed = urlsplit(url) if isinstance(url, str) else None
+                valid_url = parsed and parsed.scheme in ("http", "https") and parsed.hostname
+            except ValueError:
+                valid_url = False
+            if not valid_url:
+                errors["smoke_test_url"] = "Enter an HTTP or HTTPS health-check URL."
+            elif "{env}" in url and (
+                data.get("type", "gitlab") != "gitlab" or not data.get("enable_environments", True)
+            ):
+                errors["smoke_test_url"] = "The {env} placeholder requires GitLab multi-environment mode."
+            retries = data.get("smoke_test_retries", 10)
+            if isinstance(retries, bool) or not isinstance(retries, (int, str)) or str(retries) not in {str(n) for n in range(1, 61)}:
+                errors["smoke_test_retries"] = "Choose an integer from 1 to 60."
+        return errors
 
     @staticmethod
     def _split_image_name(docker_image: str) -> tuple[str, str]:
@@ -32,7 +84,7 @@ class PipelineGenerator:
                 normalized.append(stage_name)
         if not normalized:
             normalized = ["build", "test", "deploy"]
-        return normalized
+        return [stage for stage in allowed if stage in normalized]
 
     @staticmethod
     def _normalize_test_commands(test_commands: Optional[List[str]]) -> List[str]:
