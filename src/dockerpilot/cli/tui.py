@@ -570,6 +570,7 @@ if TEXTUAL_AVAILABLE:
             self.selected_command: Optional[CommandNode] = None
             self.global_widgets: Dict[str, Any] = {}
             self.command_widgets: Dict[str, Any] = {}
+            self.command_drafts: Dict[Tuple[str, ...], Dict[str, Any]] = {}
             self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
             self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
             self._selection_syncing = False
@@ -638,7 +639,9 @@ if TEXTUAL_AVAILABLE:
             self.query_one("#loading-screen", Vertical).add_class("hidden")
             self.query_one("#main", Horizontal).remove_class("hidden")
 
-        def _load_available_targets(self) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], str]:
+        def _load_available_targets(
+            self,
+        ) -> Tuple[Optional[List[Tuple[str, str]]], Optional[List[Tuple[str, str]]], str]:
             """Fetch live Docker targets without touching UI state."""
             try:
                 container_rows = self.pilot_instance.list_containers(show_all=True, format_output="json") or []
@@ -648,13 +651,19 @@ if TEXTUAL_AVAILABLE:
                 message = f"Loaded {len(container_targets)} containers and {len(image_targets)} images."
                 return container_targets, image_targets, message
             except Exception as exc:
-                return [], [], f"Could not load live Docker targets: {exc}"
+                return (
+                    None,
+                    None,
+                    f"Could not load live Docker targets; existing choices were kept: {exc}",
+                )
 
         async def _refresh_available_targets_async(self) -> str:
             """Refresh cached Docker targets for selector widgets."""
             container_targets, image_targets, message = await asyncio.to_thread(self._load_available_targets)
-            self.available_targets["container"] = container_targets
-            self.available_targets["image"] = image_targets
+            if container_targets is not None:
+                self.available_targets["container"] = container_targets
+            if image_targets is not None:
+                self.available_targets["image"] = image_targets
             return message
 
         def _add_tree_node(self, parent: Any, command: CommandNode) -> None:
@@ -680,6 +689,14 @@ if TEXTUAL_AVAILABLE:
             command: Optional[CommandNode],
             values: Optional[Dict[str, Any]] = None,
         ) -> None:
+            previous_command = self.selected_command
+            if previous_command and self.command_widgets:
+                self.command_drafts[previous_command.path] = self._snapshot_widget_values(
+                    self.command_widgets
+                )
+            if values is None and command:
+                values = self.command_drafts.get(command.path)
+
             container = self.query_one("#command-form", Vertical)
             await container.remove_children()
             self.command_widgets = {}
@@ -732,7 +749,7 @@ if TEXTUAL_AVAILABLE:
         ) -> None:
             row = Vertical(classes="arg-row")
             label_text = argument.label
-            if argument.required:
+            if argument.required or (command and should_tui_require_value(command, argument)):
                 label_text = f"{label_text} *"
 
             await container.mount(row)
@@ -784,9 +801,14 @@ if TEXTUAL_AVAILABLE:
 
             if selector_spec and not self.available_targets.get(selector_spec.resource_type):
                 resource_name = "containers" if selector_spec.resource_type == "container" else "images"
+                entry_hint = (
+                    "Enter one value per line."
+                    if selector_spec.mode == "multi"
+                    else "Enter one value."
+                )
                 await row.mount(
                     Static(
-                        f"No local {resource_name} found. Enter values manually, one per line for multi-value fields.",
+                        f"No local {resource_name} found. {entry_hint}",
                         classes="arg-help",
                     )
                 )
