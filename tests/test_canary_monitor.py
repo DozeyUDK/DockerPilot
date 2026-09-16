@@ -1,4 +1,4 @@
-"""Characterize the legacy canary monitor before extracting its timing loop.
+"""Characterize the legacy canary monitor and its extracted timing loop.
 
 Some assertions capture surprising existing behavior, not recommended policy.
 All requests and time operations are replaced; no Docker client is constructed.
@@ -11,10 +11,11 @@ import pytest
 import requests
 
 from dockerpilot import deployment_service
+from dockerpilot.health_checks import monitor_canary_performance
 
 
-@pytest.fixture
-def monitor(monkeypatch):
+@pytest.fixture(params=["service", "helper"])
+def monitor(monkeypatch, request):
     state = SimpleNamespace(now=100.0)
 
     def sleep(seconds):
@@ -25,6 +26,7 @@ def monitor(monkeypatch):
     state.get = Mock(return_value=SimpleNamespace(status_code=200))
     state.logger = Mock()
     service = SimpleNamespace(logger=state.logger)
+    state.service = service
     monkeypatch.setattr(
         deployment_service, "time",
         SimpleNamespace(time=state.clock, sleep=state.sleep),
@@ -37,6 +39,15 @@ def monitor(monkeypatch):
             service, "8123", duration,
         )
     )
+    if request.param == "helper":
+        state.run = lambda duration: monitor_canary_performance(
+            "8123", duration,
+            request_get=lambda url, **kwargs: deployment_service.requests.get(url, **kwargs),
+            clock=lambda: deployment_service.time.time(),
+            sleep=lambda seconds: deployment_service.time.sleep(seconds),
+            log_error=lambda message: service.logger.error(message),
+            log_info=lambda message: service.logger.info(message),
+        )
     return state
 
 
@@ -201,3 +212,38 @@ def test_final_summary_logger_failure_propagates(monitor):
     with pytest.raises(RuntimeError, match="summary failed"):
         monitor.run(0)
     monitor.get.assert_not_called()
+
+
+def test_clock_failure_precedes_logger_lookup(monitor):
+    del monitor.service.logger
+    monitor.clock.side_effect = RuntimeError("clock first")
+    with pytest.raises(RuntimeError, match="clock first"):
+        monitor.run(3)
+
+
+def test_collaborators_are_resolved_at_each_use(monitor, monkeypatch):
+    replacement_get = Mock(return_value=SimpleNamespace(status_code=200))
+    replacement_sleep = Mock()
+    replacement_logger = Mock()
+
+    def replace_collaborators(*args, **kwargs):
+        monkeypatch.setattr(
+            deployment_service, "requests", SimpleNamespace(get=replacement_get),
+        )
+        monkeypatch.setattr(
+            deployment_service, "time",
+            SimpleNamespace(time=Mock(side_effect=[101, 102]), sleep=replacement_sleep),
+        )
+        monitor.service.logger = replacement_logger
+        return SimpleNamespace(status_code=200)
+
+    monitor.get.side_effect = replace_collaborators
+    assert monitor.run(2) is True
+    monitor.get.assert_called_once_with("http://localhost:8123/health", timeout=2)
+    replacement_get.assert_called_once_with("http://localhost:8123/health", timeout=2)
+    monitor.sleep.assert_not_called()
+    assert replacement_sleep.call_args_list == [call(1), call(1)]
+    monitor.logger.info.assert_not_called()
+    replacement_logger.info.assert_called_once_with(
+        "Canary monitoring complete: 0/2 errors (0.00%)"
+    )

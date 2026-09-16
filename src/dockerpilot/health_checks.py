@@ -160,3 +160,47 @@ def run_parallel_tests(
             return False
 
     return True
+
+
+def monitor_canary_performance(
+    port: str,
+    duration: int,
+    *,
+    request_get: RequestGet,
+    clock: Clock,
+    sleep: Sleep,
+    log_error: LogError,
+    log_info: Callable[[str], None],
+) -> bool:
+    """Run the legacy canary loop, including its counting and exception rules.
+
+    Request failures bypass the early-abort check. The broad exception handler
+    and counter ordering are retained for compatibility, not as new policy.
+    """
+    start_time = clock()
+    error_count = 0
+    total_requests = 0
+
+    while clock() - start_time < duration:
+        try:
+            response = request_get(f"http://localhost:{port}/health", timeout=2)
+            total_requests += 1
+
+            if response.status_code != 200:
+                error_count += 1
+
+            # Stop if error rate is too high (>10%)
+            if total_requests > 10 and (error_count / total_requests) > 0.1:
+                log_error(f"Canary error rate too high: {error_count}/{total_requests}")
+                return False
+
+        except:
+            error_count += 1
+            total_requests += 1
+
+        sleep(1)
+
+    error_rate = error_count / total_requests if total_requests > 0 else 0
+    log_info(f"Canary monitoring complete: {error_count}/{total_requests} errors ({error_rate:.2%})")
+
+    return error_rate < 0.05  # Accept if error rate < 5%
