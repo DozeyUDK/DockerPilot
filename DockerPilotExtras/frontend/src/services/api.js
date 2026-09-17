@@ -30,7 +30,9 @@ api.interceptors.request.use((config) => {
 // Pipeline API
 export const pipelineAPI = {
   generate: (data) => api.post('/pipeline/generate', data),
-  save: (data) => api.post('/pipeline/save', data)
+  save: (data) => api.post('/pipeline/save', data),
+  saved: () => api.get('/pipeline/saved'),
+  readSaved: (filename) => api.get(`/pipeline/saved/${encodeURIComponent(filename)}`)
 }
 
 // Environment API
