@@ -1095,8 +1095,6 @@ function Environments() {
     skipBackup,
     elevationToken = null
   ) => {
-    console.log(`[continuePromotion] Called for ${containerName}`, { selectedEnv, targetEnv, skipBackup })
-    
     // Final confirmation (include target server when env->server mapping is used)
     const targetServerDisplay = envServersMap[targetEnv] ? getTargetServerDisplay(targetEnv) : null
     if (!skipBackup) {
@@ -1104,7 +1102,6 @@ function Environments() {
         ? `Promote container ${containerName} from ${sourceLabel} to ${targetLabel}?\n\nTarget server: ${targetServerDisplay}`
         : `Are you sure you want to promote container ${containerName} from ${sourceLabel} to ${targetLabel}?`
       const confirmed = window.confirm(msg)
-      console.log(`[continuePromotion] User confirmed: ${confirmed}`)
       if (!confirmed) {
         if (elevationToken) {
           try {
@@ -1113,28 +1110,24 @@ function Environments() {
             // Ignore cleanup errors
           }
         }
-        console.log(`[continuePromotion] User cancelled, returning`)
         return
       }
     }
     
     setPromotingContainer(containerName)
     try {
-      console.log(`[continuePromotion] Preparing config for ${containerName} to ${targetEnv}`)
       // First, prepare config for target environment
       const prepareResponse = await environmentAPI.prepareConfig(containerName, targetEnv, selectedEnv)
-      console.log(`[continuePromotion] Prepare config response:`, prepareResponse.data)
       
       if (!prepareResponse.data.success) {
         const errorMsg = prepareResponse.data.error || 'Error preparing configuration'
-        console.error(`[continuePromotion] Prepare config failed: ${errorMsg}`)
+        console.error('[continuePromotion] Prepare config failed')
         setMessage({ type: 'error', text: errorMsg })
         setPromotingContainer(null)
         return
       }
       
       // Then promote to target environment (with optional skipBackup flag)
-      console.log(`Promoting ${containerName} from ${selectedEnv} to ${targetEnv}`)
       const promoteResponse = await environmentAPI.promoteSingle(
         selectedEnv,
         targetEnv,
@@ -1143,7 +1136,6 @@ function Environments() {
         true,
         elevationToken
       )
-      console.log(`Promote response:`, promoteResponse.data)
       
       // Clear one-time elevation tokens and legacy sudo password after promotion
       try {
@@ -1167,11 +1159,11 @@ function Environments() {
         await loadEnvironmentsStatus()
       } else {
         const errorMsg = promoteResponse.data.error || 'Error during promotion'
-        console.error(`Promotion failed: ${errorMsg}`)
+        console.error('[continuePromotion] Promotion failed')
         setMessage({ type: 'error', text: errorMsg })
       }
     } catch (error) {
-      console.error(`Promotion error for ${containerName}:`, error)
+      console.error('[continuePromotion] Promotion request failed')
       const errorMsg = error.response?.data?.error || 'Error promoting container'
       setMessage({ 
         type: 'error', 

@@ -36,6 +36,7 @@ from utils.pipeline_generator import (
 )
 from backend.api import register_api_routes
 from backend.preflight import run_preflight_checks
+from backend.security import redact_sensitive_text, safe_error_message
 from backend.resources.auth import create_auth_resources
 from backend.resources.commands import create_command_resources
 from backend.resources.environment import create_environment_resources
@@ -1035,12 +1036,15 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
                 timeout=300
             )
             if check_exit_status and result.returncode != 0:
-                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                raise Exception(
+                    f"Command failed (exit {result.returncode}): "
+                    f"{redact_sensitive_text(result.stderr or '')}"
+                )
             return result.stdout
         except subprocess.TimeoutExpired:
-            raise Exception(f"Command timeout: {command}")
+            raise Exception("Command timed out")
         except Exception as e:
-            raise Exception(f"Command failed: {str(e)}")
+            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
     
     if not SSH_AVAILABLE:
         raise ImportError("SSH libraries not available")
@@ -1097,12 +1101,14 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
         ssh.close()
         
         if check_exit_status and exit_status != 0:
-            raise Exception(f"Command failed (exit {exit_status}): {error_output}")
+            raise Exception(
+                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
+            )
         
         return output
         
     except Exception as e:
-        app.logger.error(f"Failed to execute command via SSH: {e}")
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
         raise
 
 # Cache for sudo requirements per server
@@ -1306,12 +1312,15 @@ def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_stat
                 timeout=300
             )
             if check_exit_status and result.returncode != 0:
-                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                raise Exception(
+                    f"Command failed (exit {result.returncode}): "
+                    f"{redact_sensitive_text(result.stderr or '')}"
+                )
             return result.stdout, result.stderr
         except subprocess.TimeoutExpired:
-            raise Exception(f"Command timeout: {command}")
+            raise Exception("Command timed out")
         except Exception as e:
-            raise Exception(f"Command failed: {str(e)}")
+            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
     
     if not SSH_AVAILABLE:
         raise ImportError("SSH libraries not available")
@@ -1366,12 +1375,14 @@ def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_stat
         ssh.close()
         
         if check_exit_status and exit_status != 0:
-            raise Exception(f"Command failed (exit {exit_status}): {error_output}")
+            raise Exception(
+                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
+            )
         
         return output, error_output
         
     except Exception as e:
-        app.logger.error(f"Failed to execute command via SSH: {e}")
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
         raise
 
 def get_selected_server_config():
