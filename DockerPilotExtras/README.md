@@ -379,6 +379,12 @@ DockerPilotExtras/
 ### Pipeline
 - `POST /api/pipeline/generate` - Generate pipeline
 - `POST /api/pipeline/save` - Save pipeline
+- `GET /api/pipeline/saved` - List saved pipeline artifacts and metadata
+- `GET /api/pipeline/saved/<filename>` - Read one saved pipeline artifact
+
+Saved artifacts are limited to `.gitlab-ci.yml`, `Jenkinsfile`, and `pipeline.yml`.
+The maximum UTF-8 encoded size is 1 MiB. Save responses expose only the artifact
+name in `path`, never the host's absolute filesystem path.
 
 ### Deployment
 - `GET /api/deployment/config` - Get configuration
