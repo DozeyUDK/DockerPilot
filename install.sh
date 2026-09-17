@@ -44,15 +44,15 @@ fi
 # Check Python version
 echo "📋 Checking prerequisites..."
 if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}❌ Python 3 is not installed. Please install Python 3.9 or higher.${NC}"
+    echo -e "${RED}❌ Python 3 is not installed. Please install Python 3.10 or higher.${NC}"
     exit 1
 fi
 
 PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info[0])')
 PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info[1])')
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 9 ]); then
-    echo -e "${RED}❌ Python 3.9 or higher is required. Found: $PYTHON_MAJOR.$PYTHON_MINOR${NC}"
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]); then
+    echo -e "${RED}❌ Python 3.10 or higher is required. Found: $PYTHON_MAJOR.$PYTHON_MINOR${NC}"
     exit 1
 fi
 
