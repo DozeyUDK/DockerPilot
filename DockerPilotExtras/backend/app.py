@@ -1497,6 +1497,7 @@ def append_deployment_history_data(entry: dict, max_entries: int = 50) -> bool:
     DeploymentConfig,
     DeploymentExecute,
     DeploymentHistory,
+    PipelineLibrary,
 ) = create_pipeline_resources(
     Resource=Resource,
     app=app,
@@ -2196,6 +2197,7 @@ register_api_routes(
     AuthLogout=AuthLogout,
     PipelineGenerate=PipelineGenerate,
     PipelineSave=PipelineSave,
+    PipelineLibrary=PipelineLibrary,
     PipelineDeploymentConfig=PipelineDeploymentConfig,
     PipelineIntegration=PipelineIntegration,
     DeploymentConfig=DeploymentConfig,
