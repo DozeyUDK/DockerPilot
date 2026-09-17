@@ -4,6 +4,15 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme } from '../contexts/ThemeContext'
 import { PIPELINE_PRESETS, applyPreset, formSnapshot, isSnapshotCurrent, orderedStages, validatePipelineForm } from '../utils/pipelineWorkbench.mjs'
+import {
+  formatPipelineModifiedAt,
+  formatPipelineSize,
+  isSavedPipelineDetailCurrent,
+  normalizeSavedPipelines,
+  pipelineDownloadDescriptor,
+  pipelineLanguage,
+  reconcileSelectedPipeline,
+} from '../utils/savedPipelineLibrary.mjs'
 import '../App.css'
 
 function Pipelines() {
@@ -51,11 +60,62 @@ function Pipelines() {
   const [browserPath, setBrowserPath] = useState('')
   const [browserItems, setBrowserItems] = useState([])
   const [loadingBrowser, setLoadingBrowser] = useState(false)
+  const [savedPipelines, setSavedPipelines] = useState([])
+  const [selectedPipeline, setSelectedPipeline] = useState(null)
+  const [loadingSavedPipelines, setLoadingSavedPipelines] = useState(false)
+  const [loadingSavedPipeline, setLoadingSavedPipeline] = useState(false)
+  const [savedPipelineError, setSavedPipelineError] = useState('')
+  const savedListRequest = useRef(0)
+  const savedDetailRequest = useRef(0)
+  const savedPipelinesRef = useRef([])
 
   useEffect(() => {
     loadDockerImages()
     loadDockerfiles()
+    loadSavedPipelines()
   }, [])
+
+  const loadSavedPipelines = async () => {
+    const requestId = ++savedListRequest.current
+    ++savedDetailRequest.current
+    setLoadingSavedPipelines(true)
+    setLoadingSavedPipeline(false)
+    setSavedPipelineError('')
+    try {
+      const response = await pipelineAPI.saved()
+      if (requestId !== savedListRequest.current) return
+      const pipelines = normalizeSavedPipelines(response.data?.pipelines)
+      savedPipelinesRef.current = pipelines
+      setSavedPipelines(pipelines)
+      setSelectedPipeline(current => reconcileSelectedPipeline(current, pipelines))
+    } catch (error) {
+      if (requestId !== savedListRequest.current) return
+      setSavedPipelineError(error.response?.data?.error || 'Could not load saved pipelines')
+    } finally {
+      if (requestId === savedListRequest.current) setLoadingSavedPipelines(false)
+    }
+  }
+
+  const openSavedPipeline = async (savedFilename) => {
+    const requestId = ++savedDetailRequest.current
+    setLoadingSavedPipeline(true)
+    setSavedPipelineError('')
+    try {
+      const response = await pipelineAPI.readSaved(savedFilename)
+      if (requestId !== savedDetailRequest.current) return
+      const pipeline = response.data?.pipeline
+      const metadata = normalizeSavedPipelines([pipeline])[0]
+      if (!metadata || !isSavedPipelineDetailCurrent(pipeline, savedPipelinesRef.current)) {
+        throw new TypeError('Invalid saved pipeline response')
+      }
+      setSelectedPipeline(pipeline)
+    } catch (error) {
+      if (requestId !== savedDetailRequest.current) return
+      setSavedPipelineError(error.response?.data?.error || 'Could not open saved pipeline')
+    } finally {
+      if (requestId === savedDetailRequest.current) setLoadingSavedPipeline(false)
+    }
+  }
 
   const loadDockerImages = async () => {
     setLoadingImages(true)
@@ -205,6 +265,7 @@ function Pipelines() {
       })
       if (response.data.success) {
         setMessage({ type: 'success', text: `Pipeline saved: ${response.data.path}` })
+        loadSavedPipelines()
       }
     } catch (error) {
       setMessage({ 
@@ -225,6 +286,20 @@ function Pipelines() {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleSavedDownload = () => {
+    if (!selectedPipeline) return
+    const download = pipelineDownloadDescriptor(selectedPipeline)
+    const blob = new Blob([download.content], { type: download.mimeType })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = download.filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
     URL.revokeObjectURL(url)
   }
 
@@ -713,6 +788,79 @@ function Pipelines() {
           )}
         </div>
       </div>
+
+      <section className="card saved-pipelines-card" aria-labelledby="saved-pipelines-title">
+        <div className="saved-pipelines-header">
+          <div>
+            <h3 id="saved-pipelines-title" className="card-title">Saved Pipelines</h3>
+            <p className="saved-pipelines-description">Open or download generated pipeline artifacts. Saved files are read-only here.</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={loadSavedPipelines}
+            disabled={loadingSavedPipelines}
+          >
+            {loadingSavedPipelines ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+
+        {savedPipelineError && <div className="alert alert-error">{savedPipelineError}</div>}
+
+        <div className="saved-pipelines-layout">
+          <div className="saved-pipeline-list" aria-live="polite">
+            {loadingSavedPipelines && savedPipelines.length === 0 && <div className="spinner"></div>}
+            {!loadingSavedPipelines && savedPipelines.length === 0 && (
+              <p className="saved-pipelines-empty">No saved pipelines yet. Generate and save one above.</p>
+            )}
+            {savedPipelines.map(pipeline => (
+              <div
+                key={pipeline.filename}
+                className={`saved-pipeline-row${selectedPipeline?.filename === pipeline.filename ? ' selected' : ''}`}
+              >
+                <div className="saved-pipeline-summary">
+                  <strong>{pipeline.filename}</strong>
+                  <span>{pipeline.type} · {formatPipelineSize(pipeline.size_bytes)}</span>
+                  <span>Modified {formatPipelineModifiedAt(pipeline.modified_at)}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => openSavedPipeline(pipeline.filename)}
+                  disabled={loadingSavedPipelines}
+                >
+                  Open
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="saved-pipeline-detail">
+            {loadingSavedPipeline && <div className="spinner"></div>}
+            {!loadingSavedPipeline && !selectedPipeline && (
+              <p className="saved-pipelines-empty">Select a saved pipeline to preview it.</p>
+            )}
+            {!loadingSavedPipeline && selectedPipeline && (
+              <>
+                <div className="saved-pipeline-detail-header">
+                  <div>
+                    <strong>{selectedPipeline.filename}</strong>
+                    <span>{formatPipelineSize(selectedPipeline.size_bytes)}</span>
+                  </div>
+                  <button type="button" className="btn btn-success" onClick={handleSavedDownload}>Download</button>
+                </div>
+                <SyntaxHighlighter
+                  language={pipelineLanguage(selectedPipeline.type)}
+                  style={vscDarkPlus}
+                  customStyle={{ borderRadius: '4px', maxHeight: '420px' }}
+                >
+                  {selectedPipeline.content}
+                </SyntaxHighlighter>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* File Browser Modal */}
       {showFileBrowser && (
