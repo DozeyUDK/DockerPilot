@@ -405,6 +405,19 @@ name in `path`, never the host's absolute filesystem path.
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
 
+### Container migrations
+
+- `POST /api/containers/migrate` - Legacy synchronous migration endpoint
+- `POST /api/containers/migrations` - Queue an asynchronous migration (`202`)
+- `GET /api/containers/migrations` - List active asynchronous migrations
+- `GET /api/containers/migrations/<migration_id>` - Read one migration job
+- `DELETE /api/containers/migrations/<migration_id>` - Request cooperative cancellation
+
+Asynchronous migration state and the bounded queue are process-local and kept
+in memory. Jobs do not survive a backend restart and are not shared between
+multiple WSGI workers. Run a single Extras backend process when using these
+endpoints; a multi-process deployment requires a shared durable queue/store.
+
 ### Storage
 - `GET /api/storage/status` - Active storage backend and health/schema info
 - `POST /api/storage/test-postgres` - Test PostgreSQL connectivity
