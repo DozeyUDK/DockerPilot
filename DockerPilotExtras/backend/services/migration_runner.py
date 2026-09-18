@@ -85,8 +85,8 @@ class MigrationRunner:
 
     def __init__(self, executor: MigrationExecutor, *, coordinator=None) -> None:
         self._executor = executor
-        # Direct API migrations, async jobs and cross-server promotions share
-        # this lock. Same-server promotion has its own non-migration path.
+        # Direct API migrations, async jobs, and coordinated promotion
+        # operations share this lock.
         # The legacy executor uses a cached DockerPilot instance and is not
         # safe to overlap within one backend process.
         self._coordinator = coordinator or _MIGRATION_EXECUTION_COORDINATOR
@@ -100,13 +100,26 @@ class MigrationRunner:
     ) -> MigrationResult:
         """Block until the injected executor returns a terminal result."""
 
+        return self.run_operation(
+            lambda: self._execute(spec, operation_context),
+            execution_context=execution_context,
+        )
+
+    def run_operation(
+        self,
+        operation: Callable[[], Any],
+        *,
+        execution_context: Any = None,
+    ) -> MigrationResult:
+        """Run one arbitrary migration-adjacent operation under the coordinator."""
+
         try:
             with self._coordinator:
                 if execution_context is None:
-                    raw_result = self._execute(spec, operation_context)
+                    raw_result = operation()
                 else:
                     with execution_context:
-                        raw_result = self._execute(spec, operation_context)
+                        raw_result = operation()
         except Exception as exc:
             return MigrationResult(
                 {"error": redact_sensitive_text(exc)},

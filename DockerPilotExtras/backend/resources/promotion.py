@@ -179,23 +179,21 @@ def create_promotion_resources(
                 if not from_env or not to_env or not container_name:
                     return {'error': 'Missing required parameters'}, 400
                 
-                # Initialize progress tracking
-                _deployment_progress[container_name] = {
-                    'stage': 'initializing',
-                    'progress': 0,
-                    'message': f'Inicjalizacja promocji {container_name}...',
-                    'timestamp': datetime.now().isoformat()
-                }
-                
                 app.logger.info(f"Promoting single container {container_name} from {from_env} to {to_env}")
-                
-                # Update progress
-                _deployment_progress[container_name] = {
-                    'stage': 'preparing',
-                    'progress': 10,
-                    'message': 'Preparing promotion...',
-                    'timestamp': datetime.now().isoformat()
-                }
+
+                def initialize_promotion_progress():
+                    _deployment_progress[container_name] = {
+                        'stage': 'initializing',
+                        'progress': 0,
+                        'message': f'Inicjalizacja promocji {container_name}...',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    _deployment_progress[container_name] = {
+                        'stage': 'preparing',
+                        'progress': 10,
+                        'message': 'Preparing promotion...',
+                        'timestamp': datetime.now().isoformat()
+                    }
                 
                 sudo_password = None
                 if elevation_token:
@@ -230,46 +228,71 @@ def create_promotion_resources(
                     target_server_id = resolve_server_id_for_env(to_env)
     
                     if source_server_id == target_server_id:
-                        _deployment_progress[container_name] = {
-                            'stage': 'deploying',
-                            'progress': 30,
-                            'message': (
-                                f'Promoting {container_name} on shared server '
-                                f'({format_env_name(from_env)} -> {format_env_name(to_env)})...'
-                            ),
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        deployment_dir = find_active_deployment_dir(container_name)
-                        if not deployment_dir:
-                            raise FileNotFoundError(f"No active deployment directory found for {container_name}")
-                        config_path = deployment_dir / f'deployment-{from_env}.yml'
-                        if not config_path.exists():
-                            config_path = deployment_dir / 'deployment.yml'
-                        if not config_path.exists():
-                            raise FileNotFoundError(
-                                f"Deployment config not found for {container_name} and env {from_env}"
-                            )
-                        with execution_context:
-                            success = promote_config_to_server(
+                        def promote_on_shared_server():
+                            initialize_promotion_progress()
+                            _deployment_progress[container_name] = {
+                                'stage': 'deploying',
+                                'progress': 30,
+                                'message': (
+                                    f'Promoting {container_name} on shared server '
+                                    f'({format_env_name(from_env)} -> {format_env_name(to_env)})...'
+                                ),
+                                'timestamp': datetime.now().isoformat()
+                            }
+                            deployment_dir = find_active_deployment_dir(container_name)
+                            if not deployment_dir:
+                                raise FileNotFoundError(
+                                    f"No active deployment directory found for {container_name}"
+                                )
+                            config_path = deployment_dir / f'deployment-{from_env}.yml'
+                            if not config_path.exists():
+                                config_path = deployment_dir / 'deployment.yml'
+                            if not config_path.exists():
+                                raise FileNotFoundError(
+                                    f"Deployment config not found for {container_name} and env {from_env}"
+                                )
+                            details = {
+                                'mode': 'same-server',
+                                'config_path': str(config_path),
+                                'source_server_id': source_server_id,
+                                'target_server_id': target_server_id,
+                            }
+                            promoted = promote_config_to_server(
                                 target_server_id,
                                 str(config_path),
                                 from_env,
                                 to_env,
                                 bool(skip_backup),
                             )
-                        body = {
-                            'mode': 'same-server',
-                            'config_path': str(config_path),
-                            'source_server_id': source_server_id,
-                            'target_server_id': target_server_id,
-                        }
+                            return {
+                                'success': bool(promoted),
+                                'details': details,
+                            }
+
+                        promotion_result = _migration_runner.run_operation_inline(
+                            container_name,
+                            promote_on_shared_server,
+                            execution_context=execution_context,
+                        )
+                        if promotion_result.status in {409, 503}:
+                            return promotion_result.to_response()
+                        success = promotion_result.completed_successfully
+                        body = promotion_result.body
+                        if (
+                            success
+                            and isinstance(promotion_result.body, dict)
+                            and isinstance(promotion_result.body.get('details'), dict)
+                        ):
+                            body = promotion_result.body['details']
                     else:
-                        _deployment_progress[container_name] = {
-                            'stage': 'migrating',
-                            'progress': 20,
-                            'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
-                            'timestamp': datetime.now().isoformat()
-                        }
+                        def mark_cross_server_migration_started():
+                            initialize_promotion_progress()
+                            _deployment_progress[container_name] = {
+                                'stage': 'migrating',
+                                'progress': 20,
+                                'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
+                                'timestamp': datetime.now().isoformat()
+                            }
     
                         # Promotion must wait for the real synchronous migration
                         # outcome; an accepted async job is not a completed promotion.
@@ -282,7 +305,10 @@ def create_promotion_resources(
                                 stop_source=bool(stop_source),
                             ),
                             execution_context=execution_context,
+                            on_reserved=mark_cross_server_migration_started,
                         )
+                        if migrate_result.status in {409, 503}:
+                            return migrate_result.to_response()
                         body = migrate_result.body
                         success = migrate_result.completed_successfully
                         if not migrate_result.is_terminal:
@@ -347,9 +373,14 @@ def create_promotion_resources(
                                 'timestamp': datetime.now().isoformat()
                             }
                         app.logger.error(f"Failed to promote {container_name}")
+                        error = (
+                            body.get('error')
+                            if isinstance(body, dict)
+                            else None
+                        ) or f'Failed to promote {container_name}'
                         return {
                             'success': False,
-                            'error': body.get('error') if isinstance(body, dict) else f'Failed to promote {container_name}'
+                            'error': error,
                         }, 500
                         
                 except Exception as e:
