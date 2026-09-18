@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 from backend.security import safe_error_message
+from backend.services.migration_execution import DockerPilotExecutionContext
 from backend.services.migration_runner import MigrationSpec
 
 
@@ -26,6 +27,7 @@ def create_promotion_resources(
     format_env_name,
     find_active_deployment_dir,
     migration_runner,
+    execution_context_factory=DockerPilotExecutionContext,
 ):
     """Return environment promotion resource classes with injected dependencies."""
 
@@ -33,6 +35,7 @@ def create_promotion_resources(
     _deployment_progress = deployment_progress
     _consume_elevation_token = consume_elevation_token
     _migration_runner = migration_runner
+    _execution_context_factory = execution_context_factory
 
     class HealthCheck(Resource):
         """Health check endpoint"""
@@ -162,8 +165,7 @@ def create_promotion_resources(
         """Promote single container from one environment to another"""
         def post(self):
             container_name = None
-            pilot = None
-            sudo_password_applied = False
+            execution_context = None
             try:
                 data = request.get_json()
                 from_env = data.get('from_env')
@@ -195,7 +197,6 @@ def create_promotion_resources(
                     'timestamp': datetime.now().isoformat()
                 }
                 
-                pilot = get_dockerpilot()
                 sudo_password = None
                 if elevation_token:
                     token_ok, token_message, token_password = _consume_elevation_token(
@@ -217,9 +218,10 @@ def create_promotion_resources(
                     if sudo_password:
                         app.logger.info("Using legacy sudo password from session")
     
-                if sudo_password:
-                    pilot._sudo_password = sudo_password
-                    sudo_password_applied = True
+                execution_context = _execution_context_factory(
+                    get_dockerpilot,
+                    sudo_password=sudo_password,
+                )
                 
                 try:
                     # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
@@ -247,13 +249,14 @@ def create_promotion_resources(
                             raise FileNotFoundError(
                                 f"Deployment config not found for {container_name} and env {from_env}"
                             )
-                        success = promote_config_to_server(
-                            target_server_id,
-                            str(config_path),
-                            from_env,
-                            to_env,
-                            bool(skip_backup),
-                        )
+                        with execution_context:
+                            success = promote_config_to_server(
+                                target_server_id,
+                                str(config_path),
+                                from_env,
+                                to_env,
+                                bool(skip_backup),
+                            )
                         body = {
                             'mode': 'same-server',
                             'config_path': str(config_path),
@@ -277,7 +280,8 @@ def create_promotion_resources(
                                 target_server_id=target_server_id,
                                 include_data=bool(include_data),
                                 stop_source=bool(stop_source),
-                            )
+                            ),
+                            execution_context=execution_context,
                         )
                         body = migrate_result.body
                         success = migrate_result.completed_successfully
@@ -378,12 +382,6 @@ def create_promotion_resources(
                     del _deployment_progress[container_name]
                 app.logger.error(f"Promotion request error: {e}")
                 return {'error': str(e)}, 500
-            finally:
-                if pilot is not None and sudo_password_applied:
-                    try:
-                        pilot._sudo_password = None
-                    except Exception:
-                        pass
     
 
     return HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle
