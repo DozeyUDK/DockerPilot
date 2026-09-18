@@ -109,6 +109,54 @@ def test_runner_normalizes_executor_exceptions_and_redacts_secrets():
     assert result.completed_successfully is False
 
 
+def test_runner_activates_and_closes_execution_context_at_executor_boundary():
+    events = []
+
+    class _ExecutionContext:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    def operation(_payload):
+        events.append("execute")
+        return {"success": True}
+
+    result = SynchronousMigrationRunner(operation).run_inline(
+        MigrationSpec("api", "dev", "prod"),
+        execution_context=_ExecutionContext(),
+    )
+
+    assert result.completed_successfully is True
+    assert events == ["enter", "execute", "exit"]
+
+
+def test_runner_closes_execution_context_when_executor_raises():
+    events = []
+
+    class _ExecutionContext:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, *_args):
+            events.append(("exit", exc_type))
+
+    def operation(_payload):
+        events.append("execute")
+        raise RuntimeError("executor failed")
+
+    result = SynchronousMigrationRunner(operation).run_inline(
+        MigrationSpec("api", "dev", "prod"),
+        execution_context=_ExecutionContext(),
+    )
+
+    assert result.status == 500
+    assert events == ["enter", "execute", ("exit", RuntimeError)]
+
+
 def test_success_requires_status_200_and_explicit_success_true():
     assert MigrationResult({"success": False}, 200).completed_successfully is False
     assert MigrationResult({"message": "done"}, 200).completed_successfully is False
@@ -194,9 +242,12 @@ def _promotion_resource(monkeypatch, migration_result, *, binding_error=None):
     moved = []
 
     class _Runner:
-        def run_inline(self, spec):
+        def run_inline(self, spec, *, execution_context=None):
             runner_calls.append(spec)
-            return migration_result
+            if execution_context is None:
+                return migration_result
+            with execution_context:
+                return migration_result
 
     class _NoopThread:
         def __init__(self, *args, **kwargs):
@@ -277,3 +328,73 @@ def test_cross_server_promotion_reports_binding_failure_as_partial(monkeypatch):
     assert body["reconciliation_required"] is True
     assert len(runner_calls) == 1
     assert moved == []
+
+
+@pytest.mark.parametrize("promotion_outcome", [True, False, RuntimeError("deploy failed")])
+def test_same_server_promotion_scopes_execution_context_and_moves_only_on_success(
+    monkeypatch,
+    tmp_path,
+    promotion_outcome,
+):
+    (tmp_path / "deployment-dev.yml").write_text("deployment: {}\n", encoding="utf-8")
+    events = []
+    moved = []
+
+    class _ExecutionContext:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, *_args):
+            events.append(("exit", exc_type))
+
+    def promote(*_args, **_kwargs):
+        events.append("promote")
+        if isinstance(promotion_outcome, Exception):
+            raise promotion_outcome
+        return promotion_outcome
+
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("backend.resources.promotion.threading.Thread", _NoopThread)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    request = _Request(
+        {"from_env": "dev", "to_env": "prod", "container_name": "api"}
+    )
+    resources = create_promotion_resources(
+        Resource=_Resource,
+        app=_App(),
+        request=request,
+        session={},
+        datetime_cls=datetime,
+        deployment_progress={},
+        get_dockerpilot=lambda: SimpleNamespace(),
+        consume_elevation_token=lambda *_args, **_kwargs: (False, "unused", None),
+        find_all_deployment_configs_for_env=lambda _env: [],
+        resolve_server_id_for_env=lambda _env: "local",
+        promote_config_to_server=promote,
+        move_many_container_bindings=lambda *_args, **_kwargs: None,
+        move_container_binding=lambda *args: moved.append(args),
+        format_env_name=lambda env: env,
+        find_active_deployment_dir=lambda _name: tmp_path,
+        migration_runner=SimpleNamespace(),
+        execution_context_factory=lambda *_args, **_kwargs: _ExecutionContext(),
+    )
+
+    response = resources[-1]().post()
+
+    expected_error = RuntimeError if isinstance(promotion_outcome, Exception) else None
+    assert events == ["enter", "promote", ("exit", expected_error)]
+    if promotion_outcome is True:
+        assert response["success"] is True
+        assert moved == [("api", "dev", "prod")]
+    else:
+        body, status = response
+        assert status == 500
+        assert body.get("success") is not True
+        assert moved == []
