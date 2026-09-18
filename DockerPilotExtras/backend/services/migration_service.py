@@ -205,6 +205,7 @@ class MigrationService:
         *,
         execution_context: Any = None,
         operation_context: Any = None,
+        on_reserved: Optional[Callable[[], None]] = None,
     ) -> MigrationResult:
         """Serialize legacy/promotion work through the same reservation map."""
 
@@ -214,9 +215,46 @@ class MigrationService:
                 execution_context=execution_context,
                 operation_context=operation_context,
             )
+
+        return self._run_reserved_inline(
+            spec.container_name,
+            lambda: self._runner.run_inline(
+                spec,
+                execution_context=execution_context,
+                operation_context=operation_context,
+            ),
+            on_reserved=on_reserved,
+        )
+
+    def run_operation_inline(
+        self,
+        container_name: str,
+        operation: Callable[[], Any],
+        *,
+        execution_context: Any = None,
+    ) -> MigrationResult:
+        """Coordinate a same-server operation with every migration path."""
+
+        return self._run_reserved_inline(
+            container_name,
+            lambda: self._runner.run_operation(
+                operation,
+                execution_context=execution_context,
+            ),
+        )
+
+    def _run_reserved_inline(
+        self,
+        container_name: str,
+        invoke: Callable[[], MigrationResult],
+        *,
+        on_reserved: Optional[Callable[[], None]] = None,
+    ) -> MigrationResult:
+        """Reserve a container around one synchronous coordinated operation."""
+
         try:
             job = self.registry.reserve(
-                spec.container_name,
+                container_name,
                 status="running",
                 stage="running",
                 progress=0,
@@ -251,11 +289,9 @@ class MigrationService:
             )
 
         try:
-            result = self._runner.run_inline(
-                spec,
-                execution_context=execution_context,
-                operation_context=operation_context,
-            )
+            if on_reserved is not None:
+                on_reserved()
+            result = invoke()
         except Exception:
             self.registry.finish(
                 job["id"],
