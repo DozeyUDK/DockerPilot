@@ -815,6 +815,7 @@ init_state_store()
 
 # DockerPilot instance cache (per server)
 _dockerpilot_instances = {}  # {server_id: DockerPilotEnhanced instance}
+_dockerpilot_instances_lock = threading.RLock()
 _current_server_id = None
 
 # Global progress tracking for deployments
@@ -937,9 +938,10 @@ def create_docker_client_for_server(server_config):
 
 def get_dockerpilot(server_id=None):
     """Get or create DockerPilot instance for current server
-    
-    Note: Signal handlers are skipped in Flask context as they only work
-    in the main thread of the main interpreter.
+
+    Flask embeds DockerPilot without registering process signal handlers.
+    Cache construction is serialized because request threads can arrive
+    before the first instance has been initialized.
     """
     global _dockerpilot_instances, _current_server_id
     
@@ -948,78 +950,49 @@ def get_dockerpilot(server_id=None):
     if server_id is None:
         server_id = session.get('selected_server', 'local')
     
-    # Check if we have instance for this server
-    if server_id in _dockerpilot_instances:
-        return _dockerpilot_instances[server_id]
-    
-    # Create new instance
-    config_path = app.config['CONFIG_DIR'] / 'deployment.yml'
-    config_path_str = str(config_path) if config_path.exists() else None
-    
-    # For remote servers, we need to configure Docker client for SSH
-    docker_client = None
-    if server_id != 'local':
-        # Load server config
-        config = load_servers_config()
-        server_config = None
-        for server in config.get('servers', []):
-            if server.get('id') == server_id:
-                server_config = server
-                break
-        
-        if server_config:
-            try:
-                # Try to create Docker client for remote server
-                # For now, we'll use SSH to execute docker commands
-                # This requires modifying how DockerPilot works, or using a wrapper
-                app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
-                # docker_client = create_docker_client_for_server(server_config)
-            except Exception as e:
-                app.logger.error(f"Failed to create Docker client for remote server: {e}")
-                # Fall back to local
-                server_id = 'local'
-    
-    # Temporarily patch signal.signal to avoid errors in Flask threads
-    import signal
-    original_signal = signal.signal
-    
-    def safe_signal(signum, handler):
-        """Safe signal handler that only works in main thread"""
+    with _dockerpilot_instances_lock:
+        # Cache lookup and construction must be atomic: duplicate pilots own
+        # separate Docker clients and used to race during concurrent requests.
+        if server_id in _dockerpilot_instances:
+            return _dockerpilot_instances[server_id]
+
+        config_path = app.config['CONFIG_DIR'] / 'deployment.yml'
+        config_path_str = str(config_path) if config_path.exists() else None
+
+        # For remote servers, we need to configure Docker client for SSH.
+        docker_client = None
+        if server_id != 'local':
+            config = load_servers_config()
+            server_config = None
+            for server in config.get('servers', []):
+                if server.get('id') == server_id:
+                    server_config = server
+                    break
+
+            if server_config:
+                try:
+                    app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
+                    # docker_client = create_docker_client_for_server(server_config)
+                except Exception as e:
+                    app.logger.error(f"Failed to create Docker client for remote server: {e}")
+                    server_id = 'local'
+                    if server_id in _dockerpilot_instances:
+                        return _dockerpilot_instances[server_id]
+
         try:
-            return original_signal(signum, handler)
-        except ValueError:
-            # Signal handlers only work in main thread
-            # In Flask context, we skip them
-            pass
-    
-    # Patch signal.signal during initialization
-    signal.signal = safe_signal
-    
-    try:
-        instance = DockerPilotEnhanced(
-            config_file=config_path_str,
-            log_level=LogLevel.INFO
-        )
-        
-        # If we have a remote docker client, we could set it here
-        # But DockerPilotEnhanced doesn't expose client setter easily
-        # For now, we'll use subprocess-based approach for remote servers
-        
-        # Store instance
-        _dockerpilot_instances[server_id] = instance
-        _current_server_id = server_id
-        
-    except Exception as e:
-        # If initialization fails, log error but don't crash
-        # The instance will be None and we'll handle it in endpoints
-        import logging
-        logging.error(f"Failed to initialize DockerPilot: {e}")
-        raise
-    finally:
-        # Restore original signal.signal
-        signal.signal = original_signal
-            
-    return instance
+            instance = DockerPilotEnhanced(
+                config_file=config_path_str,
+                log_level=LogLevel.INFO,
+                register_signal_handlers=False,
+            )
+            _dockerpilot_instances[server_id] = instance
+            _current_server_id = server_id
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to initialize DockerPilot: {e}")
+            raise
+
+        return instance
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
     """Execute any command on remote server via SSH (or local if server_config is None or id == 'local')"""

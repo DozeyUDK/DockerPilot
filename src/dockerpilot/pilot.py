@@ -38,7 +38,12 @@ from .deployment_service import DeploymentServiceMixin
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
     
-    def __init__(self, config_file: str = None, log_level: LogLevel = LogLevel.INFO):
+    def __init__(
+        self,
+        config_file: str = None,
+        log_level: LogLevel = LogLevel.INFO,
+        register_signal_handlers: bool = True,
+    ):
         self._configure_console_streams()
         self.console = Console(safe_box=True)
         self._show_banner()
@@ -82,9 +87,11 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
             self.monitoring_manager = None
             self.logger.warning("Docker client not initialized - managers not available")
         
-        # Setup signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # CLI processes own their signal handlers. Embedded/threaded callers
+        # can opt out without process-global monkeypatching.
+        if register_signal_handlers and threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
         
         self.logger.info("Docker Pilot Enhanced initialized successfully")
     

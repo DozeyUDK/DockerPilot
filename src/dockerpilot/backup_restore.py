@@ -8,11 +8,17 @@ import os
 import subprocess
 import time
 import docker
+from .execution_context import resolve_sudo_password
 from .models import DeploymentConfig
 
 
 class BackupRestoreMixin:
     """Mixin containing backup/restore logic for DockerPilot."""
+
+    def _get_sudo_password(self) -> Optional[str]:
+        """Resolve a per-execution credential before the legacy fallback."""
+
+        return resolve_sudo_password(getattr(self, '_sudo_password', None))
 
     def _check_sudo_required_for_backup(self, container_name: str) -> tuple[bool, list[str], dict]:
         """Check if backup will require sudo access and get mount information
@@ -690,7 +696,7 @@ class BackupRestoreMixin:
                             self.logger.debug(f"Fixed ownership of {backup_file} without sudo")
                         except (PermissionError, OSError):
                             # If direct chown fails, try with sudo if password is available
-                            if hasattr(self, '_sudo_password') and self._sudo_password:
+                            if self._get_sudo_password():
                                 self._run_sudo_command(['chown', f'{uid}:{gid}', str(backup_file)], timeout=10)
                                 self.logger.debug(f"Fixed ownership of {backup_file} with sudo")
                             else:
@@ -894,7 +900,7 @@ class BackupRestoreMixin:
                         self.logger.debug(f"Fixed ownership of {backup_file} without sudo")
                     except (PermissionError, OSError):
                         # If direct chown fails, try with sudo if password is available
-                        if hasattr(self, '_sudo_password') and self._sudo_password:
+                        if self._get_sudo_password():
                             self._run_sudo_command(['chown', f'{uid}:{gid}', str(backup_file)], timeout=10)
                             self.logger.debug(f"Fixed ownership of {backup_file} with sudo")
                         else:
@@ -946,10 +952,11 @@ class BackupRestoreMixin:
             if requires_sudo:
                 self.logger.info(f"Using sudo for backup of privileged path: {source_path}")
                 # Use _run_sudo_command to pass password if available
-                if hasattr(self, '_sudo_password') and self._sudo_password:
+                sudo_password = self._get_sudo_password()
+                if sudo_password:
                     # For long-running operations like tar, use Popen with password passing
                     # instead of communicate() which may not work well for long operations
-                    password_bytes = (self._sudo_password + '\n').encode('utf-8')
+                    password_bytes = (sudo_password + '\n').encode('utf-8')
                     sudo_cmd = ['sudo', '-S'] + tar_cmd  # -S reads password from stdin
                     
                     try:
@@ -1165,11 +1172,12 @@ class BackupRestoreMixin:
         sudo_cmd = ['sudo'] + command_args
         
         # If password is available (from web session), use it
-        if hasattr(self, '_sudo_password') and self._sudo_password:
+        sudo_password = self._get_sudo_password()
+        if sudo_password:
             # Use subprocess with stdin to pass password to sudo -S (read from stdin)
             # -S makes sudo read password from stdin
             # We pass password + newline to stdin
-            password_bytes = (self._sudo_password + '\n').encode('utf-8')
+            password_bytes = (sudo_password + '\n').encode('utf-8')
             
             try:
                 sudo_process = subprocess.Popen(
