@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 
+from backend.security import safe_error_message
+from backend.services.migration_runner import MigrationSpec
+
 
 def create_promotion_resources(
     *,
@@ -22,14 +25,14 @@ def create_promotion_resources(
     move_container_binding,
     format_env_name,
     find_active_deployment_dir,
-    ContainerMigrate_cls,
+    migration_runner,
 ):
     """Return environment promotion resource classes with injected dependencies."""
 
     datetime = datetime_cls
     _deployment_progress = deployment_progress
     _consume_elevation_token = consume_elevation_token
-    ContainerMigrate = ContainerMigrate_cls
+    _migration_runner = migration_runner
 
     class HealthCheck(Resource):
         """Health check endpoint"""
@@ -265,30 +268,24 @@ def create_promotion_resources(
                             'timestamp': datetime.now().isoformat()
                         }
     
-                        # Reuse the existing migration implementation by calling the migrate resource in a test request context.
-                        with app.test_request_context(
-                            '/api/containers/migrate',
-                            method='POST',
-                            json={
-                                'container_name': container_name,
-                                'source_server_id': source_server_id,
-                                'target_server_id': target_server_id,
-                                'include_data': bool(include_data),
-                                'stop_source': bool(stop_source),
-                            },
-                        ):
-                            migrate_result = ContainerMigrate().post()
-    
-                        # Flask-RESTful resources may return (dict, status) tuples
-                        if isinstance(migrate_result, tuple) and len(migrate_result) >= 2:
-                            body, status = migrate_result[0], migrate_result[1]
-                            if status >= 400:
-                                success = False
-                            else:
-                                success = True
-                        else:
-                            body = migrate_result
-                            success = True
+                        # Promotion must wait for the real synchronous migration
+                        # outcome; an accepted async job is not a completed promotion.
+                        migrate_result = _migration_runner.run_inline(
+                            MigrationSpec(
+                                container_name=container_name,
+                                source_server_id=source_server_id,
+                                target_server_id=target_server_id,
+                                include_data=bool(include_data),
+                                stop_source=bool(stop_source),
+                            )
+                        )
+                        body = migrate_result.body
+                        success = migrate_result.completed_successfully
+                        if not migrate_result.is_terminal:
+                            body = {
+                                'error': 'Migration was accepted but has not completed',
+                                'details': migrate_result.body,
+                            }
                     
                     # Wait a moment for final progress callback from pilot
                     import time
@@ -302,9 +299,25 @@ def create_promotion_resources(
                         try:
                             move_container_binding(container_name, from_env, to_env)
                         except Exception as binding_err:
-                            app.logger.warning(
-                                f"Failed to update env container binding for {container_name}: {binding_err}"
+                            app.logger.error(
+                                "Failed to update env container binding for %s: %s",
+                                container_name,
+                                safe_error_message(binding_err),
                             )
+                            _deployment_progress[container_name] = {
+                                'stage': 'failed',
+                                'progress': 99,
+                                'message': 'Migration completed, but environment binding update failed',
+                                'timestamp': datetime.now().isoformat(),
+                            }
+                            return {
+                                'success': False,
+                                'partial': True,
+                                'reconciliation_required': True,
+                                'error': 'Migration completed, but environment binding update failed',
+                                'container_name': container_name,
+                                'details': body,
+                            }, 500
                         # Only set 'completed' if pilot didn't already do it via callback
                         if current_stage != 'completed':
                             _deployment_progress[container_name] = {
