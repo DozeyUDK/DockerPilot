@@ -9,6 +9,7 @@ import subprocess
 
 from backend.security import redact_sensitive_text as _redact_sensitive_text
 from backend.security import safe_error_message as _safe_error_message
+from backend.services.migration_runner import MigrationRunner, MigrationSpec
 
 
 _MAX_SAFE_ERROR_LENGTH = 500
@@ -58,8 +59,12 @@ def create_migration_resource(
     class ContainerMigrate(Resource):
         """Migrate container from one server to another"""
         def post(self):
+            spec = MigrationSpec.from_payload(request.get_json())
+            return self.migration_runner.run_inline(spec).to_response()
+
+        def execute_migration(self, data):
+            """Run the legacy migration without reading Flask request state."""
             try:
-                data = request.get_json()
                 container_name = data.get('container_name')
                 source_server_id = data.get('source_server_id', 'local')
                 target_server_id = data.get('target_server_id')
@@ -2966,4 +2971,7 @@ def create_migration_resource(
             return ' '.join(shlex.quote(str(part)) for part in cmd_parts)
     
 
+    ContainerMigrate.migration_runner = MigrationRunner(
+        lambda payload: ContainerMigrate().execute_migration(payload)
+    )
     return ContainerMigrate
