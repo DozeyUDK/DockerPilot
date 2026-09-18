@@ -62,7 +62,7 @@ def create_migration_resource(
             spec = MigrationSpec.from_payload(request.get_json())
             return self.migration_runner.run_inline(spec).to_response()
 
-        def execute_migration(self, data):
+        def execute_migration(self, data, *, operation_context=None):
             """Run the legacy migration without reading Flask request state."""
             try:
                 container_name = data.get('container_name')
@@ -78,23 +78,31 @@ def create_migration_resource(
                     return {'error': 'Source and target servers must be different'}, 400
                 
                 # Initialize progress tracking
-                _migration_progress[container_name] = {
-                    'stage': 'initializing',
-                    'progress': 0,
-                    'message': f'Inicjalizacja migracji {container_name}...',
-                    'timestamp': datetime.now().isoformat(),
-                    'logs': [f"[{datetime.now().strftime('%H:%M:%S')}] Initializing migration for {container_name}"],
-                }
-                _migration_cancel_flags[container_name] = False
+                if operation_context is None:
+                    _migration_progress[container_name] = {
+                        'stage': 'initializing',
+                        'progress': 0,
+                        'message': f'Inicjalizacja migracji {container_name}...',
+                        'timestamp': datetime.now().isoformat(),
+                        'logs': [f"[{datetime.now().strftime('%H:%M:%S')}] Initializing migration for {container_name}"],
+                    }
+                    _migration_cancel_flags[container_name] = False
+
+                def cancellation_requested():
+                    if operation_context is not None:
+                        return operation_context.cancelled()
+                    return _migration_cancel_flags.get(container_name, False)
                 
                 def check_cancel():
                     """Check if migration was cancelled"""
-                    if _migration_cancel_flags.get(container_name, False):
+                    if cancellation_requested():
                         raise Exception('Migration was cancelled by user')
                 
                 def update_progress(stage, progress, message):
                     """Update migration progress"""
-                    if not _migration_cancel_flags.get(container_name, False):
+                    if operation_context is not None:
+                        operation_context.update_progress(stage, progress, message)
+                    elif not _migration_cancel_flags.get(container_name, False):
                         prev = _migration_progress.get(container_name, {})
                         logs = list(prev.get('logs', []))
                         line = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
@@ -432,7 +440,7 @@ def create_migration_resource(
                         # Add callback to check for cancellation during download
                         def download_progress(transferred, total):
                             # Check if migration was cancelled during download
-                            if _migration_cancel_flags.get(container_name, False):
+                            if cancellation_requested():
                                 app.logger.info(f"Migration cancelled during download at {transferred / (1024*1024):.2f} MB")
                                 raise Exception('Migration was cancelled by user')
                             if total > 0:
@@ -666,7 +674,7 @@ def create_migration_resource(
                             def upload_progress(transferred, total):
                                 nonlocal last_logged_percent
                                 # Check if migration was cancelled during upload
-                                if _migration_cancel_flags.get(container_name, False):
+                                if cancellation_requested():
                                     app.logger.info(f"Migration cancelled during upload at {transferred / (1024*1024):.2f} MB")
                                     raise Exception('Migration was cancelled by user')
                                 
@@ -932,6 +940,14 @@ def create_migration_resource(
                 # Step 4: Check if container exists on target and remove it if needed
                 update_progress('preparing', 80, 'Preparing target server...')
                 check_cancel()
+
+                # Replacing an existing target container and copying mount data
+                # are irreversible target-side changes.  Cross the atomic
+                # cancellation boundary before the first such change so a
+                # completed DELETE can never be reported after target state
+                # has already been committed.
+                if operation_context is not None:
+                    operation_context.begin_finalization()
                 
                 app.logger.info(f"Checking if container exists on target server...")
                 try:
@@ -1403,7 +1419,7 @@ def create_migration_resource(
                         len(container_config.get('port_mapping', {})),
                         len(container_config.get('volumes', {})),
                     )
-                    
+
                     # Final check: Verify image exists right before creating container
                     app.logger.info(f"Final check: Verifying image {target_image_tag} exists on target server before docker run...")
                     try:
@@ -1588,7 +1604,7 @@ def create_migration_resource(
                         app.logger.warning("Failed to stop source container: %s", _safe_error_message(e))
                 
                 # Clean up progress after success
-                if container_name in _migration_progress:
+                if operation_context is None and container_name in _migration_progress:
                     # Keep progress for a short time to show success message
                     import threading
                     def cleanup_progress():
@@ -1614,7 +1630,7 @@ def create_migration_resource(
                 app.logger.error("Migration failed: %s", _safe_error_message(e))
                 
                 # Update progress with error (only if container_name is defined)
-                if container_name and container_name in _migration_progress:
+                if operation_context is None and container_name and container_name in _migration_progress:
                     if 'cancelled' in error_msg.lower():
                         _migration_progress[container_name] = {
                             'stage': 'cancelled',
@@ -2972,6 +2988,9 @@ def create_migration_resource(
     
 
     ContainerMigrate.migration_runner = MigrationRunner(
-        lambda payload: ContainerMigrate().execute_migration(payload)
+        lambda payload, **kwargs: ContainerMigrate().execute_migration(
+            payload,
+            **kwargs,
+        )
     )
     return ContainerMigrate
