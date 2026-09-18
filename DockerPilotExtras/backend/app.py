@@ -935,7 +935,7 @@ def create_docker_client_for_server(server_config):
         app.logger.error(f"Failed to create Docker client for server: {e}")
         raise
 
-def get_dockerpilot():
+def get_dockerpilot(server_id=None):
     """Get or create DockerPilot instance for current server
     
     Note: Signal handlers are skipped in Flask context as they only work
@@ -943,12 +943,10 @@ def get_dockerpilot():
     """
     global _dockerpilot_instances, _current_server_id
     
-    # Get selected server from session
-    selected_server_id = session.get('selected_server', 'local')
-    
-    # If server changed, we might need a new instance
-    # But for now, let's support per-server caching
-    server_id = selected_server_id
+    # Request handlers may use the selected server. Background-safe callers
+    # pass an explicit id and therefore do not need Flask session state.
+    if server_id is None:
+        server_id = session.get('selected_server', 'local')
     
     # Check if we have instance for this server
     if server_id in _dockerpilot_instances:
@@ -1988,7 +1986,7 @@ ContainerMigrate = create_migration_resource(
     migration_progress=_migration_progress,
     migration_cancel_flags=_migration_cancel_flags,
     load_servers_config=lambda: globals()["load_servers_config"](),
-    get_dockerpilot=get_dockerpilot,
+    get_dockerpilot=lambda: get_dockerpilot('local'),
     execute_command_via_ssh=execute_command_via_ssh,
     execute_docker_command_via_ssh=execute_docker_command_via_ssh,
     save_deployment_config=save_deployment_config,
@@ -2003,7 +2001,7 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
     session=session,
     datetime_cls=datetime,
     deployment_progress=_deployment_progress,
-    get_dockerpilot=get_dockerpilot,
+    get_dockerpilot=lambda: get_dockerpilot('local'),
     consume_elevation_token=lambda *args, **kwargs: globals()["_consume_elevation_token"](*args, **kwargs),
     find_all_deployment_configs_for_env=find_all_deployment_configs_for_env,
     resolve_server_id_for_env=resolve_server_id_for_env,
@@ -2012,7 +2010,7 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
     move_container_binding=move_container_binding,
     format_env_name=format_env_name,
     find_active_deployment_dir=find_active_deployment_dir,
-    ContainerMigrate_cls=ContainerMigrate,
+    migration_runner=ContainerMigrate.migration_runner,
 )
 
 
