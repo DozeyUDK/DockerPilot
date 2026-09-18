@@ -15,6 +15,7 @@ export const ServerProvider = ({ children }) => {
   const [servers, setServers] = useState([])
   const [selectedServer, setSelectedServer] = useState('local')
   const [selectedServerInfo, setSelectedServerInfo] = useState(null)
+  const [selectedServerReady, setSelectedServerReady] = useState(false)
   const [loading, setLoading] = useState(false)
   const lastLoadedServerRef = useRef(null) // Track last server we loaded info for
 
@@ -46,6 +47,8 @@ export const ServerProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('Error loading selected server:', error)
+    } finally {
+      setSelectedServerReady(true)
     }
   }, [])
 
@@ -104,6 +107,7 @@ export const ServerProvider = ({ children }) => {
       servers,
       selectedServer,
       selectedServerInfo,
+      selectedServerReady,
       loading,
       loadServers,
       loadSelectedServer,
@@ -113,4 +117,3 @@ export const ServerProvider = ({ children }) => {
     </ServerContext.Provider>
   )
 }
-
