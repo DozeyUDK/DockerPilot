@@ -8,12 +8,14 @@ without making environment promotion depend on an HTTP request context.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Callable, Mapping, Optional
 
 from backend.security import redact_sensitive_text
 
 
 MigrationExecutor = Callable[[dict[str, Any]], Any]
+_MIGRATION_EXECUTION_COORDINATOR = RLock()
 
 
 @dataclass(frozen=True)
@@ -81,23 +83,30 @@ class MigrationResult:
 class MigrationRunner:
     """Run one migration synchronously and normalize its legacy response."""
 
-    def __init__(self, executor: MigrationExecutor) -> None:
+    def __init__(self, executor: MigrationExecutor, *, coordinator=None) -> None:
         self._executor = executor
+        # Direct API migrations, async jobs and cross-server promotions share
+        # this lock. Same-server promotion has its own non-migration path.
+        # The legacy executor uses a cached DockerPilot instance and is not
+        # safe to overlap within one backend process.
+        self._coordinator = coordinator or _MIGRATION_EXECUTION_COORDINATOR
 
     def run_inline(
         self,
         spec: MigrationSpec,
         *,
         execution_context: Any = None,
+        operation_context: Any = None,
     ) -> MigrationResult:
         """Block until the injected executor returns a terminal result."""
 
         try:
-            if execution_context is None:
-                raw_result = self._executor(spec.to_payload())
-            else:
-                with execution_context:
-                    raw_result = self._executor(spec.to_payload())
+            with self._coordinator:
+                if execution_context is None:
+                    raw_result = self._execute(spec, operation_context)
+                else:
+                    with execution_context:
+                        raw_result = self._execute(spec, operation_context)
         except Exception as exc:
             return MigrationResult(
                 {"error": redact_sensitive_text(exc)},
@@ -129,10 +138,23 @@ class MigrationRunner:
         spec: MigrationSpec,
         *,
         execution_context: Any = None,
+        operation_context: Any = None,
     ) -> MigrationResult:
         """Backward-compatible spelling for the synchronous operation."""
 
-        return self.run_inline(spec, execution_context=execution_context)
+        return self.run_inline(
+            spec,
+            execution_context=execution_context,
+            operation_context=operation_context,
+        )
+
+    def _execute(self, spec: MigrationSpec, operation_context: Any) -> Any:
+        if operation_context is None:
+            return self._executor(spec.to_payload())
+        return self._executor(
+            spec.to_payload(),
+            operation_context=operation_context,
+        )
 
 
 # Explicit alias for callers that want to emphasize current execution mode.

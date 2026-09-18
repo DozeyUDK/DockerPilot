@@ -6,6 +6,7 @@ Backend for CI/CD Pipeline Management
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from flask_restful import Api, Resource
+import atexit
 import os
 import json
 import yaml
@@ -41,6 +42,7 @@ from backend.resources.auth import create_auth_resources
 from backend.resources.commands import create_command_resources
 from backend.resources.environment import create_environment_resources
 from backend.resources.migration import create_migration_resource
+from backend.resources.migration_async import create_async_migration_resources
 from backend.resources.pipeline import create_pipeline_resources
 from backend.resources.promotion import create_promotion_resources
 from backend.resources.progress import create_progress_resources
@@ -57,6 +59,8 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.environment_status import build_environment_status as _svc_build_environment_status
+from backend.services.migration_jobs import MigrationJobRegistry
+from backend.services.migration_service import MigrationService
 from backend.services.host_network import (
     extract_port_from_string as _svc_extract_port_from_string,
     infer_port_mapping_for_host_network as _svc_infer_port_mapping_for_host_network,
@@ -1967,6 +1971,28 @@ ContainerMigrate = create_migration_resource(
 )
 
 
+_migration_job_registry = MigrationJobRegistry()
+_migration_service = MigrationService(
+    ContainerMigrate.migration_runner,
+    registry=_migration_job_registry,
+    max_workers=1,
+    queue_capacity=2,
+)
+ContainerMigrate.migration_runner = _migration_service
+ContainerMigrationCollection, ContainerMigrationJob = create_async_migration_resources(
+    Resource=Resource,
+    request=request,
+    migration_service=_migration_service,
+)
+atexit.register(
+    lambda: _migration_service.shutdown(
+        wait=True,
+        cancel_pending=True,
+        timeout=2.0,
+    )
+)
+
+
 HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = create_promotion_resources(
     Resource=Resource,
     app=app,
@@ -2219,6 +2245,8 @@ register_api_routes(
     ServerSelect=ServerSelect,
     BlueGreenReplace=BlueGreenReplace,
     ContainerMigrate=ContainerMigrate,
+    ContainerMigrationCollection=ContainerMigrationCollection,
+    ContainerMigrationJob=ContainerMigrationJob,
     MigrationProgress=MigrationProgress,
     CancelMigration=CancelMigration,
     SecureDeployDrafts=SecureDeployDrafts,
