@@ -84,11 +84,20 @@ class MigrationRunner:
     def __init__(self, executor: MigrationExecutor) -> None:
         self._executor = executor
 
-    def run_inline(self, spec: MigrationSpec) -> MigrationResult:
+    def run_inline(
+        self,
+        spec: MigrationSpec,
+        *,
+        execution_context: Any = None,
+    ) -> MigrationResult:
         """Block until the injected executor returns a terminal result."""
 
         try:
-            raw_result = self._executor(spec.to_payload())
+            if execution_context is None:
+                raw_result = self._executor(spec.to_payload())
+            else:
+                with execution_context:
+                    raw_result = self._executor(spec.to_payload())
         except Exception as exc:
             return MigrationResult(
                 {"error": redact_sensitive_text(exc)},
@@ -115,10 +124,15 @@ class MigrationRunner:
 
         return MigrationResult(raw_result)
 
-    def run(self, spec: MigrationSpec) -> MigrationResult:
+    def run(
+        self,
+        spec: MigrationSpec,
+        *,
+        execution_context: Any = None,
+    ) -> MigrationResult:
         """Backward-compatible spelling for the synchronous operation."""
 
-        return self.run_inline(spec)
+        return self.run_inline(spec, execution_context=execution_context)
 
 
 # Explicit alias for callers that want to emphasize current execution mode.
