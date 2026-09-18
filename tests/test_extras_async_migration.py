@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import importlib.util
 import sys
+from threading import Event, Thread
 
 import pytest
 
@@ -14,7 +15,11 @@ if str(EXTRAS_DIR) not in sys.path:
     sys.path.insert(0, str(EXTRAS_DIR))
 
 from backend.services.migration_jobs import MigrationJobRegistry
-from backend.services.migration_runner import MigrationResult, MigrationSpec
+from backend.services.migration_runner import (
+    MigrationResult,
+    MigrationSpec,
+    SynchronousMigrationRunner,
+)
 from backend.services.migration_service import (
     MigrationQueueFull,
     MigrationService,
@@ -319,6 +324,114 @@ def test_inline_path_reports_registry_capacity_as_retryable_service_unavailable(
     assert result.status == 503
     assert result.body["code"] == "migration_capacity_exceeded"
     assert result.response_tail == ({"Retry-After": "1"},)
+
+
+def test_coordinated_operation_conflict_never_enters_context_or_callback():
+    service, _registry, _runner = _service(MigrationResult({"success": True}, 200))
+    async_job = service.submit(MigrationSpec("api", "dev", "prod"))
+    events = []
+
+    class _Context:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    result = service.run_operation_inline(
+        "api",
+        lambda: events.append("operation"),
+        execution_context=_Context(),
+    )
+
+    assert result.status == 409
+    assert result.body["migration_id"] == async_job["id"]
+    assert events == []
+
+
+def test_coordinated_operation_releases_reservation_after_success_and_failure():
+    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=None)
+    service = MigrationService(
+        SynchronousMigrationRunner(lambda _payload: {"success": True}),
+        registry=registry,
+        auto_start=False,
+        start_on_submit=False,
+    )
+
+    succeeded = service.run_operation_inline("api", lambda: {"success": True})
+    failed = service.run_operation_inline("api", lambda: {"success": False})
+
+    assert succeeded.completed_successfully is True
+    assert failed.completed_successfully is False
+    assert registry.snapshot_for_container("api")["status"] == "failed"
+
+
+def test_coordinated_operation_redacts_failure_and_never_retains_response_body():
+    secret = "same-server-token-must-not-leak"
+    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=None)
+    service = MigrationService(
+        SynchronousMigrationRunner(lambda _payload: {"success": True}),
+        registry=registry,
+        auto_start=False,
+        start_on_submit=False,
+    )
+
+    def fail():
+        raise RuntimeError(f"deploy failed --env API_TOKEN={secret}")
+
+    result = service.run_operation_inline("api", fail)
+    snapshot = registry.snapshot_for_container("api")
+
+    assert result.status == 500
+    assert secret not in result.body["error"]
+    assert secret not in repr(snapshot)
+    assert snapshot["metadata"] == {"mode": "inline", "http_status": 500}
+
+
+def test_coordinated_operations_for_different_containers_share_execution_lock():
+    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=None)
+    service = MigrationService(
+        SynchronousMigrationRunner(lambda _payload: {"success": True}),
+        registry=registry,
+        auto_start=False,
+        start_on_submit=False,
+    )
+    first_entered = Event()
+    release_first = Event()
+    second_entered = Event()
+    results = []
+
+    def first_operation():
+        first_entered.set()
+        assert release_first.wait(timeout=2)
+        return {"success": True}
+
+    def second_operation():
+        second_entered.set()
+        return {"success": True}
+
+    first = Thread(
+        target=lambda: results.append(
+            service.run_operation_inline("api", first_operation)
+        )
+    )
+    second = Thread(
+        target=lambda: results.append(
+            service.run_operation_inline("worker", second_operation)
+        )
+    )
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second.start()
+
+    assert second_entered.wait(timeout=0.05) is False
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert second_entered.is_set()
+    assert len(results) == 2
+    assert all(result.completed_successfully for result in results)
 
 
 class _Resource:
