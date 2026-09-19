@@ -2,7 +2,11 @@ import React, { useState, useEffect, useRef } from 'react'
 import { statusAPI, fileBrowserAPI } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
-import { createScopedRequestGuard, runScopedRequest } from '../utils/scopedRequests.mjs'
+import {
+  createScopedRequestGuard,
+  runScopedRequest,
+  scopeMatchesKey,
+} from '../utils/scopedRequests.mjs'
 import '../App.css'
 
 const emptyStatusForServer = (serverId) => ({
@@ -43,6 +47,7 @@ function Status() {
   }
 
   const { selectedServer, selectedServerReady } = useServer()
+  const browserScopeIsCurrent = scopeMatchesKey(activeStatusScopeRef.current, selectedServer)
 
   useEffect(() => {
     if (!selectedServerReady) return undefined
@@ -58,6 +63,10 @@ function Status() {
     setCliHistory([])
     setHistoryIndex(-1)
     setWorkingDirectory('')
+    setShowFileBrowser(false)
+    setBrowserPath('')
+    setBrowserItems([])
+    setLoadingBrowser(false)
     checkStatus(scope)
     loadContainers(scope)
     loadPreflight(scope)
@@ -122,29 +131,47 @@ function Status() {
     }
   }
 
-  const loadFileBrowser = async (path = '') => {
-    setLoadingBrowser(true)
-    try {
-      const response = await fileBrowserAPI.browse(path)
-      if (response.data.success) {
-        setBrowserPath(response.data.current_path)
-        setBrowserItems(response.data.items || [])
-      }
-    } catch (error) {
-      console.error('Error loading file browser:', error)
-    } finally {
-      setLoadingBrowser(false)
-    }
+  const loadFileBrowser = async (path = '', scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    if (!scopeMatchesKey(scope, selectedServer)) return
+
+    await runScopedRequest({
+      guard,
+      channel: 'file-browser',
+      scope,
+      onStart: () => setLoadingBrowser(true),
+      execute: () => fileBrowserAPI.browse(path),
+      onSuccess: response => {
+        if (response.data.success) {
+          setBrowserPath(response.data.current_path)
+          setBrowserItems(response.data.items || [])
+        }
+      },
+      onError: error => console.error('Error loading file browser:', error),
+      onFinally: () => setLoadingBrowser(false),
+    })
   }
 
   const openFileBrowser = () => {
+    const scope = activeStatusScopeRef.current
+    if (!selectedServerReady || !scopeMatchesKey(scope, selectedServer)) return
     setShowFileBrowser(true)
-    loadFileBrowser(workingDirectory || '')
+    loadFileBrowser(workingDirectory || '', scope)
+  }
+
+  const closeFileBrowser = () => {
+    requestGuardRef.current.invalidateChannel('file-browser', activeStatusScopeRef.current)
+    setShowFileBrowser(false)
+    setBrowserPath('')
+    setBrowserItems([])
+    setLoadingBrowser(false)
   }
 
   const selectDirectoryFromBrowser = (dirPath) => {
+    const scope = activeStatusScopeRef.current
+    if (!selectedServerReady || !scopeMatchesKey(scope, selectedServer)) return
     setWorkingDirectory(dirPath)
-    setShowFileBrowser(false)
+    closeFileBrowser()
   }
 
   const executeCommand = async () => {
@@ -704,17 +731,19 @@ function Status() {
               value={workingDirectory}
               onChange={(e) => setWorkingDirectory(e.target.value)}
               placeholder="Empty = default directory"
+              disabled={!selectedServerReady || !browserScopeIsCurrent}
               className="status-cli-input"
             />
             <button
               onClick={openFileBrowser}
+              disabled={!selectedServerReady || !browserScopeIsCurrent}
               style={{
                 padding: '0.5rem 1rem',
                 backgroundColor: '#28a745',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
-                cursor: 'pointer',
+                cursor: selectedServerReady && browserScopeIsCurrent ? 'pointer' : 'not-allowed',
                 fontSize: '0.9rem'
               }}
               title="Browse directories"
@@ -913,7 +942,7 @@ function Status() {
       </div>
 
       {/* File Browser Modal for Working Directory */}
-      {showFileBrowser && (
+      {showFileBrowser && browserScopeIsCurrent && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -925,7 +954,7 @@ function Status() {
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 2000
-        }} onClick={() => setShowFileBrowser(false)}>
+        }} onClick={closeFileBrowser}>
           <div style={{
             backgroundColor: 'var(--card-bg)',
             borderRadius: '8px',
@@ -941,7 +970,7 @@ function Status() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ color: 'var(--text-primary)' }}>Select working directory</h3>
               <button 
-                onClick={() => setShowFileBrowser(false)}
+                onClick={closeFileBrowser}
                 style={{ 
                   background: 'none', 
                   border: 'none', 
