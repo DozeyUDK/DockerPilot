@@ -14,6 +14,7 @@ from dockerpilot.cli.tui import (
     format_image_targets,
     infer_resource_selector,
     should_launch_in_external_terminal,
+    should_refresh_targets_after_command,
     TuiCommandHandoff,
     requires_tty_or_live_ui,
     selector_height,
@@ -213,6 +214,36 @@ def test_requires_tty_or_live_ui_flags_unsupported_inline_commands():
     assert requires_tty_or_live_ui(dashboard_node, {"containers": ["web"]}) is not None
     assert requires_tty_or_live_ui(logs_node, {"name": ""}) is not None
     assert requires_tty_or_live_ui(logs_node, {"name": "web"}) is None
+
+
+def test_only_resource_mutations_request_automatic_target_refresh():
+    parser = build_cli_parser()
+    commands = build_command_tree(parser, exclude_commands={"tui"})
+
+    for path in [
+        ["container", "run"],
+        ["container", "stop"],
+        ["container", "remove-image"],
+        ["deploy", "quick"],
+        ["promote"],
+        ["build"],
+    ]:
+        assert should_refresh_targets_after_command(_find_leaf(commands, path)) is True
+
+    for path in [
+        ["container", "list"],
+        ["container", "logs"],
+        ["monitor", "stats"],
+        ["deploy", "history"],
+        ["backup", "restore"],
+        ["backup", "restore-data"],
+        ["validate"],
+    ]:
+        assert should_refresh_targets_after_command(_find_leaf(commands, path)) is False
+
+    prune_node = _find_leaf(commands, ["container", "prune-images"])
+    assert should_refresh_targets_after_command(prune_node, {"dry_run": False}) is True
+    assert should_refresh_targets_after_command(prune_node, {"dry_run": True}) is False
 
 
 def test_execute_cli_argv_reuses_the_regular_cli_dispatcher():
