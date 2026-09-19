@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createScopedRequestGuard, runScopedRequest } from './scopedRequests.mjs'
+import {
+  createScopedRequestGuard,
+  runScopedRequest,
+  scopeMatchesKey,
+} from './scopedRequests.mjs'
 
 const deferred = () => {
   let resolve
@@ -145,4 +149,139 @@ test('newer CLI execution owns completion callbacks in the same server scope', a
     value: { output: 'current' },
   })
   assert.deepEqual(events, ['second:current', 'second:finally'])
+})
+
+test('file browser response and finalizer are ignored after switching servers', async () => {
+  const guard = createScopedRequestGuard()
+  const localScope = guard.beginScope('local')
+  const pending = deferred()
+  const events = []
+
+  const browse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope: localScope,
+    execute: () => pending.promise,
+    onStart: () => events.push('loading'),
+    onSuccess: value => events.push(value.currentPath),
+    onFinally: () => events.push('settled'),
+  })
+
+  guard.beginScope('remote-a')
+  pending.resolve({ currentPath: '/old-server' })
+
+  assert.deepEqual(await browse, { status: 'ignored' })
+  assert.deepEqual(events, ['loading'])
+})
+
+test('file browser error from the previous server is ignored', async () => {
+  const guard = createScopedRequestGuard()
+  const localScope = guard.beginScope('local')
+  const pending = deferred()
+  const events = []
+
+  const browse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope: localScope,
+    execute: () => pending.promise,
+    onError: () => events.push('error'),
+    onFinally: () => events.push('settled'),
+  })
+
+  guard.beginScope('remote-a')
+  pending.reject(new Error('old browser request failed'))
+
+  assert.deepEqual(await browse, { status: 'ignored' })
+  assert.deepEqual(events, [])
+})
+
+test('latest file browser navigation owns results within the active server', async () => {
+  const guard = createScopedRequestGuard()
+  const scope = guard.beginScope('remote-a')
+  const parent = deferred()
+  const child = deferred()
+  const events = []
+
+  const parentBrowse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope,
+    execute: () => parent.promise,
+    onSuccess: value => events.push(value.currentPath),
+    onFinally: () => events.push('parent:settled'),
+  })
+  const childBrowse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope,
+    execute: () => child.promise,
+    onSuccess: value => events.push(value.currentPath),
+    onFinally: () => events.push('child:settled'),
+  })
+
+  child.resolve({ currentPath: '/srv/app' })
+  parent.resolve({ currentPath: '/srv' })
+
+  assert.deepEqual(await childBrowse, {
+    status: 'success',
+    value: { currentPath: '/srv/app' },
+  })
+  assert.deepEqual(await parentBrowse, { status: 'ignored' })
+  assert.deepEqual(events, ['/srv/app', 'child:settled'])
+})
+
+test('closing the file browser invalidates only its request channel', () => {
+  const guard = createScopedRequestGuard()
+  const scope = guard.beginScope('remote-a')
+  const browser = guard.beginRequest('file-browser', scope)
+  const cli = guard.beginRequest('cli', scope)
+
+  guard.invalidateChannel('file-browser', scope)
+
+  assert.equal(guard.isCurrent(browser), false)
+  assert.equal(guard.isCurrent(cli), true)
+})
+
+test('scope key comparison hides old browser state before the next effect', () => {
+  const guard = createScopedRequestGuard()
+  const localScope = guard.beginScope('local')
+
+  assert.equal(scopeMatchesKey(localScope, 'local'), true)
+  assert.equal(scopeMatchesKey(localScope, 'remote-a'), false)
+  assert.equal(scopeMatchesKey(null, 'remote-a'), false)
+})
+
+test('closed file browser suppresses late success, error, and finalizers', async () => {
+  const guard = createScopedRequestGuard()
+  const scope = guard.beginScope('remote-a')
+  const success = deferred()
+  const failure = deferred()
+  const events = []
+
+  const successfulBrowse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope,
+    execute: () => success.promise,
+    onSuccess: () => events.push('success'),
+    onFinally: () => events.push('success:settled'),
+  })
+  guard.invalidateChannel('file-browser', scope)
+  success.resolve({ currentPath: '/late-success' })
+  assert.deepEqual(await successfulBrowse, { status: 'ignored' })
+
+  const failedBrowse = runScopedRequest({
+    guard,
+    channel: 'file-browser',
+    scope,
+    execute: () => failure.promise,
+    onError: () => events.push('error'),
+    onFinally: () => events.push('error:settled'),
+  })
+  guard.invalidateChannel('file-browser', scope)
+  failure.reject(new Error('late failure'))
+  assert.deepEqual(await failedBrowse, { status: 'ignored' })
+
+  assert.deepEqual(events, [])
 })

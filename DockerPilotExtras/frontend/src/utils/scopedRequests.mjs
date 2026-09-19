@@ -1,3 +1,7 @@
+export function scopeMatchesKey(scope, scopeKey) {
+  return Boolean(scope && scope.key === String(scopeKey ?? ''))
+}
+
 export function createScopedRequestGuard() {
   let scopeSequence = 0
   let requestSequence = 0
@@ -22,6 +26,11 @@ export function createScopedRequestGuard() {
       if (!scopeIsCurrent(scope)) return
       currentScope = null
       latestByChannel = new Map()
+    },
+
+    invalidateChannel(channel, scope = currentScope) {
+      if (!scopeIsCurrent(scope)) return
+      latestByChannel.delete(channel)
     },
 
     beginRequest(channel, scope = currentScope) {
