@@ -49,3 +49,31 @@ export function createScopedRequestGuard() {
     },
   }
 }
+
+export async function runScopedRequest({
+  guard,
+  channel,
+  scope,
+  execute,
+  onStart,
+  onSuccess,
+  onError,
+  onFinally,
+}) {
+  const request = guard.beginRequest(channel, scope)
+  if (!guard.isCurrent(request)) return { status: 'ignored' }
+
+  onStart?.(request)
+  try {
+    const value = await execute()
+    if (!guard.isCurrent(request)) return { status: 'ignored' }
+    onSuccess?.(value, request)
+    return { status: 'success', value }
+  } catch (error) {
+    if (!guard.isCurrent(request)) return { status: 'ignored' }
+    onError?.(error, request)
+    return { status: 'error', error }
+  } finally {
+    if (guard.isCurrent(request)) onFinally?.(request)
+  }
+}
