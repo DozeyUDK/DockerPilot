@@ -78,7 +78,7 @@ def test_incomplete_quote_is_editable_and_run_is_rejected(monkeypatch):
             app.command_widgets['env'].load_text('KEY="two words"')
             await pilot.pause()
             app._start_run()
-            await pilot.pause()
+            await run_finished(app, pilot)
             assert len(dispatched) == 1
             assert 'KEY=two words' in dispatched[0][2]
             assert not app._command_running

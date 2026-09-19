@@ -2,15 +2,20 @@ import React, { useState, useEffect, useRef } from 'react'
 import { statusAPI, fileBrowserAPI } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
+import { createScopedRequestGuard } from '../utils/scopedRequests.mjs'
 import '../App.css'
+
+const emptyStatusForServer = (serverId) => ({
+  docker: { available: false, version: null, error: null },
+  dockerpilot: { available: false, version: null, error: null },
+  context: serverId === 'local'
+    ? { mode: 'local', server_name: 'Local', hostname: 'localhost' }
+    : { mode: 'remote', server_name: serverId, hostname: null },
+})
 
 function Status() {
   const { theme } = useTheme()
-  const [status, setStatus] = useState({
-    docker: { available: false, version: null, error: null },
-    dockerpilot: { available: false, version: null, error: null },
-    context: { mode: 'local', server_name: 'Local', hostname: 'localhost' }
-  })
+  const [status, setStatus] = useState(() => emptyStatusForServer('local'))
   const [containerSummary, setContainerSummary] = useState(null)
   const [preflight, setPreflight] = useState(null)
   const [preflightLoading, setPreflightLoading] = useState(false)
@@ -30,56 +35,84 @@ function Status() {
   const [browserItems, setBrowserItems] = useState([])
   const [loadingBrowser, setLoadingBrowser] = useState(false)
   const cliOutputRef = useRef(null)
+  const requestGuardRef = useRef(null)
+  const activeStatusScopeRef = useRef(null)
 
-  const { selectedServer } = useServer()
+  if (!requestGuardRef.current) {
+    requestGuardRef.current = createScopedRequestGuard()
+  }
+
+  const { selectedServer, selectedServerReady } = useServer()
 
   useEffect(() => {
-    checkStatus()
-    loadContainers()
-    loadPreflight()
-  }, [selectedServer]) // Reload when server changes
+    if (!selectedServerReady) return undefined
+    const guard = requestGuardRef.current
+    const scope = guard.beginScope(selectedServer)
+    activeStatusScopeRef.current = scope
+    setStatus(emptyStatusForServer(selectedServer))
+    setContainerSummary(null)
+    setPreflight(null)
+    checkStatus(scope)
+    loadContainers(scope)
+    loadPreflight(scope)
+    return () => guard.invalidateScope(scope)
+  }, [selectedServer, selectedServerReady]) // Reload when server changes
 
-  const checkStatus = async () => {
+  const checkStatus = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('status', scope)
+    if (!guard.isCurrent(request)) return
     setLoading(true)
     try {
       const response = await statusAPI.check()
-      setStatus(response.data)
+      if (guard.isCurrent(request)) setStatus(response.data)
     } catch (error) {
-      console.error('Error checking status:', error)
+      if (guard.isCurrent(request)) console.error('Error checking status:', error)
     } finally {
-      setLoading(false)
+      if (guard.isCurrent(request)) setLoading(false)
     }
   }
 
-  const loadContainers = async () => {
+  const loadContainers = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('containers', scope)
+    if (!guard.isCurrent(request)) return
     try {
       const response = await statusAPI.containers()
+      if (!guard.isCurrent(request)) return
       if (response.data.success) {
         setContainerSummary(response.data)
       } else {
         setContainerSummary({ error: response.data.error || 'Error loading status' })
       }
     } catch (error) {
-      console.error('Error loading containers:', error)
-      setContainerSummary({ error: 'Error loading container status' })
+      if (guard.isCurrent(request)) {
+        console.error('Error loading containers:', error)
+        setContainerSummary({ error: 'Error loading container status' })
+      }
     }
   }
 
-  const loadPreflight = async () => {
+  const loadPreflight = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('preflight', scope)
+    if (!guard.isCurrent(request)) return
     setPreflightLoading(true)
     try {
       const response = await statusAPI.preflight()
-      setPreflight(response.data)
+      if (guard.isCurrent(request)) setPreflight(response.data)
     } catch (error) {
-      setPreflight({
-        success: false,
-        checks: {},
-        required_failed: [],
-        warnings: [],
-        error: error.response?.data?.error || error.message || 'Preflight check failed'
-      })
+      if (guard.isCurrent(request)) {
+        setPreflight({
+          success: false,
+          checks: {},
+          required_failed: [],
+          warnings: [],
+          error: error.response?.data?.error || error.message || 'Preflight check failed'
+        })
+      }
     } finally {
-      setPreflightLoading(false)
+      if (guard.isCurrent(request)) setPreflightLoading(false)
     }
   }
 
@@ -255,7 +288,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Connection Status</h3>
-          <button className="btn btn-secondary" onClick={checkStatus} disabled={loading}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => checkStatus()}
+            disabled={loading || !selectedServerReady}
+          >
             {loading ? 'Checking...' : 'Refresh'}
           </button>
         </div>
@@ -409,7 +446,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Setup Preflight</h3>
-          <button className="btn btn-secondary" onClick={loadPreflight} disabled={preflightLoading}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => loadPreflight()}
+            disabled={preflightLoading || !selectedServerReady}
+          >
             {preflightLoading ? 'Checking...' : 'Refresh'}
           </button>
         </div>
@@ -491,7 +532,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Pipeline Status and Containers</h3>
-          <button className="btn btn-secondary" onClick={loadContainers}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => loadContainers()}
+            disabled={!selectedServerReady}
+          >
             Refresh
           </button>
         </div>
@@ -1026,4 +1071,3 @@ function Status() {
 }
 
 export default Status
-
