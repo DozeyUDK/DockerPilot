@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { statusAPI, fileBrowserAPI } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
-import { createScopedRequestGuard } from '../utils/scopedRequests.mjs'
+import { createScopedRequestGuard, runScopedRequest } from '../utils/scopedRequests.mjs'
 import '../App.css'
 
 const emptyStatusForServer = (serverId) => ({
@@ -52,6 +52,12 @@ function Status() {
     setStatus(emptyStatusForServer(selectedServer))
     setContainerSummary(null)
     setPreflight(null)
+    setCliOutput([])
+    setCliLoading(false)
+    setCliCommand('')
+    setCliHistory([])
+    setHistoryIndex(-1)
+    setWorkingDirectory('')
     checkStatus(scope)
     loadContainers(scope)
     loadPreflight(scope)
@@ -143,74 +149,88 @@ function Status() {
 
   const executeCommand = async () => {
     if (!cliCommand.trim()) return
-    
-    setCliLoading(true)
+
+    const guard = requestGuardRef.current
+    const scope = activeStatusScopeRef.current
+    if (!scope || scope.key !== String(selectedServer ?? '')) return
     const commandToExecute = cliCommand.trim()
-    
-    // Add to history
-    const newHistory = [...cliHistory, commandToExecute]
-    setCliHistory(newHistory.slice(-50)) // Keep last 50 commands
-    setHistoryIndex(-1)
-    
-    // Add command to output (with working directory info if set)
-    const prompt = workingDirectory 
-      ? `${cliProgram} $ [${workingDirectory}] ${commandToExecute}`
-      : `${cliProgram} $ ${commandToExecute}`
-    setCliOutput(prev => [...prev, { type: 'command', text: prompt }])
-    
-    try {
-      const response = await statusAPI.executeCommand(
-        cliProgram, 
+    const programToExecute = cliProgram
+    const directoryToUse = workingDirectory || undefined
+    const prompt = directoryToUse
+      ? `${programToExecute} $ [${directoryToUse}] ${commandToExecute}`
+      : `${programToExecute} $ ${commandToExecute}`
+
+    await runScopedRequest({
+      guard,
+      channel: 'cli',
+      scope,
+      onStart: () => {
+        setCliLoading(true)
+        setCliHistory(prev => [...prev, commandToExecute].slice(-50))
+        setHistoryIndex(-1)
+        setCliOutput(prev => [...prev, { type: 'command', text: prompt }])
+      },
+      execute: () => statusAPI.executeCommand(
+        programToExecute,
         commandToExecute,
-        workingDirectory || undefined
-      )
-      
-      // Add output (even if return_code != 0, it may be useful)
-      if (response.data.output) {
-        setCliOutput(prev => [...prev, { type: 'output', text: response.data.output }])
-      }
-      if (response.data.error) {
-        setCliOutput(prev => [...prev, { type: 'error', text: response.data.error }])
-      }
-      
-      // Add suggestions if available
-      if (response.data.suggestions) {
-        const suggestions = response.data.suggestions
-        let suggestionText = `\n💡 ${suggestions.message}\n`
-        if (suggestions.commands) {
-          suggestionText += suggestions.commands.map(cmd => `   • ${cmd}`).join('\n')
+        directoryToUse
+      ),
+      onSuccess: response => {
+        const newOutput = []
+
+        // Add output (even if return_code != 0, it may be useful)
+        if (response.data.output) {
+          newOutput.push({ type: 'output', text: response.data.output })
         }
-        setCliOutput(prev => [...prev, { type: 'info', text: suggestionText }])
-      }
-      
-      if (response.data.return_code !== 0) {
-        setCliOutput(prev => [...prev, { 
-          type: 'info', 
-          text: `[Exit code: ${response.data.return_code}]` 
-        }])
-      }
-      
-      if (!response.data.success && !response.data.output && !response.data.error) {
-        setCliOutput(prev => [...prev, { 
-          type: 'error', 
-          text: 'Command execution error' 
-        }])
-      }
-    } catch (error) {
-      setCliOutput(prev => [...prev, { 
-        type: 'error', 
-        text: error.response?.data?.error || error.message || 'Connection error' 
-      }])
-    } finally {
-      setCliLoading(false)
-      setCliCommand('')
-      // Scroll to bottom
-      setTimeout(() => {
-        if (cliOutputRef.current) {
-          cliOutputRef.current.scrollTop = cliOutputRef.current.scrollHeight
+        if (response.data.error) {
+          newOutput.push({ type: 'error', text: response.data.error })
         }
-      }, 100)
-    }
+
+        // Add suggestions if available
+        if (response.data.suggestions) {
+          const suggestions = response.data.suggestions
+          let suggestionText = `\n💡 ${suggestions.message}\n`
+          if (suggestions.commands) {
+            suggestionText += suggestions.commands.map(cmd => `   • ${cmd}`).join('\n')
+          }
+          newOutput.push({ type: 'info', text: suggestionText })
+        }
+
+        if (response.data.return_code !== 0) {
+          newOutput.push({
+            type: 'info',
+            text: `[Exit code: ${response.data.return_code}]`
+          })
+        }
+
+        if (!response.data.success && !response.data.output && !response.data.error) {
+          newOutput.push({
+            type: 'error',
+            text: 'Command execution error'
+          })
+        }
+
+        if (newOutput.length > 0) {
+          setCliOutput(prev => [...prev, ...newOutput])
+        }
+      },
+      onError: error => {
+        setCliOutput(prev => [...prev, {
+          type: 'error',
+          text: error.response?.data?.error || error.message || 'Connection error'
+        }])
+      },
+      onFinally: request => {
+        setCliLoading(false)
+        setCliCommand('')
+        // Scroll to bottom only while this execution still owns the CLI channel.
+        setTimeout(() => {
+          if (guard.isCurrent(request) && cliOutputRef.current) {
+            cliOutputRef.current.scrollTop = cliOutputRef.current.scrollHeight
+          }
+        }, 100)
+      },
+    })
   }
 
   const handleCliKeyPress = (e) => {
@@ -870,7 +890,7 @@ function Status() {
             onChange={(e) => setCliCommand(e.target.value)}
             onKeyDown={handleCliKeyPress}
             placeholder="Type command..."
-            disabled={cliLoading}
+            disabled={cliLoading || !selectedServerReady}
             className="status-cli-input"
             style={{
               fontFamily: 'Consolas, Monaco, "Courier New", monospace',
@@ -881,7 +901,7 @@ function Status() {
           <button
             className="btn btn-primary"
             onClick={executeCommand}
-            disabled={cliLoading || !cliCommand.trim()}
+            disabled={cliLoading || !selectedServerReady || !cliCommand.trim()}
             style={{ flexShrink: 0 }}
           >
             {cliLoading ? '⏳' : '▶'}

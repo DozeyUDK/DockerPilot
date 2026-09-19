@@ -1,7 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createScopedRequestGuard } from './scopedRequests.mjs'
+import { createScopedRequestGuard, runScopedRequest } from './scopedRequests.mjs'
+
+const deferred = () => {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 test('server switch invalidates every request from the previous scope', () => {
   const guard = createScopedRequestGuard()
@@ -54,4 +64,85 @@ test('cleanup invalidates only the matching active scope', () => {
 
   guard.invalidateScope(currentScope)
   assert.equal(guard.isCurrent(currentPreflight), false)
+})
+
+test('CLI response and finalizer are ignored after switching servers', async () => {
+  const guard = createScopedRequestGuard()
+  const localScope = guard.beginScope('local')
+  const pending = deferred()
+  const events = []
+
+  const execution = runScopedRequest({
+    guard,
+    channel: 'cli',
+    scope: localScope,
+    execute: () => pending.promise,
+    onStart: () => events.push('start'),
+    onSuccess: () => events.push('success'),
+    onFinally: () => events.push('finally'),
+  })
+
+  guard.beginScope('remote-a')
+  pending.resolve({ output: 'old server' })
+
+  assert.deepEqual(await execution, { status: 'ignored' })
+  assert.deepEqual(events, ['start'])
+})
+
+test('CLI error from the previous server cannot contaminate the active scope', async () => {
+  const guard = createScopedRequestGuard()
+  const localScope = guard.beginScope('local')
+  const pending = deferred()
+  const events = []
+
+  const execution = runScopedRequest({
+    guard,
+    channel: 'cli',
+    scope: localScope,
+    execute: () => pending.promise,
+    onStart: () => events.push('start'),
+    onError: () => events.push('error'),
+    onFinally: () => events.push('finally'),
+  })
+
+  guard.beginScope('remote-a')
+  pending.reject(new Error('old server failed'))
+
+  assert.deepEqual(await execution, { status: 'ignored' })
+  assert.deepEqual(events, ['start'])
+})
+
+test('newer CLI execution owns completion callbacks in the same server scope', async () => {
+  const guard = createScopedRequestGuard()
+  const scope = guard.beginScope('remote-a')
+  const first = deferred()
+  const second = deferred()
+  const events = []
+
+  const firstExecution = runScopedRequest({
+    guard,
+    channel: 'cli',
+    scope,
+    execute: () => first.promise,
+    onSuccess: () => events.push('first:success'),
+    onFinally: () => events.push('first:finally'),
+  })
+  const secondExecution = runScopedRequest({
+    guard,
+    channel: 'cli',
+    scope,
+    execute: () => second.promise,
+    onSuccess: value => events.push(`second:${value.output}`),
+    onFinally: () => events.push('second:finally'),
+  })
+
+  first.resolve({ output: 'stale' })
+  second.resolve({ output: 'current' })
+
+  assert.deepEqual(await firstExecution, { status: 'ignored' })
+  assert.deepEqual(await secondExecution, {
+    status: 'success',
+    value: { output: 'current' },
+  })
+  assert.deepEqual(events, ['second:current', 'second:finally'])
 })
