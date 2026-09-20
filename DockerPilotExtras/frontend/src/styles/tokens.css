@@ -1,0 +1,74 @@
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas: #161923;
+  --color-surface: #202431;
+  --color-surface-raised: #292e3d;
+  --color-surface-hover: #343a4b;
+  --color-text: #f3f5f9;
+  --color-text-muted: #b6bdcc;
+  --color-text-subtle: #858da0;
+  --color-border: #41485a;
+  --color-accent: #7c8cff;
+  --color-accent-strong: #a06ff2;
+  --color-header-start: #4c5fd7;
+  --color-header-end: #7047a8;
+  --color-on-accent: #ffffff;
+  --color-focus: #ffffff;
+  --color-danger-text: #ffb4ab;
+  --color-header-control: rgba(10, 14, 30, 0.16);
+  --color-header-control-hover: rgba(10, 14, 30, 0.3);
+  --color-header-control-border: rgba(255, 255, 255, 0.48);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --shadow-header: 0 0.25rem 1rem rgba(0, 0, 0, 0.2);
+  --motion-fast: 160ms ease;
+
+  /* Compatibility aliases used by existing pages. */
+  --bg-primary: var(--color-canvas);
+  --bg-secondary: var(--color-surface);
+  --bg-tertiary: var(--color-surface-raised);
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-muted);
+  --text-tertiary: var(--color-text-subtle);
+  --border-color: var(--color-border);
+  --card-bg: var(--color-surface);
+  --input-bg: var(--color-surface-raised);
+  --input-border: var(--color-border);
+  --shadow: rgba(0, 0, 0, 0.3);
+  --shadow-hover: rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-canvas: #f6f7fb;
+  --color-surface: #ffffff;
+  --color-surface-raised: #eef0f6;
+  --color-surface-hover: #e3e7f0;
+  --color-text: #202534;
+  --color-text-muted: #596174;
+  --color-text-subtle: #747d91;
+  --color-border: #d7dbe5;
+  --color-accent: #5064dd;
+  --color-accent-strong: #7448a8;
+  --color-header-start: #5368df;
+  --color-header-end: #7448a8;
+  --color-on-accent: #ffffff;
+  --color-focus: #ffffff;
+  --color-danger-text: #b42318;
+  --color-header-control: rgba(10, 14, 30, 0.16);
+  --color-header-control-hover: rgba(10, 14, 30, 0.3);
+  --color-header-control-border: rgba(255, 255, 255, 0.48);
+
+  --shadow: rgba(26, 32, 48, 0.1);
+  --shadow-hover: rgba(26, 32, 48, 0.2);
+}
