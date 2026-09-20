@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { pipelineAPI, dockerAPI, fileBrowserAPI } from '../services/api'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
+import groovy from 'react-syntax-highlighter/dist/esm/languages/prism/groovy'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme } from '../contexts/ThemeContext'
 import { PIPELINE_PRESETS, applyPreset, formSnapshot, isSnapshotCurrent, orderedStages, validatePipelineForm } from '../utils/pipelineWorkbench.mjs'
@@ -14,6 +16,9 @@ import {
   reconcileSelectedPipeline,
 } from '../utils/savedPipelineLibrary.mjs'
 import '../App.css'
+
+SyntaxHighlighter.registerLanguage('groovy', groovy)
+SyntaxHighlighter.registerLanguage('yaml', yaml)
 
 function Pipelines() {
   const { theme } = useTheme()

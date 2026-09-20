@@ -271,6 +271,43 @@
   color: var(--text-secondary);
 }
 
+.route-loading {
+  min-height: 12rem;
+  display: grid;
+  place-items: center;
+}
+
+.route-loading-full {
+  min-height: 100vh;
+}
+
+.route-loading-card {
+  width: min(100%, 26rem);
+  margin: 0;
+  text-align: center;
+}
+
+.route-loading-card .card-title,
+.route-loading-card p {
+  margin: 0;
+}
+
+.route-loading-card p {
+  color: var(--text-secondary);
+}
+
+.route-error-card {
+  width: min(100%, 34rem);
+  margin: var(--space-6) auto;
+  text-align: center;
+}
+
+.route-error-card p {
+  margin-bottom: var(--space-4);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 .app-header a:focus-visible,
 .app-header button:focus-visible {
   outline: 3px solid var(--color-focus);
