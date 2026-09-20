@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip('textual')
-from textual.widgets import Button, Label, Static
+from textual.widgets import Button, Checkbox, Label, Select, Static
 
 from dockerpilot.cli import tui
 from dockerpilot.cli.parser import build_cli_parser
@@ -43,6 +43,53 @@ async def ready(app, pilot):
         if app.query_one('#loading-screen').has_class('hidden'):
             return
     pytest.fail('TUI did not finish initialization')
+
+
+def test_live_resource_selectors_use_clickable_controls_for_multi_and_single_targets():
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+
+            for action in ("start", "stop", "restart", "remove", "pause", "unpause", "stop-remove", "exec", "logs"):
+                await app._render_command_form(command(app, "container", action))
+                widget = app.command_widgets["name"]
+                assert isinstance(widget, tui.ResourceMultiSelector)
+                assert len(widget.query(Checkbox)) == 2
+                widget.select("web")
+                await pilot.pause()
+                assert widget.selected == ["web"]
+                values = app._values_from_widgets(app.command_widgets)
+                assert values["name"] == ["web"]
+
+            for path, dest in (
+                (("container", "rename"), "name"),
+                (("container", "exec-simple"), "name"),
+                (("monitor", "live"), "container"),
+                (("monitor", "stats"), "container"),
+                (("backup", "container-data"), "container"),
+                (("backup", "restore-data"), "container"),
+            ):
+                await app._render_command_form(command(app, *path))
+                widget = app.command_widgets[dest]
+                assert isinstance(widget, Select)
+                widget.value = "web"
+                await pilot.pause()
+                assert app._values_from_widgets(app.command_widgets)[dest] == "web"
+
+            await app._render_command_form(command(app, "monitor", "dashboard"))
+            dashboard = app.command_widgets["containers"]
+            assert isinstance(dashboard, tui.ResourceMultiSelector)
+            dashboard.select("web")
+            dashboard.select("api")
+            await pilot.pause()
+            assert dashboard.selected == ["web", "api"]
+
+            await app._render_command_form(command(app, "container", "remove-image"))
+            # FakePilot has no images, so the image selector deliberately falls back to manual text.
+            assert not isinstance(app.command_widgets["name"], tui.ResourceMultiSelector)
+
+    asyncio.run(scenario())
 
 
 def test_incomplete_quote_is_editable_and_run_is_rejected(monkeypatch):

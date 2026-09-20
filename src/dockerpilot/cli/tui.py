@@ -278,32 +278,34 @@ def build_command_argv(
     return argv
 
 
+RESOURCE_SELECTOR_RULES: Dict[Tuple[Tuple[str, ...], str], Tuple[str, str]] = {
+    (("container", "remove-image"), "name"): ("image", "multi"),
+    (("container", "start"), "name"): ("container", "multi"),
+    (("container", "stop"), "name"): ("container", "multi"),
+    (("container", "restart"), "name"): ("container", "multi"),
+    (("container", "remove"), "name"): ("container", "multi"),
+    (("container", "pause"), "name"): ("container", "multi"),
+    (("container", "unpause"), "name"): ("container", "multi"),
+    (("container", "stop-remove"), "name"): ("container", "multi"),
+    (("container", "exec"), "name"): ("container", "multi"),
+    (("container", "logs"), "name"): ("container", "multi"),
+    (("container", "rename"), "name"): ("container", "single"),
+    (("container", "exec-simple"), "name"): ("container", "single"),
+    (("monitor", "dashboard"), "containers"): ("container", "multi"),
+    (("monitor", "live"), "container"): ("container", "single"),
+    (("monitor", "stats"), "container"): ("container", "single"),
+    (("backup", "container-data"), "container"): ("container", "single"),
+    (("backup", "restore-data"), "container"): ("container", "single"),
+}
+
+
 def infer_resource_selector(command: CommandNode, argument: ArgumentSpec) -> Optional[ResourceSelectorSpec]:
-    """Infer whether an argument should use live Docker targets."""
-    path = command.path
-    dest = argument.dest
-
-    if path == ("container", "remove-image") and dest == "name":
-        return ResourceSelectorSpec(resource_type="image", mode="multi")
-
-    if path == ("monitor", "dashboard") and dest == "containers":
-        return ResourceSelectorSpec(resource_type="container", mode="multi")
-
-    if path[:1] == ("container",):
-        action = path[1] if len(path) > 1 else None
-        if action in {"start", "stop", "restart", "remove", "pause", "unpause", "stop-remove", "exec", "logs"} and dest == "name":
-            return ResourceSelectorSpec(resource_type="container", mode="multi")
-        if action == "rename" and dest == "name":
-            return ResourceSelectorSpec(resource_type="container", mode="single")
-        if action == "exec-simple" and dest == "name":
-            return ResourceSelectorSpec(resource_type="container", mode="single")
-
-    if dest == "container":
-        return ResourceSelectorSpec(resource_type="container", mode="single")
-    if dest == "containers":
-        return ResourceSelectorSpec(resource_type="container", mode="multi")
-
-    return None
+    """Return the audited live-resource selector for one CLI argument."""
+    rule = RESOURCE_SELECTOR_RULES.get((command.path, argument.dest))
+    if not rule:
+        return None
+    resource_type, mode = rule
+    return ResourceSelectorSpec(resource_type=resource_type, mode=mode)
 
 
 def format_container_targets(container_rows: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
@@ -433,7 +435,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.css.query import NoMatches
-    from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, LoadingIndicator, RichLog, Select, SelectionList, Static, TextArea, Tree
+    from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, LoadingIndicator, RichLog, Select, Static, TextArea, Tree
 
     TEXTUAL_AVAILABLE = True
 except ImportError:
@@ -441,6 +443,52 @@ except ImportError:
 
 
 if TEXTUAL_AVAILABLE:
+
+    class ResourceMultiSelector(VerticalScroll):
+        """Simple checkbox-backed multi selector with reliable mouse interaction."""
+
+        def __init__(
+            self,
+            entries: List[Tuple[str, str]],
+            selected_values: Optional[List[str]] = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(**kwargs)
+            self.entries = list(entries)
+            self._initial_selected = set(selected_values or [])
+
+        def compose(self) -> ComposeResult:
+            for label, value in self.entries:
+                yield Checkbox(Text(label), value=value in self._initial_selected)
+
+        @property
+        def selected(self) -> List[str]:
+            checkboxes = list(self.query(Checkbox))
+            return [
+                value
+                for (_label, value), checkbox in zip(self.entries, checkboxes)
+                if checkbox.value
+            ]
+
+        def select(self, value: str) -> "ResourceMultiSelector":
+            for (_label, entry_value), checkbox in zip(self.entries, self.query(Checkbox)):
+                if entry_value == value:
+                    checkbox.value = True
+                    break
+            return self
+
+        def deselect(self, value: str) -> "ResourceMultiSelector":
+            for (_label, entry_value), checkbox in zip(self.entries, self.query(Checkbox)):
+                if entry_value == value:
+                    checkbox.value = False
+                    break
+            return self
+
+        def deselect_all(self) -> "ResourceMultiSelector":
+            for checkbox in self.query(Checkbox):
+                checkbox.value = False
+            return self
+
 
     class DockerPilotTUI(App):
         """Mouse-friendly command browser that emits argv for the real CLI."""
@@ -522,6 +570,12 @@ if TEXTUAL_AVAILABLE:
 
         .resource-selector {
             min-height: 4;
+            border: round $surface;
+            padding: 0 1;
+        }
+
+        .resource-single-selector {
+            width: 1fr;
         }
 
         .multi-input {
@@ -575,7 +629,6 @@ if TEXTUAL_AVAILABLE:
             self.command_drafts: Dict[Tuple[str, ...], Dict[str, Any]] = {}
             self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
             self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
-            self._selection_syncing = False
             self._command_running = False
             self._targets_refreshing = False
             self._form_render_lock = asyncio.Lock()
@@ -792,18 +845,20 @@ if TEXTUAL_AVAILABLE:
                     available_values = {entry_value for _, entry_value in entries}
                     selected_values = [item for item in selected_values if item in available_values]
                     if selector_spec.mode == "single":
-                        selected_values = selected_values[:1]
-                    widget = SelectionList(
-                        *[
-                            (label, entry_value, entry_value in selected_values)
-                            for label, entry_value in entries
-                        ],
-                        classes="resource-selector",
-                    )
-                    widget.styles.height = selector_height(
-                        len(entries),
-                        single=selector_spec.mode == "single",
-                    )
+                        selected_value = selected_values[0] if selected_values else Select.BLANK
+                        widget = Select(
+                            [(Text(label), entry_value) for label, entry_value in entries],
+                            value=selected_value,
+                            allow_blank=True,
+                            classes="resource-single-selector",
+                        )
+                    else:
+                        widget = ResourceMultiSelector(
+                            entries,
+                            selected_values,
+                            classes="resource-selector",
+                        )
+                        widget.styles.height = selector_height(len(entries), single=False)
                 else:
                     widget = TextArea(
                         self._textarea_value(value), language=None, classes="multi-input"
@@ -837,9 +892,9 @@ if TEXTUAL_AVAILABLE:
                     )
                 )
             elif selector_spec:
-                selector_hint = "Select one or more items from the live Docker list."
+                selector_hint = "Tick one or more items from the live Docker list."
                 if selector_spec.mode == "single":
-                    selector_hint = "Select one item from the live Docker list."
+                    selector_hint = "Choose one item from the live Docker list."
                 await row.mount(Static(selector_hint, classes="arg-help"))
 
             if argument.help_text:
@@ -862,36 +917,15 @@ if TEXTUAL_AVAILABLE:
         def on_text_area_changed(self, _event: TextArea.Changed) -> None:
             self._refresh_preview()
 
-        def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
-            if self._selection_syncing:
-                self._refresh_preview()
-                return
-
-            dest = next((name for name, widget in self.command_widgets.items() if widget is event.selection_list), None)
-            spec = self.selector_specs.get(dest) if dest else None
-
-            if spec and spec.mode == "single" and len(event.selection_list.selected) > 1:
-                latest = event.selection_list.selected[-1]
-                self._selection_syncing = True
-                event.selection_list.deselect_all()
-                event.selection_list.select(latest)
-                self._selection_syncing = False
-
-            self._refresh_preview()
-
         def _values_from_widgets(self, widget_store: Dict[str, Any]) -> Dict[str, Any]:
             values: Dict[str, Any] = {}
             for dest, widget in widget_store.items():
-                if isinstance(widget, Checkbox):
+                if isinstance(widget, ResourceMultiSelector):
+                    values[dest] = list(widget.selected)
+                elif isinstance(widget, Checkbox):
                     values[dest] = widget.value
                 elif isinstance(widget, Select):
                     values[dest] = None if widget.is_blank() else widget.value
-                elif isinstance(widget, SelectionList):
-                    spec = self.selector_specs.get(dest)
-                    if spec and spec.mode == "single":
-                        values[dest] = widget.selected[0] if widget.selected else ""
-                    else:
-                        values[dest] = list(widget.selected)
                 elif isinstance(widget, TextArea):
                     selector_spec = self.selector_specs.get(dest)
                     if selector_spec and selector_spec.mode == "multi":
@@ -908,12 +942,12 @@ if TEXTUAL_AVAILABLE:
             for dest, widget in widget_store.items():
                 if isinstance(widget, TextArea):
                     values[dest] = widget.text
+                elif isinstance(widget, ResourceMultiSelector):
+                    values[dest] = list(widget.selected)
                 elif isinstance(widget, Checkbox):
                     values[dest] = widget.value
                 elif isinstance(widget, Select):
                     values[dest] = None if widget.is_blank() else widget.value
-                elif isinstance(widget, SelectionList):
-                    values[dest] = list(widget.selected)
                 else:
                     values[dest] = widget.value
             return values
