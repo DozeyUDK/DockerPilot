@@ -1,5 +1,6 @@
 """Regression tests for critical CLI handler flows."""
 
+import json
 from argparse import Namespace
 
 import pytest
@@ -40,6 +41,8 @@ class DummyPilot:
         self.rename_calls = []
         self.quick_calls = []
         self.promote_calls = []
+        self.list_calls = []
+        self.image_list_calls = []
         self.exec_results = {}
         self.rename_result = True
 
@@ -69,6 +72,57 @@ class DummyPilot:
     def environment_promotion(self, source, target, config_path, skip_backup):
         self.promote_calls.append((source, target, config_path, skip_backup))
         return True
+
+    def list_containers(self, show_all=True, format_output="table"):
+        self.list_calls.append((show_all, format_output))
+        return [
+            {
+                "id": "abc123",
+                "name": "web",
+                "state": "running",
+                "image": "demo:latest",
+            }
+        ]
+
+    def list_images(self, show_all=True, format_output="table", hide_untagged=False):
+        self.image_list_calls.append((show_all, format_output, hide_untagged))
+        return [
+            {
+                "id": "img123",
+                "repository": "demo",
+                "tag": "latest",
+                "tags": ["demo:latest"],
+            }
+        ]
+
+
+def test_handle_container_list_json_prints_returned_structured_data():
+    pilot = DummyPilot()
+    args = Namespace(container_action="list", all=True, format="json")
+
+    handle_container_cli(pilot, args)
+
+    assert pilot.list_calls == [(True, "json")]
+    payload = json.loads("\n".join(pilot.console.lines))
+    assert payload[0]["name"] == "web"
+    assert payload[0]["state"] == "running"
+
+
+def test_handle_image_list_json_prints_returned_structured_data():
+    pilot = DummyPilot()
+    args = Namespace(
+        container_action="list-images",
+        all=False,
+        format="json",
+        hide_untagged=True,
+    )
+
+    handle_container_cli(pilot, args)
+
+    assert pilot.image_list_calls == [(False, "json", True)]
+    payload = json.loads("\n".join(pilot.console.lines))
+    assert payload[0]["repository"] == "demo"
+    assert payload[0]["tag"] == "latest"
 
 
 def test_handle_container_run_parses_ports_env_and_volumes():
