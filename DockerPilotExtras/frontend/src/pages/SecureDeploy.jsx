@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { secureDeployAPI } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { SECURE_DEPLOY_STEPS } from '../utils/secureDeployForm.mjs'
 
 const EMPTY_SPEC = {
   schema_version: 1,
@@ -234,101 +235,120 @@ function SecureDeploy() {
   }
 
   return (
-    <div className="page">
-      <div className="card" style={{ marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
-          <div>
-            <h2 className="card-title" style={{ marginBottom: '0.35rem' }}>Secure Deploy</h2>
-            <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
-              Spec → Dozeyguard → firewall plan preview. No apply/approve in this release.
-            </p>
-          </div>
-          <span
-            style={{
-              background: '#b45309',
-              color: 'white',
-              padding: '0.45rem 0.75rem',
-              borderRadius: '4px',
-              fontWeight: 700,
-              whiteSpace: 'nowrap'
-            }}
-          >
-            {badge}
-          </span>
+    <div className="page secure-deploy-page">
+      <section className="card secure-deploy-header" aria-labelledby="secure-deploy-title">
+        <div className="secure-deploy-header-copy">
+          <h2 className="card-title" id="secure-deploy-title">Secure Deploy</h2>
+          <p>
+            Spec → Dozeyguard → firewall plan preview. No deployment changes are applied from this screen.
+          </p>
         </div>
-      </div>
+        <span className="secure-deploy-badge">{badge}</span>
+      </section>
 
       {message && (
-        <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`} style={{ marginBottom: '1rem' }}>
+        <div
+          className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`}
+          role={message.type === 'success' ? 'status' : 'alert'}
+          aria-live={message.type === 'success' ? 'polite' : 'assertive'}
+        >
           {message.text}
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {[1, 2, 3, 4, 5, 6, 7].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={step === n ? 'btn btn-primary' : 'btn'}
-              onClick={() => setStep(n)}
-            >
-              Step {n}
-            </button>
-          ))}
-        </div>
-      </div>
+      <nav className="card secure-deploy-toolbar" aria-label="Secure deploy steps">
+        {SECURE_DEPLOY_STEPS.map(({ number, label }) => (
+          <button
+            key={number}
+            type="button"
+            className="secure-deploy-step"
+            aria-current={step === number ? 'step' : undefined}
+            onClick={() => setStep(number)}
+          >
+            {number}. {label}
+          </button>
+        ))}
+      </nav>
 
       {step === 1 && (
-        <div className="card">
-          <h3 className="card-title">Identity</h3>
-          <label>Project<input value={spec.metadata.project} onChange={(e) => update('metadata.project', e.target.value)} /></label>
-          <label>Service<input value={spec.metadata.service} onChange={(e) => update('metadata.service', e.target.value)} /></label>
-          <label>Owner<input value={spec.metadata.owner} onChange={(e) => update('metadata.owner', e.target.value)} /></label>
-          <label>
-            Environment
-            <select value={spec.metadata.environment} onChange={(e) => update('metadata.environment', e.target.value)}>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-identity-title">
+          <h3 className="card-title" id="secure-deploy-identity-title">Identity</h3>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-project">Project</label>
+            <input className="form-control" id="secure-deploy-project" value={spec.metadata.project} onChange={(e) => update('metadata.project', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-service">Service</label>
+            <input className="form-control" id="secure-deploy-service" value={spec.metadata.service} onChange={(e) => update('metadata.service', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-owner">Owner</label>
+            <input className="form-control" id="secure-deploy-owner" value={spec.metadata.owner} onChange={(e) => update('metadata.owner', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-environment">Environment</label>
+            <select className="form-control" id="secure-deploy-environment" value={spec.metadata.environment} onChange={(e) => update('metadata.environment', e.target.value)}>
               <option value="dev">dev</option>
               <option value="staging">staging</option>
               <option value="production">production</option>
             </select>
-          </label>
-        </div>
+          </div>
+        </section>
       )}
 
       {step === 2 && (
-        <div className="card">
-          <h3 className="card-title">Image</h3>
-          <label>Reference<input value={spec.image.reference} onChange={(e) => update('image.reference', e.target.value)} /></label>
-          <label>Digest<input value={spec.image.digest} onChange={(e) => update('image.digest', e.target.value)} placeholder="sha256:..." /></label>
-          <label>
-            Pull policy
-            <select value={spec.image.pull_policy} onChange={(e) => update('image.pull_policy', e.target.value)}>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-image-title">
+          <h3 className="card-title" id="secure-deploy-image-title">Image</h3>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-image-reference">Reference</label>
+            <input className="form-control" id="secure-deploy-image-reference" value={spec.image.reference} onChange={(e) => update('image.reference', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-image-digest">Digest</label>
+            <input className="form-control" id="secure-deploy-image-digest" value={spec.image.digest} onChange={(e) => update('image.digest', e.target.value)} placeholder="sha256:..." />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-pull-policy">Pull policy</label>
+            <select className="form-control" id="secure-deploy-pull-policy" value={spec.image.pull_policy} onChange={(e) => update('image.pull_policy', e.target.value)}>
               <option value="never">never</option>
               <option value="if_not_present">if_not_present</option>
               <option value="always">always</option>
             </select>
-          </label>
-        </div>
+          </div>
+        </section>
       )}
 
       {step === 3 && (
-        <div className="card">
-          <h3 className="card-title">Runtime hardening</h3>
-          <label>User UID:GID<input value={spec.runtime.user} onChange={(e) => update('runtime.user', e.target.value)} /></label>
-          <label>Memory limit<input value={spec.runtime.memory_limit} onChange={(e) => update('runtime.memory_limit', e.target.value)} /></label>
-          <label>CPU limit<input value={spec.runtime.cpu_limit} onChange={(e) => update('runtime.cpu_limit', e.target.value)} /></label>
-          <label>Healthcheck test (comma-separated)<input value={spec.health.test.join(',')} onChange={(e) => update('health.test', e.target.value.split(',').map((s) => s.trim()).filter(Boolean))} /></label>
-          <p style={{ color: 'var(--text-secondary)' }}>read_only and no-new-privileges are required true by Spec v1.</p>
-        </div>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-runtime-title">
+          <h3 className="card-title" id="secure-deploy-runtime-title">Runtime hardening</h3>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-runtime-user">User UID:GID</label>
+            <input className="form-control" id="secure-deploy-runtime-user" value={spec.runtime.user} onChange={(e) => update('runtime.user', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-memory-limit">Memory limit</label>
+            <input className="form-control" id="secure-deploy-memory-limit" value={spec.runtime.memory_limit} onChange={(e) => update('runtime.memory_limit', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-cpu-limit">CPU limit</label>
+            <input className="form-control" id="secure-deploy-cpu-limit" value={spec.runtime.cpu_limit} onChange={(e) => update('runtime.cpu_limit', e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-healthcheck">Healthcheck test (comma-separated)</label>
+            <input className="form-control" id="secure-deploy-healthcheck" value={spec.health.test.join(',')} onChange={(e) => update('health.test', e.target.value.split(',').map((s) => s.trim()).filter(Boolean))} />
+          </div>
+          <p className="form-hint">read_only and no-new-privileges are required true by Spec v1.</p>
+        </section>
       )}
 
       {step === 4 && (
-        <div className="card">
-          <h3 className="card-title">Network</h3>
-          <label>
-            Exposure
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-network-title">
+          <h3 className="card-title" id="secure-deploy-network-title">Network</h3>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-exposure">Exposure</label>
             <select
+              className="form-control"
+              id="secure-deploy-exposure"
               value={spec.network.exposure}
               onChange={(e) => {
                 update('network.exposure', e.target.value)
@@ -345,29 +365,44 @@ function SecureDeploy() {
               <option value="zerotier_allowlist">zerotier_allowlist</option>
               <option value="public_via_existing_proxy">public_via_existing_proxy</option>
             </select>
-          </label>
-          <label>Host port<input type="number" value={spec.network.published_ports[0]?.host_port || ''} onChange={(e) => update('network.published_ports', [{ ...spec.network.published_ports[0], host_port: Number(e.target.value) }])} /></label>
-          <label>Allowed CIDRs (comma-separated)<input value={(spec.network.allowed_sources || []).join(',')} onChange={(e) => update('network.allowed_sources', e.target.value.split(',').map((s) => s.trim()).filter(Boolean))} /></label>
-        </div>
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-host-port">Host port</label>
+            <input className="form-control" id="secure-deploy-host-port" type="number" value={spec.network.published_ports[0]?.host_port || ''} onChange={(e) => update('network.published_ports', [{ ...spec.network.published_ports[0], host_port: Number(e.target.value) }])} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-allowed-cidrs">Allowed CIDRs (comma-separated)</label>
+            <input className="form-control" id="secure-deploy-allowed-cidrs" value={(spec.network.allowed_sources || []).join(',')} onChange={(e) => update('network.allowed_sources', e.target.value.split(',').map((s) => s.trim()).filter(Boolean))} />
+          </div>
+        </section>
       )}
 
       {step === 5 && (
-        <div className="card">
-          <h3 className="card-title">Storage</h3>
-          <label>Named volume<input value={spec.storage.volumes[0]?.source || ''} onChange={(e) => update('storage.volumes', [{ ...spec.storage.volumes[0], source: e.target.value }])} /></label>
-          <label>Target<input value={spec.storage.volumes[0]?.target || ''} onChange={(e) => update('storage.volumes', [{ ...spec.storage.volumes[0], target: e.target.value }])} /></label>
-        </div>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-storage-title">
+          <h3 className="card-title" id="secure-deploy-storage-title">Storage</h3>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-volume-name">Named volume</label>
+            <input className="form-control" id="secure-deploy-volume-name" value={spec.storage.volumes[0]?.source || ''} onChange={(e) => update('storage.volumes', [{ ...spec.storage.volumes[0], source: e.target.value }])} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="secure-deploy-volume-target">Target</label>
+            <input className="form-control" id="secure-deploy-volume-target" value={spec.storage.volumes[0]?.target || ''} onChange={(e) => update('storage.volumes', [{ ...spec.storage.volumes[0], target: e.target.value }])} />
+          </div>
+        </section>
       )}
 
       {step === 6 && (
-        <div className="card">
-          <h3 className="card-title">Secrets (refs only)</h3>
-          <p style={{ color: 'var(--text-secondary)' }}>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-secrets-title">
+          <h3 className="card-title" id="secure-deploy-secrets-title">Secrets (refs only)</h3>
+          <p className="form-hint" id="secure-deploy-secret-hint">
             Enter logical OpenBao reference names only. Values are never accepted or stored in preview.
           </p>
-          <label>
-            Secret name
+          <div className="form-field">
+            <label htmlFor="secure-deploy-secret-name">Secret name</label>
             <input
+              className="form-control"
+              id="secure-deploy-secret-name"
+              aria-describedby="secure-deploy-secret-hint"
               value={spec.secrets.refs[0]?.name || ''}
               onChange={(e) =>
                 update('secrets.refs', e.target.value
@@ -382,39 +417,39 @@ function SecureDeploy() {
                   : [])
               }
             />
-          </label>
-        </div>
+          </div>
+        </section>
       )}
 
       {step === 7 && (
-        <div className="card">
-          <h3 className="card-title">Preview</h3>
+        <section className="card secure-deploy-panel" aria-labelledby="secure-deploy-preview-title">
+          <h3 className="card-title" id="secure-deploy-preview-title">Preview</h3>
           {!preview && <p>Generate a preview to see findings, firewall actions, and hashes.</p>}
           {preview && (
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="secure-deploy-preview">
               <div>
                 <strong>Status:</strong> {preview.status}
                 {draftId ? ` · draft ${draftId}` : ''}
               </div>
               <div>
                 <strong>Plan hash (confirm before approve)</strong>
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{preview.plan?.plan_sha256 || preview.preview?.hashes?.plan_sha256}</pre>
+                <pre>{preview.plan?.plan_sha256 || preview.preview?.hashes?.plan_sha256}</pre>
               </div>
               <div>
                 <strong>Hashes</strong>
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview.preview?.hashes || {}, null, 2)}</pre>
+                <pre>{JSON.stringify(preview.preview?.hashes || {}, null, 2)}</pre>
               </div>
               <div>
                 <strong>Dozeyguard findings</strong>
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview.preview?.dozeyguard?.findings || [], null, 2)}</pre>
+                <pre>{JSON.stringify(preview.preview?.dozeyguard?.findings || [], null, 2)}</pre>
               </div>
               <div>
                 <strong>Firewall actions</strong>
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview.preview?.firewall || {}, null, 2)}</pre>
+                <pre>{JSON.stringify(preview.preview?.firewall || {}, null, 2)}</pre>
               </div>
               <div>
                 <strong>Rollback outline</strong>
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview.preview?.rollback_outline || [], null, 2)}</pre>
+                <pre>{JSON.stringify(preview.preview?.rollback_outline || [], null, 2)}</pre>
               </div>
               <div>
                 <strong>Plan expiry</strong> {preview.plan?.expires_at}
@@ -422,7 +457,7 @@ function SecureDeploy() {
               {approval && (
                 <div>
                   <strong>Approval</strong>
-                  <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({
+                  <pre>{JSON.stringify({
                     approval_id: approval.approval_id,
                     status: approval.status,
                     expires_at: approval.expires_at
@@ -432,32 +467,33 @@ function SecureDeploy() {
               {brokerResult && (
                 <div>
                   <strong>Broker dry-run</strong>
-                  <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(brokerResult, null, 2)}</pre>
+                  <pre>{JSON.stringify(brokerResult, null, 2)}</pre>
                 </div>
               )}
-              <div style={{ display: 'grid', gap: '0.5rem' }}>
-                <label>
-                  Step-up TOTP (approve / revoke)
-                  <input
-                    type="password"
-                    autoComplete="one-time-code"
-                    value={totpCode}
-                    onChange={(e) => setTotpCode(e.target.value)}
-                  />
-                </label>
+              <div className="form-field">
+                <label htmlFor="secure-deploy-totp">Step-up TOTP (approve / revoke)</label>
+                <input
+                  className="form-control"
+                  id="secure-deploy-totp"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value)}
+                />
               </div>
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      <div className="card" style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <button type="button" className="btn" disabled={busy} onClick={saveDraft}>Save draft</button>
-        <button type="button" className="btn" disabled={busy} onClick={validate}>Validate</button>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={generatePreview}>Generate preview</button>
-        <button type="button" className="btn" disabled={!preview?.plan} onClick={downloadPlan}>Download redacted plan</button>
-        <button type="button" className="btn" disabled={busy || !preview?.plan} onClick={approvePlan}>Approve plan</button>
-        <button type="button" className="btn" disabled={busy || !approval?.approval_id} onClick={verifyWithBroker}>Verify with broker</button>
+      <div className="card secure-deploy-actions" role="group" aria-label="Secure deploy preview actions" aria-busy={busy}>
+        <button type="button" className="btn form-button" disabled={busy} onClick={saveDraft}>Save draft</button>
+        <button type="button" className="btn form-button" disabled={busy} onClick={validate}>Validate</button>
+        <button type="button" className="btn btn-primary form-button" disabled={busy} onClick={generatePreview}>Generate preview</button>
+        <button type="button" className="btn form-button" disabled={!preview?.plan} onClick={downloadPlan}>Download redacted plan</button>
+        <button type="button" className="btn form-button" disabled={busy || !preview?.plan} onClick={approvePlan}>Approve plan</button>
+        <button type="button" className="btn form-button" disabled={busy || !approval?.approval_id} onClick={verifyWithBroker}>Verify with broker (dry-run)</button>
       </div>
     </div>
   )

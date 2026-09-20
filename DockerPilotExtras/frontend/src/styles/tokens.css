@@ -17,6 +17,9 @@
   --color-on-accent: #ffffff;
   --color-focus: #ffffff;
   --color-danger-text: #ffb4ab;
+  --color-warning-surface: #7c3f08;
+  --color-warning-border: #f4a340;
+  --color-warning-text: #fff7ed;
   --color-header-control: rgba(10, 14, 30, 0.16);
   --color-header-control-hover: rgba(10, 14, 30, 0.3);
   --color-header-control-border: rgba(255, 255, 255, 0.48);
@@ -65,6 +68,9 @@
   --color-on-accent: #ffffff;
   --color-focus: #ffffff;
   --color-danger-text: #b42318;
+  --color-warning-surface: #9a4d08;
+  --color-warning-border: #7c3f08;
+  --color-warning-text: #ffffff;
   --color-header-control: rgba(10, 14, 30, 0.16);
   --color-header-control-hover: rgba(10, 14, 30, 0.3);
   --color-header-control-border: rgba(255, 255, 255, 0.48);
