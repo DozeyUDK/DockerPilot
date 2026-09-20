@@ -9,6 +9,7 @@ import {
   isTerminalMigration,
   selectRestorableMigration,
 } from '../utils/migrationJobs.mjs'
+import { isCurrentKeyFileRead } from '../utils/serverKeyFileRead.mjs'
 import '../App.css'
 
 function Environments() {
@@ -64,6 +65,8 @@ function Environments() {
     totp_code: '',
     description: ''
   })
+  const serverKeyReaderRef = useRef(null)
+  const serverKeyReadGenerationRef = useRef(0)
   const [testingServer, setTestingServer] = useState(false) // Testing server connection
   const [testingServerResult, setTestingServerResult] = useState(null) // Test result
   const [showMigrateModal, setShowMigrateModal] = useState(false) // Show migrate container modal
@@ -97,6 +100,11 @@ function Environments() {
   useEffect(() => () => {
     migrationSubmitGenerationRef.current += 1
     migrationSessionGenerationRef.current += 1
+    serverKeyReadGenerationRef.current += 1
+    if (serverKeyReaderRef.current?.readyState === 1) {
+      serverKeyReaderRef.current?.abort()
+    }
+    serverKeyReaderRef.current = null
   }, [])
 
   // Async jobs outlive the page. Recover the oldest active job for the
@@ -535,7 +543,16 @@ function Environments() {
     }
   }
 
+  const invalidateServerKeyRead = () => {
+    serverKeyReadGenerationRef.current += 1
+    if (serverKeyReaderRef.current?.readyState === 1) {
+      serverKeyReaderRef.current?.abort()
+    }
+    serverKeyReaderRef.current = null
+  }
+
   const openServerModal = (server = null) => {
+    invalidateServerKeyRead()
     if (server) {
       setEditingServer(server)
       setServerForm({
@@ -558,6 +575,7 @@ function Environments() {
   }
 
   const resetServerForm = () => {
+    invalidateServerKeyRead()
     setEditingServer(null)
     setServerForm({
       name: '',
@@ -581,13 +599,40 @@ function Environments() {
 
   const handleKeyFileUpload = (event) => {
     const file = event.target.files[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        setServerForm({ ...serverForm, private_key: e.target.result })
-      }
-      reader.readAsText(file)
+    if (!file) return
+
+    invalidateServerKeyRead()
+    const generation = serverKeyReadGenerationRef.current
+    const reader = new FileReader()
+    serverKeyReaderRef.current = reader
+
+    reader.onload = event => {
+      if (!isCurrentKeyFileRead(
+        reader,
+        serverKeyReaderRef.current,
+        generation,
+        serverKeyReadGenerationRef.current,
+      )) return
+      serverKeyReaderRef.current = null
+      setServerForm(previous => ({ ...previous, private_key: event.target.result }))
     }
+    reader.onerror = () => {
+      if (serverKeyReaderRef.current === reader) serverKeyReaderRef.current = null
+    }
+    reader.onabort = reader.onerror
+    reader.readAsText(file)
+  }
+
+  const handlePrivateKeyChange = event => {
+    invalidateServerKeyRead()
+    const privateKey = event.target.value
+    setServerForm(previous => ({ ...previous, private_key: privateKey }))
+  }
+
+  const handleServerAuthTypeChange = event => {
+    invalidateServerKeyRead()
+    const authType = event.target.value
+    setServerForm(previous => ({ ...previous, auth_type: authType }))
   }
 
   const getTargetServerDisplay = (env) => {
@@ -2718,7 +2763,7 @@ function Environments() {
                 <select
                   id="server-auth-type"
                   value={serverForm.auth_type}
-                  onChange={(e) => setServerForm({ ...serverForm, auth_type: e.target.value })}
+                  onChange={handleServerAuthTypeChange}
                   style={{
                     width: '100%',
                     padding: '0.5rem',
@@ -2784,7 +2829,7 @@ function Environments() {
                     <textarea
                       aria-label="Private key contents"
                       value={serverForm.private_key}
-                      onChange={(e) => setServerForm({ ...serverForm, private_key: e.target.value })}
+                      onChange={handlePrivateKeyChange}
                       placeholder="Paste the private key contents (OpenSSH format) or choose a file"
                       rows={6}
                       style={{
