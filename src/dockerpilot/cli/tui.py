@@ -257,7 +257,7 @@ def serialize_argument_values(arguments: List[ArgumentSpec], values: Dict[str, A
         if spec.positional:
             argv.append(normalized)
         elif spec.primary_flag:
-                argv.extend([spec.primary_flag, normalized])
+            argv.extend([spec.primary_flag, normalized])
 
     return argv
 
@@ -484,9 +484,11 @@ if TEXTUAL_AVAILABLE:
         }
 
         #command-tree {
-            width: 34;
+            width: 36;
+            min-width: 30;
+            max-width: 42;
             border: round $primary;
-            min-width: 28;
+            padding: 0 1;
         }
 
         #details {
@@ -669,10 +671,14 @@ if TEXTUAL_AVAILABLE:
             return message
 
         def _add_tree_node(self, parent: Any, command: CommandNode) -> None:
-            branch = parent.add(command.name, data=command)
-            if command.children:
-                for child in command.children:
-                    self._add_tree_node(branch, child)
+            """Mount one command node, showing an expand marker only for real branches."""
+            branch = parent.add(
+                command.name,
+                data=command,
+                allow_expand=bool(command.children),
+            )
+            for child in command.children:
+                self._add_tree_node(branch, child)
 
         async def _render_global_form(self) -> None:
             container = self.query_one("#global-form", Vertical)
