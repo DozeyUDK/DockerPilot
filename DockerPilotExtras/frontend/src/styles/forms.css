@@ -1,0 +1,235 @@
+.auth-page {
+  min-height: 100vh;
+  padding: var(--space-6) var(--space-4);
+  display: grid;
+  place-items: center;
+}
+
+.auth-card {
+  width: min(100%, 26rem);
+  padding: var(--space-5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--card-bg);
+  box-shadow: 0 0.75rem 2rem var(--shadow);
+}
+
+.auth-title {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+}
+
+.auth-copy {
+  margin: 0 0 var(--space-4);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.auth-error {
+  margin-bottom: var(--space-4);
+}
+
+.form-field {
+  margin-bottom: var(--space-4);
+}
+
+.form-field label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.form-control {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.form-control:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.form-control:focus-visible,
+.form-button:focus-visible,
+.secure-deploy-step:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.form-control:disabled,
+.form-button:disabled,
+.secure-deploy-step:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.form-hint {
+  margin: calc(var(--space-2) * -1) 0 var(--space-4);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.form-button {
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.form-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.form-button.btn-primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+  color: var(--color-on-accent);
+}
+
+.form-button:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.auth-submit {
+  width: 100%;
+}
+
+.secure-deploy-page {
+  width: min(100%, 90rem);
+  margin: 0 auto;
+}
+
+.secure-deploy-header,
+.secure-deploy-header-copy,
+.secure-deploy-toolbar,
+.secure-deploy-actions {
+  display: flex;
+}
+
+.secure-deploy-header {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.secure-deploy-header-copy {
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.secure-deploy-header-copy .card-title,
+.secure-deploy-header-copy p {
+  margin: 0;
+}
+
+.secure-deploy-header-copy p {
+  color: var(--text-secondary);
+}
+
+.secure-deploy-badge {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-surface);
+  color: var(--color-warning-text);
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.secure-deploy-toolbar {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.secure-deploy-step {
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.secure-deploy-step:hover,
+.secure-deploy-step[aria-current="step"] {
+  border-color: var(--color-accent);
+  background: var(--bg-tertiary);
+}
+
+.secure-deploy-step[aria-current="step"] {
+  box-shadow: inset 0 -3px 0 var(--color-accent);
+}
+
+.secure-deploy-panel {
+  scroll-margin-top: var(--space-4);
+}
+
+.secure-deploy-preview {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.secure-deploy-preview pre {
+  margin-top: var(--space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.secure-deploy-actions {
+  margin-top: var(--space-4);
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 48rem) {
+  .auth-page {
+    align-items: start;
+    padding-top: var(--space-5);
+  }
+
+  .secure-deploy-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .secure-deploy-badge {
+    width: 100%;
+  }
+
+  .secure-deploy-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .secure-deploy-actions .form-button {
+    flex: 1 1 12rem;
+  }
+}
+
+@media (max-width: 28rem) {
+  .secure-deploy-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .form-control,
+  .form-button,
+  .secure-deploy-step {
+    transition: none;
+  }
+}
