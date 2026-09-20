@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { statusAPI, fileBrowserAPI } from '../services/api'
+import Modal from '../components/Modal'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
 import {
@@ -941,180 +942,88 @@ function Status() {
         </small>
       </div>
 
-      {/* File Browser Modal for Working Directory */}
-      {showFileBrowser && browserScopeIsCurrent && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={closeFileBrowser}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '600px',
-            maxHeight: '80vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Select working directory</h3>
-              <button 
-                onClick={closeFileBrowser}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  fontSize: '1.5rem', 
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                ×
-              </button>
-            </div>
-            
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ 
-                display: 'flex', 
-                gap: '0.5rem', 
-                alignItems: 'center',
-                marginBottom: '0.5rem'
-              }}>
-                <button 
-                  onClick={() => {
-                    const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
-                    loadFileBrowser(parentPath)
-                  }}
-                  disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
-                  style={{ padding: '0.25rem 0.5rem' }}
-                >
-                  ↑ Back
-                </button>
-                <input
-                  type="text"
-                  value={browserPath}
-                  onChange={(e) => setBrowserPath(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      loadFileBrowser(browserPath)
-                    }
-                  }}
-                  style={{ 
-                    flex: 1, 
-                    padding: '0.5rem',
-                    backgroundColor: 'var(--input-bg)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--input-border)',
-                    borderRadius: '4px'
-                  }}
-                  placeholder="Enter path..."
-                />
-                <button 
-                  onClick={() => loadFileBrowser(browserPath)}
-                  style={{ padding: '0.5rem 1rem' }}
-                >
-                  Go
-                </button>
-              </div>
-            </div>
+      <Modal
+        open={showFileBrowser && browserScopeIsCurrent}
+        onClose={closeFileBrowser}
+        title="Select working directory"
+      >
+        <div className="browser-toolbar">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
+              loadFileBrowser(parentPath)
+            }}
+            disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
+          >
+            ↑ Back
+          </button>
+          <input
+            type="text"
+            className="form-control"
+            value={browserPath}
+            onChange={event => setBrowserPath(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') loadFileBrowser(browserPath)
+            }}
+            aria-label="Working directory path"
+            placeholder="Enter path..."
+          />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => loadFileBrowser(browserPath)}
+          >
+            Go
+          </button>
+        </div>
 
-            {loadingBrowser ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
+        {loadingBrowser ? (
+          <div className="browser-status" role="status">Loading...</div>
+        ) : (
+          <div className="browser-list">
+            {browserItems.length === 0 ? (
+              <div className="browser-status">Empty directory</div>
             ) : (
-              <div style={{ 
-                border: '1px solid var(--border-color)', 
-                borderRadius: '4px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                backgroundColor: 'var(--bg-tertiary)'
-              }}>
-                {browserItems.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    Empty directory
-                  </div>
-                ) : (
-                  browserItems.map((item, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => {
-                        if (item.is_dir) {
-                          loadFileBrowser(item.path)
-                        }
-                      }}
-                      style={{
-                        padding: '0.75rem',
-                        cursor: item.is_dir ? 'pointer' : 'default',
-                        borderBottom: '1px solid var(--border-color)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        backgroundColor: item.is_dir 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)',
-                        opacity: item.is_dir ? 1 : 0.6,
-                        color: 'var(--text-primary)'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (item.is_dir) {
-                          e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = item.is_dir 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)'
-                      }}
-                    >
-                      <span style={{ fontSize: '1.2rem' }}>
-                        {item.is_dir ? '📁' : '📄'}
-                      </span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: item.is_dir ? 'bold' : 'normal' }}>
-                          {item.name}
-                        </div>
-                        {item.is_file && (
-                          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {(item.size / 1024).toFixed(2)} KB
-                          </div>
-                        )}
-                      </div>
-                      {item.is_dir && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            selectDirectoryFromBrowser(item.path)
-                          }}
-                          style={{
-                            padding: '0.25rem 0.5rem',
-                            backgroundColor: '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Select
-                        </button>
+              browserItems.map(item => (
+                <div
+                  key={item.path}
+                  className={`browser-directory-row${item.is_dir ? ' browser-item-highlighted' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="browser-directory-open"
+                    disabled={!item.is_dir}
+                    onClick={() => loadFileBrowser(item.path)}
+                    aria-label={item.is_dir ? `Open directory ${item.name}` : `File ${item.name}`}
+                  >
+                    <span className="browser-item-icon" aria-hidden="true">
+                      {item.is_dir ? '📁' : '📄'}
+                    </span>
+                    <span className="browser-item-content">
+                      <span className="browser-item-name">{item.name}</span>
+                      {item.is_file && (
+                        <span className="browser-item-meta">{(item.size / 1024).toFixed(2)} KB</span>
                       )}
-                    </div>
-                  ))
-                )}
-              </div>
+                    </span>
+                  </button>
+                  {item.is_dir && (
+                    <button
+                      type="button"
+                      className="btn btn-success browser-directory-select"
+                      onClick={() => selectDirectoryFromBrowser(item.path)}
+                      aria-label={`Select directory ${item.name}`}
+                    >
+                      Select
+                    </button>
+                  )}
+                </div>
+              ))
             )}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   )
 }

@@ -36,3 +36,14 @@ test('Pipelines uses the shared modal for both browsers', async () => {
   assert.doesNotMatch(pipelines, /File Browser Modal/)
   assert.doesNotMatch(pipelines, /Docker Images Browser Modal/)
 })
+
+test('Status reuses the shared modal without weakening scoped browser cleanup', async () => {
+  const status = await readSource('../pages/Status.jsx')
+
+  assert.match(status, /<Modal[\s\S]*open=\{showFileBrowser && browserScopeIsCurrent\}/)
+  assert.match(status, /onClose=\{closeFileBrowser\}/)
+  assert.match(status, /requestGuardRef\.current\.invalidateChannel\('file-browser'/)
+  assert.match(status, /`Open directory \$\{item\.name\}`/)
+  assert.match(status, /aria-label=\{`Select directory \$\{item\.name\}`\}/)
+  assert.doesNotMatch(status, /File Browser Modal for Working Directory/)
+})

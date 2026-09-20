@@ -116,6 +116,54 @@
   background: var(--color-surface-hover);
 }
 
+.browser-directory-row {
+  display: flex;
+  align-items: stretch;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.browser-directory-row:last-child {
+  border-bottom: 0;
+}
+
+.browser-directory-open {
+  display: flex;
+  flex: 1;
+  gap: var(--space-3);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-3);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.browser-directory-open:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.browser-directory-open:disabled {
+  color: var(--color-text-muted);
+  cursor: default;
+  opacity: 1;
+}
+
+.browser-directory-open:focus-visible,
+.browser-directory-select:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 0.1875rem solid var(--color-accent);
+  outline-offset: -0.1875rem;
+}
+
+.browser-directory-select {
+  align-self: center;
+  margin-right: var(--space-3);
+}
+
 .browser-item:disabled {
   color: var(--color-text-muted);
   cursor: default;
@@ -199,6 +247,11 @@
   .browser-toolbar input {
     flex-basis: 100%;
     order: -1;
+  }
+
+  .browser-directory-select {
+    margin-right: var(--space-2);
+    padding-inline: var(--space-3);
   }
 }
 
