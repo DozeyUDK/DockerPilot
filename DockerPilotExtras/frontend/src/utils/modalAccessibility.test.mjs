@@ -47,3 +47,15 @@ test('Status reuses the shared modal without weakening scoped browser cleanup', 
   assert.match(status, /aria-label=\{`Select directory \$\{item\.name\}`\}/)
   assert.doesNotMatch(status, /File Browser Modal for Working Directory/)
 })
+
+test('Environments server editor uses the shared modal and labelled fields', async () => {
+  const environments = await readSource('../pages/Environments.jsx')
+
+  assert.match(environments, /<Modal[\s\S]*open=\{showServerModal\}/)
+  assert.match(environments, /onClose=\{closeServerModal\}/)
+  assert.match(environments, /const closeServerModal = \(\) => \{[\s\S]*setShowServerModal\(false\)[\s\S]*resetServerForm\(\)/)
+  for (const field of ['name', 'hostname', 'port', 'username', 'auth-type', 'description']) {
+    assert.match(environments, new RegExp(`htmlFor="server-${field}"[\\s\\S]*id="server-${field}"`))
+  }
+  assert.doesNotMatch(environments, /Server Add\/Edit Modal/)
+})
