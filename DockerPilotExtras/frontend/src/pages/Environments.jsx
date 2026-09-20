@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { environmentAPI, statusAPI, fileBrowserAPI, serversAPI } from '../services/api'
+import Modal from '../components/Modal'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
 import {
@@ -571,6 +572,11 @@ function Environments() {
       totp_code: '',
       description: ''
     })
+  }
+
+  const closeServerModal = () => {
+    setShowServerModal(false)
+    resetServerForm()
   }
 
   const handleKeyFileUpload = (event) => {
@@ -2610,63 +2616,18 @@ function Environments() {
         </div>
       )}
 
-      {/* Server Add/Edit Modal */}
-      {showServerModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={() => {
-          setShowServerModal(false)
-          resetServerForm()
-        }}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '2rem',
-            maxWidth: '600px',
-            maxHeight: '90vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>
-                {editingServer ? 'Edit Server' : 'Add New Server'}
-              </h3>
-              <button
-                onClick={() => {
-                  setShowServerModal(false)
-                  resetServerForm()
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '1.5rem',
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <Modal
+        open={showServerModal}
+        onClose={closeServerModal}
+        title={editingServer ? 'Edit Server' : 'Add New Server'}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-name" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Server name *
                 </label>
                 <input
+                  id="server-name"
                   type="text"
                   value={serverForm.name}
                   onChange={(e) => setServerForm({ ...serverForm, name: e.target.value })}
@@ -2685,10 +2646,11 @@ function Environments() {
 
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <div style={{ flex: 2 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-hostname" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Hostname/IP *
                   </label>
                   <input
+                    id="server-hostname"
                     type="text"
                     value={serverForm.hostname}
                     onChange={(e) => setServerForm({ ...serverForm, hostname: e.target.value })}
@@ -2705,10 +2667,11 @@ function Environments() {
                   />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-port" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Port
                   </label>
                   <input
+                    id="server-port"
                     type="number"
                     value={serverForm.port}
                     onChange={(e) => setServerForm({ ...serverForm, port: parseInt(e.target.value) || 22 })}
@@ -2727,10 +2690,11 @@ function Environments() {
               </div>
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-username" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   User *
                 </label>
                 <input
+                  id="server-username"
                   type="text"
                   value={serverForm.username}
                   onChange={(e) => setServerForm({ ...serverForm, username: e.target.value })}
@@ -2748,10 +2712,11 @@ function Environments() {
               </div>
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-auth-type" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Metoda autentykacji *
                 </label>
                 <select
+                  id="server-auth-type"
                   value={serverForm.auth_type}
                   onChange={(e) => setServerForm({ ...serverForm, auth_type: e.target.value })}
                   style={{
@@ -2773,10 +2738,11 @@ function Environments() {
 
               {serverForm.auth_type === 'password' && (
                 <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Password *
                   </label>
                   <input
+                    id="server-password"
                     type="password"
                     value={serverForm.password}
                     onChange={(e) => setServerForm({ ...serverForm, password: e.target.value })}
@@ -2797,10 +2763,11 @@ function Environments() {
               {serverForm.auth_type === 'key' && (
                 <>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-key-file" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Klucz prywatny SSH *
                     </label>
                     <input
+                      id="server-key-file"
                       type="file"
                       accept=".key,.pem,.ppk"
                       onChange={handleKeyFileUpload}
@@ -2815,6 +2782,7 @@ function Environments() {
                       }}
                     />
                     <textarea
+                      aria-label="Private key contents"
                       value={serverForm.private_key}
                       onChange={(e) => setServerForm({ ...serverForm, private_key: e.target.value })}
                       placeholder="Paste the private key contents (OpenSSH format) or choose a file"
@@ -2837,10 +2805,11 @@ function Environments() {
                     </div>
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-key-passphrase" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Key password (optional)
                     </label>
                     <input
+                      id="server-key-passphrase"
                       type="password"
                       value={serverForm.key_passphrase}
                       onChange={(e) => setServerForm({ ...serverForm, key_passphrase: e.target.value })}
@@ -2862,10 +2831,11 @@ function Environments() {
               {serverForm.auth_type === '2fa' && (
                 <>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Password *
                     </label>
                     <input
+                      id="server-password"
                       type="password"
                       value={serverForm.password}
                       onChange={(e) => setServerForm({ ...serverForm, password: e.target.value })}
@@ -2882,10 +2852,11 @@ function Environments() {
                     />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-totp-code" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Kod 2FA
                     </label>
                     <input
+                      id="server-totp-code"
                       type="text"
                       value={serverForm.totp_code || ''}
                       onChange={(e) => setServerForm({ ...serverForm, totp_code: e.target.value })}
@@ -2908,10 +2879,11 @@ function Environments() {
               )}
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-description" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Opis (opcjonalnie)
                 </label>
                 <input
+                  id="server-description"
                   type="text"
                   value={serverForm.description}
                   onChange={(e) => setServerForm({ ...serverForm, description: e.target.value })}
@@ -2959,10 +2931,7 @@ function Environments() {
                   {testingServer ? 'Testing...' : 'Test Connection'}
                 </button>
                 <button
-                  onClick={() => {
-                    setShowServerModal(false)
-                    resetServerForm()
-                  }}
+                  onClick={closeServerModal}
                   style={{
                     padding: '0.5rem 1rem',
                     backgroundColor: '#6c757d',
@@ -2992,9 +2961,7 @@ function Environments() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </Modal>
       
       {/* Sudo Password Modal */}
       {showSudoModal ? (
