@@ -444,7 +444,7 @@ except ImportError:
 
 if TEXTUAL_AVAILABLE:
 
-    class ResourceMultiSelector(VerticalScroll):
+    class ResourceMultiSelector(Vertical):
         """Simple checkbox-backed multi selector with reliable mouse interaction."""
 
         def __init__(
@@ -560,6 +560,7 @@ if TEXTUAL_AVAILABLE:
         }
 
         .arg-row {
+            height: auto;
             margin-bottom: 1;
         }
 
@@ -570,10 +571,12 @@ if TEXTUAL_AVAILABLE:
 
         .resource-selector {
             height: auto;
-            min-height: 4;
-            max-height: 10;
             border: round $surface;
             padding: 0 1;
+        }
+
+        .resource-selector Checkbox {
+            width: 1fr;
         }
 
         .resource-single-selector {
@@ -582,6 +585,10 @@ if TEXTUAL_AVAILABLE:
 
         .multi-input {
             height: 6;
+        }
+
+        #global-form, #command-form {
+            height: auto;
         }
 
         #form-scroll {
@@ -860,6 +867,10 @@ if TEXTUAL_AVAILABLE:
                             selected_values,
                             classes="resource-selector",
                         )
+                        # Keep multi-selectors in the parent form scroll instead of
+                        # nesting another scrolling viewport. One row per checkbox
+                        # makes the target list reliably visible and clickable.
+                        widget.styles.height = max(1, len(entries))
                 else:
                     widget = TextArea(
                         self._textarea_value(value), language=None, classes="multi-input"

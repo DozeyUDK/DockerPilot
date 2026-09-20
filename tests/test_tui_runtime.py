@@ -92,6 +92,33 @@ def test_live_resource_selectors_use_clickable_controls_for_multi_and_single_tar
     asyncio.run(scenario())
 
 
+def test_multi_selector_does_not_collapse_inside_form_scroll():
+    async def scenario():
+        backend = FakePilot()
+        backend.containers = [
+            {"name": f"app-{index}", "state": "running", "image": "demo"}
+            for index in range(12)
+        ]
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, "container", "stop"))
+            await pilot.pause()
+
+            widget = app.command_widgets["name"]
+            assert isinstance(widget, tui.ResourceMultiSelector)
+            assert len(widget.query(Checkbox)) == 12
+            assert widget.size.height >= 12
+            assert widget.parent.size.height >= 12
+
+            widget.select("app-7")
+            await pilot.pause()
+            assert widget.selected == ["app-7"]
+            assert "app-7" in str(app.query_one("#preview", Static).render())
+
+    asyncio.run(scenario())
+
+
 def test_incomplete_quote_is_editable_and_run_is_rejected(monkeypatch):
     dispatched = []
     monkeypatch.setattr(tui, 'capture_cli_execution', lambda *a, **kw: dispatched.append(a) or (0, 'OK'))
