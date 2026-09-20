@@ -453,13 +453,13 @@ if TEXTUAL_AVAILABLE:
             selected_values: Optional[List[str]] = None,
             **kwargs: Any,
         ) -> None:
-            super().__init__(**kwargs)
             self.entries = list(entries)
             self._initial_selected = set(selected_values or [])
+            super().__init__(**kwargs)
 
         def compose(self) -> ComposeResult:
             for label, value in self.entries:
-                yield Checkbox(Text(label), value=value in self._initial_selected)
+                yield Checkbox(label, value=value in self._initial_selected)
 
         @property
         def selected(self) -> List[str]:
@@ -569,7 +569,9 @@ if TEXTUAL_AVAILABLE:
         }
 
         .resource-selector {
+            height: auto;
             min-height: 4;
+            max-height: 10;
             border: round $surface;
             padding: 0 1;
         }
@@ -847,7 +849,7 @@ if TEXTUAL_AVAILABLE:
                     if selector_spec.mode == "single":
                         selected_value = selected_values[0] if selected_values else Select.BLANK
                         widget = Select(
-                            [(Text(label), entry_value) for label, entry_value in entries],
+                            entries,
                             value=selected_value,
                             allow_blank=True,
                             classes="resource-single-selector",
@@ -858,7 +860,6 @@ if TEXTUAL_AVAILABLE:
                             selected_values,
                             classes="resource-selector",
                         )
-                        widget.styles.height = selector_height(len(entries), single=False)
                 else:
                     widget = TextArea(
                         self._textarea_value(value), language=None, classes="multi-input"
