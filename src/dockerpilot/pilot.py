@@ -34,6 +34,8 @@ from .monitoring import MonitoringManager
 from .cli import build_cli_parser, run_cli as run_pilot_cli, run_interactive_menu
 from .backup_restore import BackupRestoreMixin
 from .deployment_service import DeploymentServiceMixin
+from .services.templates import create_production_checklist as create_production_checklist_from_template
+from .services.templates import generate_documentation as generate_documentation_from_templates
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -1569,67 +1571,20 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
             self.logger.error(f"Failed to send notification: {e}")
 
     def create_production_checklist(self, output_file: str = "production-checklist.md") -> bool:
-        """Generate production deployment checklist from template"""
-        try:
-            # Load template from configs directory
-            template_path = Path(__file__).parent / "configs" / "production-checklist.md.template"
-            
-            if not template_path.exists():
-                self.logger.error(f"Template not found: {template_path}")
-                self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                return False
-            
-            with open(template_path, 'r', encoding='utf-8') as f:
-                checklist_content = f.read()
-            
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(checklist_content)
-            
-            self.console.print(f"[green]Production checklist created: {output_file}[/green]")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to create production checklist: {e}")
-            return False
+        """Generate production deployment checklist from template."""
+        return create_production_checklist_from_template(
+            self.console,
+            self.logger,
+            output_file,
+        )
 
     def generate_documentation(self, output_dir: str = "docs") -> bool:
-        """Generate comprehensive project documentation from templates"""
-        try:
-            docs_path = Path(output_dir)
-            docs_path.mkdir(exist_ok=True)
-            
-            # Get templates directory
-            templates_dir = Path(__file__).parent / "configs"
-            
-            # Documentation files to generate
-            doc_files = [
-                ("docs-readme.md.template", "README.md"),
-                ("docs-api.md.template", "API.md"),
-                ("docs-troubleshooting.md.template", "TROUBLESHOOTING.md")
-            ]
-            
-            # Generate each documentation file from template
-            for template_name, output_name in doc_files:
-                template_path = templates_dir / template_name
-                
-                if not template_path.exists():
-                    self.logger.warning(f"Template not found: {template_path}")
-                    continue
-                
-                with open(template_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                with open(docs_path / output_name, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                
-                self.logger.info(f"Generated {output_name}")
-            
-            self.console.print(f"[green]Documentation generated in {output_dir}/[/green]")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to generate documentation: {e}")
-            return False
+        """Generate comprehensive project documentation from templates."""
+        return generate_documentation_from_templates(
+            self.console,
+            self.logger,
+            output_dir,
+        )
 
     def validate_system_requirements(self) -> bool:
         """Validate system requirements and dependencies"""
