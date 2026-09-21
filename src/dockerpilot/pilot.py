@@ -51,6 +51,8 @@ from .services.integration_testing import (
     save_test_report as save_test_report_service,
 )
 from .services.alerts import AlertService
+from .services.health_checks import health_check_standalone as health_check_standalone_service
+from .deployment_history import show_deployment_history as show_deployment_history_service
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -89,7 +91,7 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
                 self.client, self.console, self.logger, self._error_handler
             )
             self.monitoring_manager = MonitoringManager(
-                self.client, self.console, self.logger, self.metrics_file
+                self.client, self.console, self.logger, self.metrics_file, self._error_handler
             )
         else:
             # Set managers to None if Docker client is not available
@@ -593,43 +595,10 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     
     def exec_container(self, container_name: str, command: str = "/bin/bash") -> bool:
         """Execute interactive command in running container."""
-        import subprocess
-        
-        with self._error_handler(f"exec into container {container_name}", container_name):
-            # Verify container exists and is running
-            container = self.client.containers.get(container_name)
-            if container.status != 'running':
-                self.console.print(f"[bold red]❌ Container '{container_name}' is not running (status: {container.status})[/bold red]")
-                return False
-            
-            self.logger.info(f"Executing interactive command in container {container_name}: {command}")
-            self.console.print(f"[cyan]📟 Executing '{command}' in container '{container_name}'...[/cyan]")
-            self.console.print(f"[dim]Type 'exit' to leave the container shell[/dim]\n")
-            
-            # Use subprocess to maintain interactive terminal
-            # This allows proper TTY handling for interactive bash session
-            try:
-                result = subprocess.run(
-                    ['docker', 'exec', '-it', container_name, command],
-                    check=False
-                )
-                
-                if result.returncode == 0:
-                    self.console.print(f"\n[green]✅ Exited from container '{container_name}'[/green]")
-                    return True
-                else:
-                    self.console.print(f"\n[yellow]⚠️ Exec command exited with code {result.returncode}[/yellow]")
-                    return False
-                    
-            except FileNotFoundError:
-                self.console.print("[bold red]❌ Docker CLI not found. Please ensure Docker is installed and in PATH.[/bold red]")
-                return False
-            except Exception as e:
-                self.console.print(f"[bold red]❌ Failed to execute command: {e}[/bold red]")
-                self.logger.error(f"Exec failed: {e}")
-                return False
-        
-        return False
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
+        return self.container_manager.exec_container(container_name, command)
 
     # ==================== MONITORING & METRICS ====================
 
@@ -648,271 +617,41 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         return self.monitoring_manager.monitor_containers_dashboard(containers, duration)
     
     def get_container_stats_once(self, container_name: str) -> bool:
-        """Get one-time container statistics snapshot (from dockerpilot-Lite)"""
-        with self._error_handler(f"get stats for {container_name}", container_name):
-            container = self.client.containers.get(container_name)
-            
-            # Get two measurements 1 second apart for accurate CPU calculation
-            self.console.print(f"[cyan]📊 Collecting statistics for {container_name}...[/cyan]")
-            
-            stats1 = container.stats(stream=False)
-            time.sleep(1)
-            stats2 = container.stats(stream=False)
-            
-            # Calculate CPU percentage
-            cpu_percent = 0.0
-            try:
-                cpu1_total = stats1['cpu_stats']['cpu_usage']['total_usage']
-                cpu1_system = stats1['cpu_stats'].get('system_cpu_usage', 0)
-                
-                cpu2_total = stats2['cpu_stats']['cpu_usage']['total_usage']
-                cpu2_system = stats2['cpu_stats'].get('system_cpu_usage', 0)
-                
-                cpu_delta = cpu2_total - cpu1_total
-                system_delta = cpu2_system - cpu1_system
-                
-                online_cpus = len(stats2['cpu_stats']['cpu_usage'].get('percpu_usage', [1]))
-                
-                if system_delta > 0 and cpu_delta >= 0:
-                    cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
-            except (KeyError, ZeroDivisionError) as e:
-                self.logger.warning(f"CPU calculation error: {e}")
-                cpu_percent = 0.0
-            
-            # Memory statistics
-            mem_usage = stats2['memory_stats'].get('usage', 0)
-            mem_limit = stats2['memory_stats'].get('limit', 1)
-            mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0
-            
-            # Network statistics
-            network_stats = stats2.get('networks', {})
-            rx_bytes = 0
-            tx_bytes = 0
-            for interface, net_data in network_stats.items():
-                rx_bytes += net_data.get('rx_bytes', 0)
-                tx_bytes += net_data.get('tx_bytes', 0)
-            
-            # Display results
-            self.console.print(f"\n[bold cyan]📊 Container Statistics: {container_name}[/bold cyan]")
-            self.console.print(f"[green]🖥️  CPU Usage: {cpu_percent:.2f}%[/green]")
-            self.console.print(f"[blue]💾 Memory: {mem_usage/(1024*1024):.2f} MB / {mem_limit/(1024*1024):.2f} MB ({mem_percent:.2f}%)[/blue]")
-            
-            if rx_bytes > 0 or tx_bytes > 0:
-                self.console.print(f"[magenta]🌐 Network RX: {rx_bytes/(1024*1024):.2f} MB, TX: {tx_bytes/(1024*1024):.2f} MB[/magenta]")
-            
-            # Process count
-            if 'pids_stats' in stats2:
-                pids = stats2['pids_stats'].get('current', 0)
-                self.console.print(f"[yellow]⚡ Processes: {pids}[/yellow]")
-            
-            return True
-        
-        return False
+        """Get one-time container statistics snapshot."""
+        if not self.monitoring_manager:
+            self.logger.error("Monitoring manager not initialized - Docker client not available")
+            return False
+        return self.monitoring_manager.get_container_stats_once(container_name)
     
     def monitor_container_live(self, container_name: str, duration: int = 30) -> bool:
-        """Live monitoring with screen clearing (from dockerpilot-Lite)"""
-        with self._error_handler(f"live monitor {container_name}", container_name):
-            container = self.client.containers.get(container_name)
-            
-            self.console.print(f"[cyan]Starting live monitoring for {container_name} ({duration}s)...[/cyan]")
-            self.console.print(f"[yellow]Press Ctrl+C to stop[/yellow]\n")
-            
-            stats_stream = container.stats(stream=True)
-            start_time = time.time()
-            prev_stats = None
-            
-            try:
-                for raw_stats in stats_stream:
-                    current_time = time.time()
-                    if current_time - start_time > duration:
-                        break
-                    
-                    try:
-                        # Parse stats data
-                        if isinstance(raw_stats, bytes):
-                            stats = json.loads(raw_stats.decode('utf-8'))
-                        elif isinstance(raw_stats, str):
-                            stats = json.loads(raw_stats)
-                        else:
-                            stats = raw_stats
-                        
-                        if not isinstance(stats, dict):
-                            time.sleep(1)
-                            continue
-                        
-                        # Calculate CPU if we have previous measurement
-                        cpu_percent = 0.0
-                        if prev_stats and isinstance(prev_stats, dict):
-                            try:
-                                cpu_stats = stats.get('cpu_stats', {})
-                                prev_cpu_stats = prev_stats.get('cpu_stats', {})
-                                
-                                if 'cpu_usage' in cpu_stats and 'cpu_usage' in prev_cpu_stats:
-                                    current_total = cpu_stats['cpu_usage'].get('total_usage', 0)
-                                    prev_total = prev_cpu_stats['cpu_usage'].get('total_usage', 0)
-                                    
-                                    current_system = cpu_stats.get('system_cpu_usage', 0)
-                                    prev_system = prev_cpu_stats.get('system_cpu_usage', 0)
-                                    
-                                    cpu_delta = current_total - prev_total
-                                    system_delta = current_system - prev_system
-                                    
-                                    online_cpus = len(cpu_stats['cpu_usage'].get('percpu_usage', [1]))
-                                    
-                                    if system_delta > 0 and cpu_delta >= 0:
-                                        cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
-                            except (KeyError, ZeroDivisionError, TypeError):
-                                cpu_percent = 0.0
-                        
-                        # Memory stats
-                        memory_stats = stats.get('memory_stats', {})
-                        mem_usage = memory_stats.get('usage', 0) / (1024*1024)
-                        mem_limit = memory_stats.get('limit', 1) / (1024*1024)
-                        mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0
-                        
-                        # Clear screen and display current stats
-                        os.system('clear' if os.name == 'posix' else 'cls')
-                        self.console.print(f"[bold cyan]📊 Live Monitoring: {container_name}[/bold cyan]")
-                        self.console.print(f"[green]🖥️  CPU: {cpu_percent:.2f}%[/green]")
-                        self.console.print(f"[blue]💾 RAM: {mem_usage:.1f}MB / {mem_limit:.1f}MB ({mem_percent:.1f}%)[/blue]")
-                        self.console.print(f"[yellow]⏱️  Time: {int(current_time - start_time)}/{duration}s[/yellow]")
-                        self.console.print(f"[dim]Press Ctrl+C to stop[/dim]")
-                        
-                        prev_stats = stats
-                        
-                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        self.logger.warning(f"Stats parsing error: {e}")
-                        continue
-                    except Exception as e:
-                        self.logger.warning(f"Stats processing error: {e}")
-                        continue
-                    
-                    time.sleep(1)
-                
-                self.console.print(f"\n[green]✅ Live monitoring completed[/green]")
-                return True
-                
-            except KeyboardInterrupt:
-                self.console.print(f"\n[yellow]⚠️ Monitoring interrupted by user[/yellow]")
-                return True
-        
-        return False
+        """Live container monitoring."""
+        if not self.monitoring_manager:
+            self.logger.error("Monitoring manager not initialized - Docker client not available")
+            return False
+        return self.monitoring_manager.monitor_container_live(container_name, duration)
     
     def stop_and_remove_container(self, container_name: str, timeout: int = 10) -> bool:
-        """Stop and remove container in one operation (from dockerpilot-Lite)"""
-        with self._error_handler(f"stop and remove {container_name}", container_name):
-            container = self.client.containers.get(container_name)
-            
-            self.console.print(f"[cyan]🛑 Stopping container {container_name}...[/cyan]")
-            if container.status == "running":
-                container.stop(timeout=timeout)
-                self.console.print(f"[green]✅ Container stopped[/green]")
-            else:
-                self.console.print(f"[yellow]ℹ️ Container was not running[/yellow]")
-            
-            self.console.print(f"[cyan]🗑️ Removing container {container_name}...[/cyan]")
-            container.remove()
-            self.console.print(f"[green]✅ Container {container_name} removed[/green]")
-            
-            self.logger.info(f"Container {container_name} stopped and removed")
-            return True
-        
-        return False
+        """Stop and remove a container in one operation."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
+        return self.container_manager.stop_and_remove_container(container_name, timeout)
     
     def exec_command_non_interactive(self, container_name: str, command: str) -> bool:
-        """Execute command in container non-interactively (from dockerpilot-Lite)"""
-        with self._error_handler(f"exec command in {container_name}", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status != 'running':
-                self.console.print(f"[red]❌ Container '{container_name}' is not running[/red]")
-                return False
-            
-            self.console.print(f"[cyan]⚙️ Executing: {command}[/cyan]")
-            exec_log = container.exec_run(command)
-            
-            output = exec_log.output.decode()
-            self.console.print(output)
-            
-            if exec_log.exit_code == 0:
-                self.console.print(f"[green]✅ Command executed successfully[/green]")
-                return True
-            else:
-                self.console.print(f"[yellow]⚠️ Command exited with code {exec_log.exit_code}[/yellow]")
-                return False
-        
-        return False
+        """Execute a command in a container non-interactively."""
+        if not self.container_manager:
+            self.logger.error("Container manager not initialized - Docker client not available")
+            return False
+        return self.container_manager.exec_command_non_interactive(container_name, command)
     
-    def health_check_standalone(self, port: int, endpoint: str = "/health", 
-                               timeout: int = 30, max_retries: int = 10) -> bool:
-        """Standalone health check menu (from dockerpilot-Lite)"""
-        url = f"http://localhost:{port}{endpoint}"
-        self.console.print(f"[cyan]🩺 Testing health check: {url}[/cyan]")
-        
-        for i in range(max_retries):
-            try:
-                response = requests.get(url, timeout=5)
-                if response.status_code == 200:
-                    self.console.print(f"[green]✅ Health check OK (attempt {i+1}/{max_retries})[/green]")
-                    self.console.print(f"[green]Response time: {response.elapsed.total_seconds():.2f}s[/green]")
-                    return True
-                else:
-                    self.console.print(f"[yellow]⚠️ Health check returned {response.status_code} (attempt {i+1}/{max_retries})[/yellow]")
-            except requests.exceptions.RequestException as e:
-                self.console.print(f"[yellow]⚠️ Health check failed (attempt {i+1}/{max_retries}): {e}[/yellow]")
-            
-            if i < max_retries - 1:
-                time.sleep(3)
-        
-        self.console.print(f"[red]❌ Health check failed after {max_retries} attempts[/red]")
-        return False
+    def health_check_standalone(self, port: int, endpoint: str = "/health", timeout: int = 30, max_retries: int = 10) -> bool:
+        """Run the standalone HTTP health check."""
+        return health_check_standalone_service(self.console, port, endpoint, timeout, max_retries)
 
     # ==================== ADVANCED DEPLOYMENT ====================
     def show_deployment_history(self, limit: int = 10):
-        """Show deployment history"""
-        history_file = "deployment_history.json"
-        
-        if not Path(history_file).exists():
-            self.console.print("[yellow]⚠️ No deployment history found[/yellow]")
-            return
-        
-        try:
-            with open(history_file, 'r') as f:
-                history_data = json.load(f)
-            
-            # Sort by timestamp, most recent first
-            history_data.sort(key=lambda x: x['timestamp'], reverse=True)
-            history_data = history_data[:limit]
-            
-            table = Table(title="🚀 Deployment History", show_header=True)
-            table.add_column("Date", style="cyan")
-            table.add_column("ID", style="blue")
-            table.add_column("Type", style="magenta")
-            table.add_column("Image", style="yellow")
-            table.add_column("Container", style="green")
-            table.add_column("Status", style="bold")
-            table.add_column("Duration", style="bright_blue")
-            
-            for record in history_data:
-                timestamp = datetime.fromisoformat(record['timestamp']).strftime('%Y-%m-%d %H:%M')
-                status = "[green]✅ Success[/green]" if record['success'] else "[red]❌ Failed[/red]"
-                duration = f"{record['duration_seconds']:.1f}s"
-                
-                table.add_row(
-                    timestamp,
-                    record['id'][:12],
-                    record['type'],
-                    record['image_tag'],
-                    record['container_name'],
-                    status,
-                    duration
-                )
-            
-            self.console.print(table)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load deployment history: {e}")
-            self.console.print(f"[red]❌ Error loading deployment history: {e}[/red]")
+        """Show deployment history."""
+        return show_deployment_history_service(self.console, self.logger, limit)
 
     # ==================== CLI INTERFACE ====================
 
