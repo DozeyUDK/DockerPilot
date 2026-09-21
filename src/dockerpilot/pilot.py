@@ -38,6 +38,8 @@ from .services.templates import create_production_checklist as create_production
 from .services.templates import generate_documentation as generate_documentation_from_templates
 from .services.pipeline import integrate_with_git as integrate_with_git_service
 from .services.pipeline import create_pipeline_config as create_pipeline_config_service
+from .services.configuration_archive import export_configuration as export_configuration_service
+from .services.configuration_archive import import_configuration as import_configuration_service
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -1556,55 +1558,12 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         return requirements_met
 
     def export_configuration(self, config_name: str = "docker-pilot-config.tar.gz") -> bool:
-        """Export all configuration files as a backup"""
-        try:
-            import tarfile
-            
-            config_files = [
-                "deployment.yml",
-                "alerts.yml", 
-                "integration-tests.yml",
-                "docker_pilot.log",
-                "docker_metrics.json",
-                "deployment_history.json"
-            ]
-            
-            with tarfile.open(config_name, "w:gz") as tar:
-                for config_file in config_files:
-                    if Path(config_file).exists():
-                        tar.add(config_file)
-                        self.console.print(f"[green]Added {config_file}[/green]")
-            
-            self.console.print(f"[bold green]Configuration exported to {config_name}[/bold green]")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Configuration export failed: {e}")
-            return False
+        """Export all configuration files as a backup."""
+        return export_configuration_service(self.console, self.logger, config_name)
 
     def import_configuration(self, config_archive: str) -> bool:
-        """Import configuration from backup archive"""
-        try:
-            import tarfile
-            
-            if not Path(config_archive).exists():
-                self.console.print(f"[red]Archive not found: {config_archive}[/red]")
-                return False
-            
-            with tarfile.open(config_archive, "r:gz") as tar:
-                tar.extractall(".")
-                self.console.print("[green]Configuration files imported[/green]")
-                
-                # List imported files
-                for member in tar.getmembers():
-                    if member.isfile():
-                        self.console.print(f"[cyan]Imported: {member.name}[/cyan]")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Configuration import failed: {e}")
-            return False
+        """Import configuration from backup archive."""
+        return import_configuration_service(self.console, self.logger, config_archive)
         
 
 def check_all_requirements():
