@@ -36,6 +36,8 @@ from .backup_restore import BackupRestoreMixin
 from .deployment_service import DeploymentServiceMixin
 from .services.templates import create_production_checklist as create_production_checklist_from_template
 from .services.templates import generate_documentation as generate_documentation_from_templates
+from .services.pipeline import integrate_with_git as integrate_with_git_service
+from .services.pipeline import create_pipeline_config as create_pipeline_config_service
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -1135,116 +1137,17 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
 # ==================== CI/CD PIPELINE INTEGRATION ====================
 
     def integrate_with_git(self, repo_path: str = ".") -> bool:
-        """Integrate with Git for automated deployments"""
-        try:
-            import git
-            repo = git.Repo(repo_path)
-            
-            # Get current branch and commit info
-            current_branch = repo.active_branch.name
-            commit_hash = repo.head.commit.hexsha[:8]
-            commit_message = repo.head.commit.message.strip()
-            
-            self.console.print(f"[cyan]Git Integration:[/cyan] {current_branch}@{commit_hash}")
-            self.console.print(f"[cyan]Latest commit:[/cyan] {commit_message}")
-            
-            return True
-        except ImportError:
-            self.console.print("[yellow]GitPython not installed. Run: pip install GitPython[/yellow]")
-            return False
-        except Exception as e:
-            self.logger.error(f"Git integration failed: {e}")
-            return False
+        """Integrate with Git for automated deployments."""
+        return integrate_with_git_service(self.console, self.logger, repo_path)
 
     def create_pipeline_config(self, pipeline_type: str = "github", output_path: str = None) -> bool:
-        """Generate CI/CD pipeline configuration files"""
-        
-        if pipeline_type.lower() == "github":
-            return self._create_github_actions_config(output_path)
-        elif pipeline_type.lower() == "gitlab":
-            return self._create_gitlab_ci_config(output_path)
-        elif pipeline_type.lower() == "jenkins":
-            return self._create_jenkins_config(output_path)
-        else:
-            self.console.print(f"[red]Unsupported pipeline type: {pipeline_type}[/red]")
-            return False
-
-    def _create_github_actions_config(self, output_path: str = None) -> bool:
-        """Create GitHub Actions workflow"""
-        if not output_path:
-            output_path = ".github/workflows"
-        
-        os.makedirs(output_path, exist_ok=True)
-        
-        # Load template from configs directory
-        template_path = Path(__file__).parent / "configs" / "github-actions.yml.template"
-        
-        try:
-            if not template_path.exists():
-                self.logger.error(f"Template file not found: {template_path}")
-                self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                return False
-            
-            with open(template_path, 'r') as f:
-                workflow_content = f.read()
-        
-            config_file = Path(output_path) / "docker-pilot.yml"
-            with open(config_file, 'w') as f:
-                f.write(workflow_content)
-            
-            self.console.print(f"[green]GitHub Actions workflow created: {config_file}[/green]")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to create GitHub Actions config: {e}")
-            return False
-
-    def _create_gitlab_ci_config(self, output_path: str = None) -> bool:
-        """Create GitLab CI configuration"""
-        # Load template from configs directory
-        template_path = Path(__file__).parent / "configs" / "gitlab-ci.yml.template"
-        
-        try:
-            if not template_path.exists():
-                self.logger.error(f"Template file not found: {template_path}")
-                self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                return False
-            
-            with open(template_path, 'r') as f:
-                config_content = f.read()
-            
-            config_file = ".gitlab-ci.yml" if not output_path else Path(output_path) / ".gitlab-ci.yml"
-            with open(config_file, 'w') as f:
-                f.write(config_content)
-            
-            self.console.print(f"[green]GitLab CI configuration created: {config_file}[/green]")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to create GitLab CI config: {e}")
-            return False
-
-    def _create_jenkins_config(self, output_path: str = None) -> bool:
-        """Create Jenkins pipeline configuration"""
-        # Load template from configs directory
-        template_path = Path(__file__).parent / "configs" / "jenkinsfile.template"
-        
-        try:
-            if not template_path.exists():
-                self.logger.error(f"Template file not found: {template_path}")
-                self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                return False
-            
-            with open(template_path, 'r') as f:
-                pipeline_content = f.read()
-            
-            config_file = "Jenkinsfile" if not output_path else Path(output_path) / "Jenkinsfile"
-            with open(config_file, 'w') as f:
-                f.write(pipeline_content)
-            
-            self.console.print(f"[green]Jenkins pipeline created: {config_file}[/green]")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to create Jenkins config: {e}")
-            return False
+        """Generate CI/CD pipeline configuration files."""
+        return create_pipeline_config_service(
+            self.console,
+            self.logger,
+            pipeline_type,
+            output_path,
+        )
 
     def run_integration_tests(self, test_config_path: str = "integration-tests.yml") -> bool:
         """Run comprehensive integration tests"""
