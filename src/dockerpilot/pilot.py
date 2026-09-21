@@ -40,6 +40,17 @@ from .services.pipeline import integrate_with_git as integrate_with_git_service
 from .services.pipeline import create_pipeline_config as create_pipeline_config_service
 from .services.configuration_archive import export_configuration as export_configuration_service
 from .services.configuration_archive import import_configuration as import_configuration_service
+from .services.system_validation import validate_system_requirements as validate_system_requirements_service
+from .services.integration_testing import (
+    run_integration_tests as run_integration_tests_service,
+    run_single_integration_test as run_single_integration_test_service,
+    run_http_test as run_http_test_service,
+    run_database_test as run_database_test_service,
+    run_custom_test as run_custom_test_service,
+    generate_test_report as generate_test_report_service,
+    save_test_report as save_test_report_service,
+)
+from .services.alerts import AlertService
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -60,6 +71,7 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         
         # Setup logging
         self._setup_logging(log_level)
+        self.alert_service = AlertService(self.console, self.logger)
         
         # Load configuration
         if config_file and Path(config_file).exists():
@@ -1152,328 +1164,63 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         )
 
     def run_integration_tests(self, test_config_path: str = "integration-tests.yml") -> bool:
-        """Run comprehensive integration tests"""
-        self.console.print("[cyan]Running integration tests...[/cyan]")
-        
-        try:
-            if Path(test_config_path).exists():
-                with open(test_config_path, 'r') as f:
-                    test_config = yaml.safe_load(f)
-            else:
-                # Load default test configuration from template
-                template_path = Path(__file__).parent / "configs" / "integration-tests.yml.template"
-                
-                if template_path.exists():
-                    with open(template_path, 'r') as f:
-                        test_config = yaml.safe_load(f)
-                else:
-                    # Fallback to default test configuration
-                    test_config = {
-                        'tests': [
-                            {
-                                'name': 'Health Check',
-                                'type': 'http',
-                                'url': 'http://localhost:8080/health',
-                                'expected_status': 200,
-                                'timeout': 5
-                            },
-                            {
-                                'name': 'API Endpoint',
-                                'type': 'http',
-                                'url': 'http://localhost:8080/api/status',
-                                'expected_status': 200,
-                                'timeout': 10
-                            }
-                        ]
-                    }
-            
-            test_results = []
-            
-            for test in test_config.get('tests', []):
-                result = self._run_single_integration_test(test)
-                test_results.append(result)
-            
-            # Generate test report
-            self._generate_test_report(test_results)
-            
-            # Return True if all tests passed
-            return all(result['passed'] for result in test_results)
-            
-        except Exception as e:
-            self.logger.error(f"Integration tests failed: {e}")
-            return False
+        """Run comprehensive integration tests."""
+        return run_integration_tests_service(self.console, self.logger, test_config_path)
 
     def _run_single_integration_test(self, test_config: dict) -> dict:
-        """Run a single integration test"""
-        test_name = test_config.get('name', 'Unknown Test')
-        test_type = test_config.get('type', 'http')
-        
-        start_time = time.time()
-        
-        try:
-            if test_type == 'http':
-                return self._run_http_test(test_config, start_time)
-            elif test_type == 'database':
-                return self._run_database_test(test_config, start_time)
-            elif test_type == 'custom':
-                return self._run_custom_test(test_config, start_time)
-            else:
-                return {
-                    'name': test_name,
-                    'passed': False,
-                    'duration': 0,
-                    'error': f'Unknown test type: {test_type}'
-                }
-        except Exception as e:
-            return {
-                'name': test_name,
-                'passed': False,
-                'duration': time.time() - start_time,
-                'error': str(e)
-            }
+        """Run a single integration test."""
+        return run_single_integration_test_service(test_config)
 
     def _run_http_test(self, test_config: dict, start_time: float) -> dict:
-        """Run HTTP-based integration test"""
-        url = test_config['url']
-        expected_status = test_config.get('expected_status', 200)
-        timeout = test_config.get('timeout', 5)
-        method = test_config.get('method', 'GET').upper()
-        headers = test_config.get('headers', {})
-        data = test_config.get('data')
-        
-        try:
-            if method == 'GET':
-                response = requests.get(url, headers=headers, timeout=timeout)
-            elif method == 'POST':
-                response = requests.post(url, headers=headers, json=data, timeout=timeout)
-            else:
-                response = requests.request(method, url, headers=headers, json=data, timeout=timeout)
-            
-            passed = response.status_code == expected_status
-            
-            return {
-                'name': test_config.get('name', 'HTTP Test'),
-                'passed': passed,
-                'duration': time.time() - start_time,
-                'status_code': response.status_code,
-                'expected_status': expected_status,
-                'response_time': response.elapsed.total_seconds()
-            }
-            
-        except requests.exceptions.RequestException as e:
-            return {
-                'name': test_config.get('name', 'HTTP Test'),
-                'passed': False,
-                'duration': time.time() - start_time,
-                'error': str(e)
-            }
+        """Run HTTP-based integration test."""
+        return run_http_test_service(test_config, start_time)
 
     def _run_database_test(self, test_config: dict, start_time: float) -> dict:
-        """Run database connectivity test"""
-        # This would require database-specific libraries
-        # For now, return a placeholder implementation
-        return {
-            'name': test_config.get('name', 'Database Test'),
-            'passed': True,  # Placeholder
-            'duration': time.time() - start_time,
-            'note': 'Database testing requires specific database drivers'
-        }
+        """Run database connectivity test."""
+        return run_database_test_service(test_config, start_time)
 
     def _run_custom_test(self, test_config: dict, start_time: float) -> dict:
-        """Run custom test script"""
-        script_path = test_config.get('script')
-        if not script_path or not Path(script_path).exists():
-            return {
-                'name': test_config.get('name', 'Custom Test'),
-                'passed': False,
-                'duration': time.time() - start_time,
-                'error': 'Custom test script not found'
-            }
-        
-        try:
-            import subprocess
-            result = subprocess.run(
-                ['python', script_path],
-                capture_output=True,
-                text=True,
-                timeout=test_config.get('timeout', 30)
-            )
-            
-            return {
-                'name': test_config.get('name', 'Custom Test'),
-                'passed': result.returncode == 0,
-                'duration': time.time() - start_time,
-                'stdout': result.stdout,
-                'stderr': result.stderr
-            }
-            
-        except subprocess.TimeoutExpired:
-            return {
-                'name': test_config.get('name', 'Custom Test'),
-                'passed': False,
-                'duration': time.time() - start_time,
-                'error': 'Test script timed out'
-            }
+        """Run custom test script."""
+        return run_custom_test_service(test_config, start_time)
 
     def _generate_test_report(self, test_results: List[dict]):
-        """Generate comprehensive test report"""
-        total_tests = len(test_results)
-        passed_tests = sum(1 for result in test_results if result['passed'])
-        failed_tests = total_tests - passed_tests
-        
-        # Create test report table
-        table = Table(title="Integration Test Results", show_header=True)
-        table.add_column("Test Name", style="cyan")
-        table.add_column("Status", style="bold")
-        table.add_column("Duration", style="blue")
-        table.add_column("Details", style="yellow")
-        
-        for result in test_results:
-            status = "[green]PASS[/green]" if result['passed'] else "[red]FAIL[/red]"
-            duration = f"{result['duration']:.2f}s"
-            
-            details = ""
-            if 'status_code' in result:
-                details = f"HTTP {result['status_code']}"
-            if 'error' in result:
-                details = result['error'][:50] + "..." if len(result['error']) > 50 else result['error']
-            
-            table.add_row(result['name'], status, duration, details)
-        
-        self.console.print(table)
-        
-        # Summary
-        summary_color = "green" if failed_tests == 0 else "red"
-        summary = f"[{summary_color}]{passed_tests}/{total_tests} tests passed[/{summary_color}]"
-        self.console.print(Panel(summary, title="Test Summary"))
-        
-        # Save detailed report
-        self._save_test_report(test_results, passed_tests, failed_tests)
+        """Generate comprehensive test report."""
+        return generate_test_report_service(self.console, self.logger, test_results)
 
     def _save_test_report(self, test_results: List[dict], passed: int, failed: int):
-        """Save test report to file"""
-        try:
-            report_data = {
-                'timestamp': datetime.now().isoformat(),
-                'summary': {
-                    'total': len(test_results),
-                    'passed': passed,
-                    'failed': failed,
-                    'success_rate': (passed / len(test_results)) * 100 if test_results else 0
-                },
-                'tests': test_results
-            }
-            
-            with open('integration-test-report.json', 'w') as f:
-                json.dump(report_data, f, indent=2)
-                
-            self.logger.info("Integration test report saved to integration-test-report.json")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to save test report: {e}")
-        return True
+        """Save test report to file."""
+        return save_test_report_service(self.logger, test_results, passed, failed)
 
     def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml") -> bool:
-        """Setup monitoring and alerting configuration from template"""
-        
-        try:
-            if not Path(alert_config_path).exists():
-                # Load template from configs directory
-                template_path = Path(__file__).parent / "configs" / "alerts.yml.template"
-                
-                if not template_path.exists():
-                    self.logger.error(f"Template file not found: {template_path}")
-                    self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                    return False
-                
-                with open(template_path, 'r', encoding='utf-8') as f:
-                    template_content = f.read()
-                
-                with open(alert_config_path, 'w', encoding='utf-8') as f:
-                    f.write(template_content)
-                
-                self.console.print(f"[green]Alert configuration template created: {alert_config_path}[/green]")
-            else:
-                self.console.print(f"[yellow]Alert configuration already exists: {alert_config_path}[/yellow]")
-            
-            # Initialize alert monitoring
-            return self._initialize_alert_monitoring(alert_config_path)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to setup monitoring alerts: {e}")
-            return False
+        """Setup monitoring and alerting configuration from template."""
+        result = self.alert_service.setup_monitoring_alerts(alert_config_path)
+        self.alert_rules = self.alert_service.alert_rules
+        self.notification_channels = self.alert_service.notification_channels
+        return result
 
     def _initialize_alert_monitoring(self, alert_config_path: str) -> bool:
-        """Initialize alert monitoring system"""
-        try:
-            with open(alert_config_path, 'r') as f:
-                alert_config = yaml.safe_load(f)
-            
-            self.alert_rules = alert_config.get('alerts', [])
-            self.notification_channels = alert_config.get('notification_channels', [])
-            
-            self.console.print(f"[green]Initialized {len(self.alert_rules)} alert rules[/green]")
-            self.console.print(f"[green]Configured {len(self.notification_channels)} notification channels[/green]")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize alert monitoring: {e}")
-            return False
+        """Initialize alert monitoring system."""
+        result = self.alert_service.initialize_alert_monitoring(alert_config_path)
+        self.alert_rules = self.alert_service.alert_rules
+        self.notification_channels = self.alert_service.notification_channels
+        return result
 
     def check_alerts(self, container_stats: ContainerStats, container_name: str):
-        """Check if any alerts should be triggered"""
-        if not hasattr(self, 'alert_rules'):
+        """Check if any alerts should be triggered."""
+        if not hasattr(self, "alert_rules"):
             return
-        
-        current_time = datetime.now()
-        
-        for rule in self.alert_rules:
-            condition = rule['condition']
-            
-            # Simple condition evaluation (would need more sophisticated parsing in production)
-            if 'cpu_percent >' in condition:
-                threshold = float(condition.split('>')[-1].strip())
-                if container_stats.cpu_percent > threshold:
-                    self._trigger_alert(rule, container_name, f"CPU: {container_stats.cpu_percent:.1f}%")
-            
-            elif 'memory_percent >' in condition:
-                threshold = float(condition.split('>')[-1].strip())
-                if container_stats.memory_percent > threshold:
-                    self._trigger_alert(rule, container_name, f"Memory: {container_stats.memory_percent:.1f}%")
+        self.alert_service.alert_rules = self.alert_rules
+        self.alert_service.notification_channels = getattr(self, "notification_channels", [])
+        return self.alert_service.check_alerts(container_stats, container_name)
 
     def _trigger_alert(self, rule: dict, container_name: str, details: str):
-        """Trigger an alert notification"""
-        alert_message = f"ALERT: {rule['name']} - Container: {container_name} - {details} - {rule['message']}"
-        
-        self.logger.warning(f"Alert triggered: {alert_message}")
-        self.console.print(f"[red]🚨 ALERT: {rule['name']} - {container_name}[/red]")
-        
-        # Send notifications
-        for channel in getattr(self, 'notification_channels', []):
-            self._send_notification(channel, alert_message)
+        """Trigger an alert notification."""
+        self.alert_service.notification_channels = getattr(self, "notification_channels", [])
+        return self.alert_service.trigger_alert(rule, container_name, details)
 
     def _send_notification(self, channel: dict, message: str):
-        """Send notification through configured channel"""
-        try:
-            if channel['type'] == 'slack':
-                # Slack webhook notification
-                webhook_url = channel.get('webhook_url')
-                if webhook_url:
-                    payload = {
-                        'text': message,
-                        'channel': channel.get('channel', '#general'),
-                        'username': 'Docker Pilot',
-                        'icon_emoji': ':warning:'
-                    }
-                    requests.post(webhook_url, json=payload, timeout=5)
-            
-            elif channel['type'] == 'email':
-                # Email notification (would require email libraries)
-                self.logger.info(f"Email notification would be sent: {message}")
-                
-        except Exception as e:
-            self.logger.error(f"Failed to send notification: {e}")
+        """Send notification through configured channel."""
+        return self.alert_service.send_notification(channel, message)
 
     def create_production_checklist(self, output_file: str = "production-checklist.md") -> bool:
         """Generate production deployment checklist from template."""
@@ -1492,70 +1239,8 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         )
 
     def validate_system_requirements(self) -> bool:
-        """Validate system requirements and dependencies"""
-        self.console.print("[cyan]Validating system requirements...[/cyan]")
-        
-        requirements_met = True
-        
-        # Check Python version
-        python_version = sys.version_info
-        if python_version < (3, 9):
-            self.console.print("[red]❌ Python 3.9+ required[/red]")
-            requirements_met = False
-        else:
-            self.console.print(f"[green]✓ Python {python_version.major}.{python_version.minor}[/green]")
-        
-        # Check Docker connectivity
-        try:
-            docker_version = self.client.version()
-            self.console.print(f"[green]✓ Docker {docker_version['Version']}[/green]")
-        except Exception as e:
-            self.console.print(f"[red]❌ Docker connection failed: {e}[/red]")
-            requirements_met = False
-        
-        # Check required modules
-        required_modules = [
-            'docker', 'yaml', 'requests', 'rich', 'pathlib'
-        ]
-        
-        for module in required_modules:
-            try:
-                __import__(module)
-                self.console.print(f"[green]✓ Module {module}[/green]")
-            except ImportError:
-                self.console.print(f"[red]❌ Module {module} not found[/red]")
-                requirements_met = False
-        
-        # Check disk space
-        try:
-            import shutil
-            disk_usage = shutil.disk_usage('.')
-            free_gb = disk_usage.free / (1024**3)
-            
-            if free_gb < 1:  # Require at least 1GB free space
-                self.console.print(f"[red]❌ Insufficient disk space: {free_gb:.1f}GB[/red]")
-                requirements_met = False
-            else:
-                self.console.print(f"[green]✓ Disk space: {free_gb:.1f}GB available[/green]")
-                
-        except Exception:
-            self.console.print("[yellow]⚠️ Could not check disk space[/yellow]")
-        
-        # Check Docker daemon permissions
-        try:
-            self.client.ping()
-            self.console.print("[green]✓ Docker daemon accessible[/green]")
-        except Exception:
-            self.console.print("[red]❌ Docker daemon permission denied[/red]")
-            self.console.print("[yellow]Try: sudo usermod -aG docker $USER[/yellow]")
-            requirements_met = False
-        
-        if requirements_met:
-            self.console.print("\n[bold green]✅ All system requirements met![/bold green]")
-        else:
-            self.console.print("\n[bold red]❌ Some requirements not met. Please fix and retry.[/bold red]")
-        
-        return requirements_met
+        """Validate system requirements and dependencies."""
+        return validate_system_requirements_service(self.console, self.client)
 
     def export_configuration(self, config_name: str = "docker-pilot-config.tar.gz") -> bool:
         """Export all configuration files as a backup."""
