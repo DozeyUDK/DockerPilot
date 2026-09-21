@@ -19,7 +19,7 @@ class AlertService:
         self.alert_rules: List[dict] = []
         self.notification_channels: List[dict] = []
 
-    def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml") -> bool:
+    def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml", *, initialize=None) -> bool:
         try:
             if not Path(alert_config_path).exists():
                 template_path = Path(__file__).resolve().parents[1] / "configs" / "alerts.yml.template"
@@ -34,7 +34,8 @@ class AlertService:
                 self.console.print(f"[green]Alert configuration template created: {alert_config_path}[/green]")
             else:
                 self.console.print(f"[yellow]Alert configuration already exists: {alert_config_path}[/yellow]")
-            return self.initialize_alert_monitoring(alert_config_path)
+            initializer = initialize or self.initialize_alert_monitoring
+            return initializer(alert_config_path)
         except Exception as exc:
             self.logger.error(f"Failed to setup monitoring alerts: {exc}")
             return False
@@ -52,25 +53,27 @@ class AlertService:
             self.logger.error(f"Failed to initialize alert monitoring: {exc}")
             return False
 
-    def check_alerts(self, container_stats: Any, container_name: str) -> None:
+    def check_alerts(self, container_stats: Any, container_name: str, *, trigger=None) -> None:
         _ = datetime.now()  # Preserve the current evaluation-time side effect/shape.
+        trigger = trigger or self.trigger_alert
         for rule in self.alert_rules:
             condition = rule["condition"]
             if "cpu_percent >" in condition:
                 threshold = float(condition.split(">")[-1].strip())
                 if container_stats.cpu_percent > threshold:
-                    self.trigger_alert(rule, container_name, f"CPU: {container_stats.cpu_percent:.1f}%")
+                    trigger(rule, container_name, f"CPU: {container_stats.cpu_percent:.1f}%")
             elif "memory_percent >" in condition:
                 threshold = float(condition.split(">")[-1].strip())
                 if container_stats.memory_percent > threshold:
-                    self.trigger_alert(rule, container_name, f"Memory: {container_stats.memory_percent:.1f}%")
+                    trigger(rule, container_name, f"Memory: {container_stats.memory_percent:.1f}%")
 
-    def trigger_alert(self, rule: dict, container_name: str, details: str) -> None:
+    def trigger_alert(self, rule: dict, container_name: str, details: str, *, send_notification=None) -> None:
         alert_message = f"ALERT: {rule['name']} - Container: {container_name} - {details} - {rule['message']}"
         self.logger.warning(f"Alert triggered: {alert_message}")
         self.console.print(f"[red]🚨 ALERT: {rule['name']} - {container_name}[/red]")
+        sender = send_notification or self.send_notification
         for channel in self.notification_channels:
-            self.send_notification(channel, alert_message)
+            sender(channel, alert_message)
 
     def send_notification(self, channel: dict, message: str) -> None:
         try:

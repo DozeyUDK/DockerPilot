@@ -2,32 +2,17 @@
 # -*- coding: utf-8 -*-
 
 
-import docker
 import argparse
-import yaml
-import json
-import os
-import sys
-import time
-import requests
-import logging
 import signal
-import subprocess
-import threading
-from datetime import datetime, timedelta
-from pathlib import Path
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn, TimeElapsedColumn
-from rich.prompt import Prompt, Confirm
-from rich.panel import Panel
-from rich.live import Live
+import sys
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Any, List, Optional
+
+from rich.console import Console
 
 # Import modules
-from .models import LogLevel, DeploymentConfig, ContainerStats
+from .models import LogLevel, ContainerStats
 from .container_manager import ContainerManager
 from .image_manager import ImageManager
 from .monitoring import MonitoringManager
@@ -37,7 +22,9 @@ from .deployment_service import DeploymentServiceMixin
 from .services.templates import create_production_checklist as create_production_checklist_from_template
 from .services.templates import generate_documentation as generate_documentation_from_templates
 from .services.pipeline import integrate_with_git as integrate_with_git_service
-from .services.pipeline import create_pipeline_config as create_pipeline_config_service
+from .services.pipeline import _create_github_actions_config as create_github_actions_config_service
+from .services.pipeline import _create_gitlab_ci_config as create_gitlab_ci_config_service
+from .services.pipeline import _create_jenkins_config as create_jenkins_config_service
 from .services.configuration_archive import export_configuration as export_configuration_service
 from .services.configuration_archive import import_configuration as import_configuration_service
 from .services.system_validation import validate_system_requirements as validate_system_requirements_service
@@ -52,7 +39,25 @@ from .services.integration_testing import (
 )
 from .services.alerts import AlertService
 from .services.health_checks import health_check_standalone as health_check_standalone_service
+from .services.runtime_support import (
+    check_cancel_flag as check_cancel_flag_service,
+    load_health_check_defaults as load_health_check_defaults_service,
+    get_database_config as get_database_config_service,
+    get_database_name as get_database_name_service,
+    update_progress as update_progress_service,
+    show_loading as show_loading_service,
+    loading_context,
+    error_context,
+    parse_multi_target as parse_multi_target_service,
+)
 from .deployment_history import show_deployment_history as show_deployment_history_service
+from .services.bootstrap import (
+    configure_console_streams as configure_console_streams_service,
+    show_banner as show_banner_service,
+    setup_logging as setup_logging_service,
+    load_config as load_config_service,
+    initialize_docker_client as initialize_docker_client_service,
+)
 
 class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     """Enhanced Docker container management tool with advanced deployment capabilities."""
@@ -109,345 +114,68 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
         self.logger.info("Docker Pilot Enhanced initialized successfully")
     
     def _show_banner(self):
-        """Display ASCII banner with application information"""
-        banner = r"""
-  _____             _             _____ _ _       _   
- |  __ \           | |           |  __ (_) |     | |  
- | |  | | ___   ___| | _____ _ __| |__) || | ___ | |_ 
- | |  | |/ _ \ / __| |/ / _ \ '__|  ___/ | |/ _ \| __|
- | |__| | (_) | (__|   <  __/ |  | |   | | | (_) | |_ 
- |_____/ \___/ \___|_|\_\___|_|  |_|   |_|_|\___/ \__|
-                                                      
-         by Dozey                                             
-    """
-        
-
-        self.console.print(Panel(banner, title="[bold blue]Docker Managing Tool[/bold blue]", 
-                                title_align="center", border_style="blue"))
-        self.console.print(f"[dim]Author: dozey | Version: Enhanced[/dim]\n")
+        """Display ASCII banner with application information."""
+        return show_banner_service(self.console)
 
     def _configure_console_streams(self):
         """Improve Windows console compatibility for Unicode-rich output."""
-        if os.name != 'nt':
-            return
-
-        for stream in (sys.stdout, sys.stderr):
-            if hasattr(stream, "reconfigure"):
-                try:
-                    stream.reconfigure(encoding="utf-8", errors="replace")
-                except Exception:
-                    pass
+        return configure_console_streams_service()
     
     def _parse_multi_target(self, target_string: str) -> List[str]:
-        """Parse comma-separated list of containers/images.
-        
-        Args:
-            target_string: String with comma-separated container/image names or IDs
-            
-        Returns:
-            List of container/image names/IDs
-        """
-        if not target_string:
-            return []
-        
-        # Split by comma and strip whitespace
-        targets = [t.strip() for t in target_string.split(',') if t.strip()]
-        return targets
+        """Parse comma-separated container/image targets."""
+        return parse_multi_target_service(target_string)
 
     def _setup_logging(self, level: LogLevel):
-        """Setup enhanced logging with rotation"""
-        log_format = '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
-        
-        # File handler with rotation
-        from logging.handlers import RotatingFileHandler
-        file_handler = RotatingFileHandler(
-            self.log_file, maxBytes=10*1024*1024, backupCount=5
-        )
-        file_handler.setFormatter(logging.Formatter(log_format))
-        
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-        
-        # Setup logger
-        self.logger = logging.getLogger('DockerPilot')
-        self.logger.setLevel(getattr(logging, level.value))
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
+        """Setup enhanced logging with rotation."""
+        self.logger = setup_logging_service(self.log_file, level)
+        return self.logger
 
     def _load_config(self, config_file: str):
-        """Load configuration from YAML file"""
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
-            self.logger.info(f"Configuration loaded from {config_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to load config: {e}")
-            self.config = {}
+        """Load configuration from YAML file."""
+        self.config = load_config_service(self.logger, config_file)
+        return self.config
     
     def _check_cancel_flag(self, container_name: str = None) -> bool:
-        """Check if deployment should be cancelled
-        
-        Args:
-            container_name: Container being deployed (uses self._current_deployment_container if not provided)
-        
-        Returns:
-            bool: True if deployment should be cancelled
-        """
-        if not container_name:
-            container_name = self._current_deployment_container
-        
-        if not container_name:
-            return False
-        
-        # Look for cancel flag in multiple locations
-        cancel_flag_locations = [
-            Path.cwd() / f'cancel_{container_name}.flag',
-            Path.home() / 'DockerPilot' / f'cancel_{container_name}.flag',
-            Path.home() / 'DockerPilot' / '.dockerpilot_extras' / f'cancel_{container_name}.flag',
-        ]
-        
-        for flag_path in cancel_flag_locations:
-            if flag_path.exists():
-                self.logger.warning(f"Cancel flag detected for {container_name} at {flag_path}")
-                # Remove flag after detecting
-                try:
-                    flag_path.unlink()
-                except:
-                    pass
-                return True
-        
-        return False
+        """Check if deployment should be cancelled."""
+        target = container_name or self._current_deployment_container
+        return check_cancel_flag_service(self.logger, target)
     
     def _load_health_check_defaults(self) -> dict:
-        """Load default health check configuration from JSON file
-        
-        Returns cached defaults or loads from health-checks-defaults.json
-        """
-        if self._health_check_defaults is not None:
-            return self._health_check_defaults
-        
-        try:
-            defaults_path = Path(__file__).parent / "configs" / "health-checks-defaults.json"
-            
-            if defaults_path.exists():
-                with open(defaults_path, 'r', encoding='utf-8') as f:
-                    self._health_check_defaults = json.load(f)
-                self.logger.debug(f"Loaded health check defaults from {defaults_path}")
-            else:
-                # Fallback to minimal defaults if file doesn't exist
-                self.logger.warning(f"Health check defaults file not found: {defaults_path}")
-                self._health_check_defaults = {
-                    'health_checks': {
-                        'non_http_services': ['ssh', 'redis', 'mysql', 'postgresql', 'mongodb'],
-                        'endpoint_mappings': {},
-                        'default_endpoint': '/health'
-                    }
-                }
-        except Exception as e:
-            self.logger.error(f"Failed to load health check defaults: {e}")
-            # Fallback to minimal defaults
-            self._health_check_defaults = {
-                'health_checks': {
-                    'non_http_services': ['ssh', 'redis', 'mysql', 'postgresql', 'mongodb'],
-                    'endpoint_mappings': {},
-                    'default_endpoint': '/health'
-                }
-            }
-        
+        """Load and cache default health-check configuration."""
+        if self._health_check_defaults is None:
+            self._health_check_defaults = load_health_check_defaults_service(self.logger)
         return self._health_check_defaults
     
     def _get_database_config(self, image_tag: str) -> dict:
-        """Get database-specific configuration based on image tag.
-        
-        Args:
-            image_tag: Docker image tag to check
-            
-        Returns:
-            dict: Database configuration or empty dict if not a database
-        """
-        defaults = self._load_health_check_defaults()
-        database_services = defaults.get('database_services', {})
-        
-        image_lower = image_tag.lower()
-        
-        # Check each database service pattern (longest match first for specificity)
-        # Sort by length descending to match more specific names first
-        sorted_db_names = sorted(database_services.keys(), key=len, reverse=True)
-        
-        for db_name in sorted_db_names:
-            if db_name in image_lower:
-                self.logger.debug(f"Matched database service: {db_name} for image {image_tag}")
-                return database_services[db_name]
-        
-        # Return default/empty config for non-database services
-        return {}
+        """Get database-specific configuration based on image tag."""
+        return get_database_config_service(self._load_health_check_defaults(), image_tag, self.logger)
     
     def _get_database_name(self, image_tag: str) -> str:
-        """Get database service name from image tag.
-        
-        Args:
-            image_tag: Docker image tag to check
-            
-        Returns:
-            str: Database name or empty string if not a database
-        """
-        defaults = self._load_health_check_defaults()
-        database_services = defaults.get('database_services', {})
-        
-        image_lower = image_tag.lower()
-        
-        # Check each database service pattern (longest match first)
-        sorted_db_names = sorted(database_services.keys(), key=len, reverse=True)
-        
-        for db_name in sorted_db_names:
-            if db_name in image_lower:
-                return db_name
-        
-        return ""
+        """Get database service name from image tag."""
+        return get_database_name_service(self._load_health_check_defaults(), image_tag)
     
     def _is_database_service(self, image_tag: str) -> bool:
-        """Check if image tag represents a database service.
-        
-        Args:
-            image_tag: Docker image tag to check
-            
-        Returns:
-            bool: True if it's a database service
-        """
-        db_config = self._get_database_config(image_tag)
-        return len(db_config) > 0
+        """Check if image tag represents a database service."""
+        return bool(self._get_database_config(image_tag))
     
     def _init_docker_client(self, max_retries: int = 3):
-        """Initialize Docker client with retry logic
-        
-        Returns True if client initialized successfully, False otherwise.
-        In web interface context, does not exit on failure.
-        """
-        for attempt in range(max_retries):
-            try:
-                # Prefer Docker CLI "current context" host if available.
-                # This avoids mismatches where `docker ps` works (rootless/custom socket)
-                # but docker-py defaults to /var/run/docker.sock.
-                base_url = None
-                try:
-                    import subprocess
-                    context = subprocess.check_output(
-                        ["docker", "context", "show"],
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                        timeout=3,
-                    ).strip()
-                    if context:
-                        # Get docker endpoint host for the active context
-                        inspected = subprocess.check_output(
-                            ["docker", "context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
-                            stderr=subprocess.DEVNULL,
-                            text=True,
-                            timeout=3,
-                        ).strip()
-                        if inspected:
-                            import json as _json
-                            try:
-                                base_url = _json.loads(inspected)
-                            except Exception:
-                                base_url = inspected.strip('"')
-                except Exception:
-                    base_url = None
-
-                if base_url:
-                    self.client = docker.DockerClient(base_url=base_url)
-                else:
-                    self.client = docker.from_env()
-                # Test connection
-                self.client.ping()
-                if hasattr(self, 'logger') and self.logger:
-                    self.logger.info(f"Docker client connected successfully (base_url={getattr(self.client, 'api', None) and getattr(self.client.api, 'base_url', None)})")
-                return True
-            except Exception as e:
-                # Log the actual error for debugging
-                error_msg = str(e)
-                error_type = type(e).__name__
-                if hasattr(self, 'logger') and self.logger:
-                    self.logger.warning(f"Docker connection attempt {attempt + 1} failed ({error_type}): {error_msg}")
-                else:
-                    # Fallback to print if logger not available
-                    print(f"WARNING: Docker connection attempt {attempt + 1} failed ({error_type}): {error_msg}")
-                
-                if attempt == max_retries - 1:
-                    if hasattr(self, 'logger') and self.logger:
-                        self.logger.error(f"Failed to connect to Docker daemon after {max_retries} attempts ({error_type}): {error_msg}")
-                    else:
-                        print(f"ERROR: Failed to connect to Docker daemon after {max_retries} attempts ({error_type}): {error_msg}")
-                    
-                    if hasattr(self, 'console') and self.console:
-                        self.console.print(f"[bold red]❌ Cannot connect to Docker daemon![/bold red]")
-                    self.client = None
-                    # Don't exit here - let the calling code decide (run_cli() or web interface)
-                    return False
-                time.sleep(2)
-        return False
+        """Initialize Docker client with retry logic."""
+        self.client = initialize_docker_client_service(self.console, self.logger, max_retries)
+        return self.client is not None
     
     def _update_progress(self, stage: str, progress: int, message: str):
-        """Update progress if callback is available
-        
-        Args:
-            stage: Current stage name (e.g., 'backup', 'deploy', 'health_check')
-            progress: Progress percentage (0-100)
-            message: Human-readable message
-        """
-        if self._progress_callback:
-            try:
-                self._progress_callback(stage, progress, message)
-            except Exception as e:
-                if hasattr(self, 'logger') and self.logger:
-                    self.logger.debug(f"Progress callback error: {e}")
+        """Update progress if a callback is available."""
+        return update_progress_service(self._progress_callback, self.logger, stage, progress, message)
     
-    def _show_loading(self, message: str = "Processing", stop_event: threading.Event = None):
-        """Show animated loading dots while operation is in progress
-        
-        Args:
-            message: Message to display before dots
-            stop_event: Threading event to stop the animation
-        """
-        dots = ['.', '..', '...', '....']
-        idx = 0
-        while stop_event is None or not stop_event.is_set():
-            # Print loading message with animated dots
-            sys.stdout.write(f'\r{message}{dots[idx % len(dots)]}')
-            sys.stdout.flush()
-            idx += 1
-            time.sleep(0.5)  # Update every 0.5 seconds
-        
-        # Clear the line when done
-        sys.stdout.write('\r' + ' ' * (len(message) + 4) + '\r')
-        sys.stdout.flush()
+    def _show_loading(self, message: str = "Processing", stop_event=None):
+        """Show animated loading dots while an operation is in progress."""
+        return show_loading_service(message, stop_event)
     
     @contextmanager
     def _with_loading(self, message: str = "Processing"):
-        """Context manager to show loading indicator during long operations
-        
-        Usage:
-            with self._with_loading("Backing up data"):
-                # Long operation here
-                pass
-        """
-        stop_event = threading.Event()
-        loading_thread = threading.Thread(
-            target=self._show_loading,
-            args=(message, stop_event),
-            daemon=True
-        )
-        loading_thread.start()
-        
-        try:
+        """Compatibility context manager for the loading indicator."""
+        with loading_context(message):
             yield
-        finally:
-            stop_event.set()
-            loading_thread.join(timeout=1.0)  # Wait max 1 second for thread to finish
-            # Clear the loading line
-            sys.stdout.write('\r' + ' ' * (len(message) + 4) + '\r')
-            sys.stdout.flush()
 
     def _signal_handler(self, signum, frame):
         """Graceful shutdown handler"""
@@ -457,25 +185,9 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
 
     @contextmanager
     def _error_handler(self, operation: str, container_name: str = None):
-        """Enhanced error handling context manager"""
-        try:
+        """Compatibility context manager for shared operation error handling."""
+        with error_context(self.console, self.logger, operation, container_name):
             yield
-        except docker.errors.NotFound as e:
-            error_msg = f"Container/Image not found: {container_name or 'unknown'}"
-            self.logger.error(f"{operation} failed: {error_msg}")
-            self.console.print(f"[bold red]❌ {error_msg}[/bold red]")
-        except docker.errors.APIError as e:
-            error_msg = f"Docker API error during {operation}: {e}"
-            self.logger.error(error_msg)
-            self.console.print(f"[bold red]❌ {error_msg}[/bold red]")
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Network error during {operation}: {e}"
-            self.logger.error(error_msg)
-            self.console.print(f"[bold red]❌ {error_msg}[/bold red]")
-        except Exception as e:
-            error_msg = f"Unexpected error during {operation}: {e}"
-            self.logger.error(error_msg)
-            self.console.print(f"[bold red]❌ {error_msg}[/bold red]")
 
     # ==================== CONTAINER MANAGEMENT ====================
 
@@ -716,20 +428,44 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
 
     def create_pipeline_config(self, pipeline_type: str = "github", output_path: str = None) -> bool:
         """Generate CI/CD pipeline configuration files."""
-        return create_pipeline_config_service(
-            self.console,
-            self.logger,
-            pipeline_type,
-            output_path,
-        )
+        normalized = pipeline_type.lower()
+        if normalized == "github":
+            return self._create_github_actions_config(output_path)
+        if normalized == "gitlab":
+            return self._create_gitlab_ci_config(output_path)
+        if normalized == "jenkins":
+            return self._create_jenkins_config(output_path)
+        self.console.print(f"[red]Unsupported pipeline type: {pipeline_type}[/red]")
+        return False
+
+    def _create_github_actions_config(self, output_path: str = None) -> bool:
+        """Compatibility delegate for GitHub Actions pipeline generation."""
+        return create_github_actions_config_service(self.console, self.logger, output_path)
+
+    def _create_gitlab_ci_config(self, output_path: str = None) -> bool:
+        """Compatibility delegate for GitLab CI pipeline generation."""
+        return create_gitlab_ci_config_service(self.console, self.logger, output_path)
+
+    def _create_jenkins_config(self, output_path: str = None) -> bool:
+        """Compatibility delegate for Jenkins pipeline generation."""
+        return create_jenkins_config_service(self.console, self.logger, output_path)
 
     def run_integration_tests(self, test_config_path: str = "integration-tests.yml") -> bool:
         """Run comprehensive integration tests."""
-        return run_integration_tests_service(self.console, self.logger, test_config_path)
+        return run_integration_tests_service(
+            self.console, self.logger, test_config_path,
+            run_single=self._run_single_integration_test,
+            generate_report=self._generate_test_report,
+        )
 
     def _run_single_integration_test(self, test_config: dict) -> dict:
         """Run a single integration test."""
-        return run_single_integration_test_service(test_config)
+        return run_single_integration_test_service(
+            test_config,
+            run_http=self._run_http_test,
+            run_database=self._run_database_test,
+            run_custom=self._run_custom_test,
+        )
 
     def _run_http_test(self, test_config: dict, start_time: float) -> dict:
         """Run HTTP-based integration test."""
@@ -745,7 +481,9 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
 
     def _generate_test_report(self, test_results: List[dict]):
         """Generate comprehensive test report."""
-        return generate_test_report_service(self.console, self.logger, test_results)
+        return generate_test_report_service(
+            self.console, self.logger, test_results, save_report=self._save_test_report
+        )
 
     def _save_test_report(self, test_results: List[dict], passed: int, failed: int):
         """Save test report to file."""
@@ -753,7 +491,9 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
 
     def setup_monitoring_alerts(self, alert_config_path: str = "alerts.yml") -> bool:
         """Setup monitoring and alerting configuration from template."""
-        result = self.alert_service.setup_monitoring_alerts(alert_config_path)
+        result = self.alert_service.setup_monitoring_alerts(
+            alert_config_path, initialize=self._initialize_alert_monitoring
+        )
         self.alert_rules = self.alert_service.alert_rules
         self.notification_channels = self.alert_service.notification_channels
         return result
@@ -771,12 +511,16 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
             return
         self.alert_service.alert_rules = self.alert_rules
         self.alert_service.notification_channels = getattr(self, "notification_channels", [])
-        return self.alert_service.check_alerts(container_stats, container_name)
+        return self.alert_service.check_alerts(
+            container_stats, container_name, trigger=self._trigger_alert
+        )
 
     def _trigger_alert(self, rule: dict, container_name: str, details: str):
         """Trigger an alert notification."""
         self.alert_service.notification_channels = getattr(self, "notification_channels", [])
-        return self.alert_service.trigger_alert(rule, container_name, details)
+        return self.alert_service.trigger_alert(
+            rule, container_name, details, send_notification=self._send_notification
+        )
 
     def _send_notification(self, channel: dict, message: str):
         """Send notification through configured channel."""

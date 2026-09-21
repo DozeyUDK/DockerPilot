@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 
-def run_integration_tests(console: Any, logger: Any, test_config_path: str = "integration-tests.yml") -> bool:
+def run_integration_tests(console: Any, logger: Any, test_config_path: str = "integration-tests.yml", *, run_single=None, generate_report=None) -> bool:
     """Run configured integration tests and render a report."""
     console.print("[cyan]Running integration tests...[/cyan]")
     try:
@@ -35,26 +35,31 @@ def run_integration_tests(console: Any, logger: Any, test_config_path: str = "in
                     ]
                 }
 
-        test_results = [run_single_integration_test(test) for test in (test_config or {}).get("tests", [])]
-        generate_test_report(console, logger, test_results)
+        run_single = run_single or run_single_integration_test
+        generate_report = generate_report or (lambda results: generate_test_report(console, logger, results))
+        test_results = [run_single(test) for test in (test_config or {}).get("tests", [])]
+        generate_report(test_results)
         return all(result["passed"] for result in test_results)
     except Exception as exc:
         logger.error(f"Integration tests failed: {exc}")
         return False
 
 
-def run_single_integration_test(test_config: dict) -> dict:
+def run_single_integration_test(test_config: dict, *, run_http=None, run_database=None, run_custom=None) -> dict:
     """Run one configured integration test."""
     test_name = test_config.get("name", "Unknown Test")
     test_type = test_config.get("type", "http")
     start_time = time.time()
+    run_http = run_http or run_http_test
+    run_database = run_database or run_database_test
+    run_custom = run_custom or run_custom_test
     try:
         if test_type == "http":
-            return run_http_test(test_config, start_time)
+            return run_http(test_config, start_time)
         if test_type == "database":
-            return run_database_test(test_config, start_time)
+            return run_database(test_config, start_time)
         if test_type == "custom":
-            return run_custom_test(test_config, start_time)
+            return run_custom(test_config, start_time)
         return {"name": test_name, "passed": False, "duration": 0, "error": f"Unknown test type: {test_type}"}
     except Exception as exc:
         return {"name": test_name, "passed": False, "duration": time.time() - start_time, "error": str(exc)}
@@ -115,7 +120,7 @@ def run_custom_test(test_config: dict, start_time: float) -> dict:
         return {"name": test_config.get("name", "Custom Test"), "passed": False, "duration": time.time() - start_time, "error": "Test script timed out"}
 
 
-def generate_test_report(console: Any, logger: Any, test_results: List[dict]) -> None:
+def generate_test_report(console: Any, logger: Any, test_results: List[dict], *, save_report=None) -> None:
     """Render and persist an integration-test report."""
     total_tests = len(test_results)
     passed_tests = sum(1 for result in test_results if result["passed"])
@@ -139,7 +144,10 @@ def generate_test_report(console: Any, logger: Any, test_results: List[dict]) ->
 
     summary_color = "green" if failed_tests == 0 else "red"
     console.print(Panel(f"[{summary_color}]{passed_tests}/{total_tests} tests passed[/{summary_color}]", title="Test Summary"))
-    save_test_report(logger, test_results, passed_tests, failed_tests)
+    if save_report is None:
+        save_test_report(logger, test_results, passed_tests, failed_tests)
+    else:
+        save_report(test_results, passed_tests, failed_tests)
 
 
 def save_test_report(logger: Any, test_results: List[dict], passed: int, failed: int) -> bool:
