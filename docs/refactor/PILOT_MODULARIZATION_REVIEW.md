@@ -147,31 +147,49 @@ The branch intentionally keeps the following characteristics:
 
 ## Tests added during the refactor
 
-Permanent focused regression tests include:
+Permanent focused regression and merge-gate tests include:
 
 - `test_template_service.py`
 - `test_pipeline_service.py`
 - `test_configuration_archive_service.py`
 - `test_refactored_services.py`
+- `test_refactored_service_regressions.py`
 - `test_phase3_extractions.py`
+- `test_bootstrap_service.py`
 - `test_runtime_support.py`
 - `test_pilot_facade_contract.py`
+- `test_pilot_phase0_api_contract.py`
+- `test_pilot_modularization_performance.py`
 - `test_service_callbacks.py`
 
-The facade-contract test explicitly protects compatibility method names and guards selected facade methods from growing back into large embedded implementations.
+The Phase 0 facade signature snapshot is stored in `tests/fixtures/pilot_phase0_api.json`. The contract test compares all 66 facade methods, including defaults, keyword/variadic shape and return annotations, and also prevents `DockerPilotEnhanced` from growing back beyond the agreed line budget.
 
-## Validation performed in the MCP environment
+## Pre-merge regression and performance gate — 2026-09-23
 
-The MCP pytest runner uses a Python environment that does **not** contain the installed DockerPilot project and all optional/runtime dependencies (`rich`/`textual` were observed missing in earlier runs). Because of that, a normal full pytest run from this connector is not a trustworthy project test environment.
+The connector pytest environment is not the project virtualenv: `rich`, `textual`, `pytest-cov`, `pytest-socket` and the MCP package are not all installed there, and a live Docker daemon is unavailable. To execute the broad Python suite anyway, the merge-gate run used a temporary, untracked test bootstrap that added the repository `src/` directory to `sys.path` and supplied a minimal Rich compatibility stub for formatting-only code. That bootstrap is not part of the branch and must not be committed.
 
-For this refactor, source-level validation was therefore also run without importing the package:
+Results on `refactor/pilot-modularization-all-phases`:
 
-- AST parsing succeeded for **110 Python source/test files** after the final edits;
-- each source-transformation step was AST-validated before being kept;
-- temporary transformation/audit tests were removed after use;
-- permanent project tests are left for the normal project environment / CI where dependencies are installed.
+- full suite: **429 passed, 10 skipped, 2 failed** in ~32.5 s;
+- the only failures were `test_integrity_hash_and_writable` and `test_systemd_analyze_verify_staged_rewrite`; both fail because executable bits are not retained for staged temporary broker artifacts in this runner;
+- the same two failures were reproduced on the untouched Phase 0 branch, so they are not introduced by the `pilot.py` modularization;
+- excluding only those two runner-specific staging checks: **429 passed, 10 skipped, 2 deselected**, exit code 0;
+- AST parsing of the project source tree also passed; one pre-existing `SyntaxWarning` remains in `DockerPilotExtras/backend/resources/migration.py` for an invalid escape sequence;
+- configuration archive round-trip still emits the existing `tarfile.extractall()` Python 3.14 deprecation/security warning. Archive hardening remains intentionally out of scope for this behavior-preserving refactor.
 
-Before merge, run the full project suite in the normal DockerPilot environment. A clean CI run is the merge gate; AST success is not a substitute for runtime tests.
+A Phase 0 API snapshot was captured before extraction. The current facade matches it exactly for all 66 methods. During regression review, two subtle behavior changes were found and fixed in commit `ca04f6c`: `_setup_logging` and `_load_config` again return `None` as before, and `_with_loading` once again dispatches through the overridable `_show_loading` hook.
+
+Performance gates were run on the connector host (`AMD Ryzen 5 PRO 2400GE`, 4 physical / 8 logical cores). Median microbenchmark results:
+
+| Path | Baseline | Refactored | Ratio |
+| --- | ---: | ---: | ---: |
+| multi-target parsing, 100k calls | 0.2186 s | 0.2177 s | 0.996x |
+| database image matching, 100k calls | 0.2060 s | 0.2082 s | 1.011x |
+| direct manager vs facade delegation, 200k calls | 0.0493 s direct | 0.0697 s facade | 1.415x |
+
+The facade overhead is about 20.5 ms across 200,000 calls, roughly **0.10 microseconds per call**. The permanent performance tests use deliberately wider CI-safe budgets and pass independently (`3 passed`). No material CPU-side regression was observed in the extracted hot helpers.
+
+What this environment cannot prove: real Rich/Textual rendering, live Docker-daemon behavior, executable-bit-sensitive root-broker staging on a normal filesystem, and end-to-end Docker performance. Those remain the final normal-environment/CI smoke gate before merge.
 
 ## Morning review order
 
