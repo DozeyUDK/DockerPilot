@@ -128,12 +128,10 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     def _setup_logging(self, level: LogLevel):
         """Setup enhanced logging with rotation."""
         self.logger = setup_logging_service(self.log_file, level)
-        return self.logger
 
     def _load_config(self, config_file: str):
         """Load configuration from YAML file."""
         self.config = load_config_service(self.logger, config_file)
-        return self.config
     
     def _check_cancel_flag(self, container_name: str = None) -> bool:
         """Check if deployment should be cancelled."""
@@ -174,7 +172,7 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     @contextmanager
     def _with_loading(self, message: str = "Processing"):
         """Compatibility context manager for the loading indicator."""
-        with loading_context(message):
+        with loading_context(message, loader=self._show_loading):
             yield
 
     def _signal_handler(self, signum, frame):

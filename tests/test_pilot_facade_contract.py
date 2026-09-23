@@ -1,6 +1,8 @@
 import inspect
+import types
 
-from dockerpilot.pilot import DockerPilotEnhanced
+import dockerpilot.pilot as pilot_module
+from dockerpilot.pilot import DockerPilotEnhanced, LogLevel
 
 
 def test_pilot_keeps_compatibility_surface_after_modularization():
@@ -55,3 +57,38 @@ def test_facade_methods_are_small_delegates_not_embedded_subsystems():
     ):
         source_lines = inspect.getsource(getattr(DockerPilotEnhanced, name)).splitlines()
         assert len(source_lines) <= 20, f"{name} grew back to {len(source_lines)} lines"
+
+
+def test_setup_logging_preserves_legacy_none_return(monkeypatch):
+    sentinel_logger = object()
+    monkeypatch.setattr(pilot_module, "setup_logging_service", lambda *_args, **_kwargs: sentinel_logger)
+    pilot = object.__new__(DockerPilotEnhanced)
+    pilot.log_file = "docker_pilot.log"
+
+    assert pilot._setup_logging(LogLevel.INFO) is None
+    assert pilot.logger is sentinel_logger
+
+
+def test_load_config_preserves_legacy_none_return(monkeypatch):
+    expected = {"deployment": "demo"}
+    monkeypatch.setattr(pilot_module, "load_config_service", lambda *_args, **_kwargs: expected)
+    pilot = object.__new__(DockerPilotEnhanced)
+    pilot.logger = object()
+
+    assert pilot._load_config("deployment.yml") is None
+    assert pilot.config is expected
+
+
+def test_with_loading_still_dispatches_through_overridable_show_loading():
+    pilot = object.__new__(DockerPilotEnhanced)
+    calls = []
+
+    def fake_loader(self, message, stop_event):
+        calls.append(message)
+        stop_event.wait(timeout=0.2)
+
+    pilot._show_loading = types.MethodType(fake_loader, pilot)
+    with pilot._with_loading("Migrating"):
+        pass
+
+    assert calls == ["Migrating"]

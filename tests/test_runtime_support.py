@@ -4,6 +4,7 @@ from dockerpilot.services.runtime_support import (
     get_database_config,
     get_database_name,
     load_health_check_defaults,
+    loading_context,
     parse_multi_target,
     update_progress,
 )
@@ -55,3 +56,16 @@ def test_progress_callback_failures_are_swallowed_and_logged():
 
     update_progress(broken_callback, logger, "deploy", 50, "halfway")
     assert any("callback failed" in message for level, message in logger.messages if level == "debug")
+
+
+def test_loading_context_can_use_facade_loader_extension_point():
+    calls = []
+
+    def loader(message, stop_event):
+        calls.append(message)
+        stop_event.wait(timeout=0.2)
+
+    with loading_context("Backing up data", loader=loader):
+        pass
+
+    assert calls == ["Backing up data"]

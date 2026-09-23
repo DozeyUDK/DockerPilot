@@ -110,10 +110,10 @@ def show_loading(message: str = "Processing", stop_event: Optional[threading.Eve
 
 
 @contextmanager
-def loading_context(message: str = "Processing"):
+def loading_context(message: str = "Processing", *, loader: Optional[Callable[..., Any]] = None):
     """Context manager that owns the legacy loading animation thread."""
     stop_event = threading.Event()
-    loading_thread = threading.Thread(target=show_loading, args=(message, stop_event), daemon=True)
+    loading_thread = threading.Thread(target=loader or show_loading, args=(message, stop_event), daemon=True)
     loading_thread.start()
     try:
         yield
