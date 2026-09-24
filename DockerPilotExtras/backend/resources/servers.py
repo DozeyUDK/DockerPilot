@@ -224,6 +224,7 @@ def create_server_resources(
                         "private_key": data.get("private_key"),
                         "key_passphrase": data.get("key_passphrase"),
                         "totp_code": data.get("totp_code"),
+                        "host_key_fingerprint": str(data.get("host_key_fingerprint") or "").strip() or None,
                     }
 
                 return test_ssh_connection(server_config)

@@ -113,3 +113,37 @@ def test_server_list_exposes_fingerprint_but_never_secret_fields():
     assert server["host_key_fingerprint"] == "SHA256:key"
     assert "password" not in server
     assert "private_key" not in server
+
+
+
+def test_server_test_forwards_trusted_fingerprint_before_save():
+    observed = []
+    request = Request(
+        {
+            "hostname": "new.example",
+            "port": 2222,
+            "username": "dawid",
+            "auth_type": "password",
+            "password": "secret",
+            "host_key_fingerprint": "  SHA256:trusted-key  ",
+        }
+    )
+    app = SimpleNamespace(logger=SimpleNamespace(error=lambda *_a, **_k: None, info=lambda *_a, **_k: None, debug=lambda *_a, **_k: None))
+    classes = create_server_resources(
+        Resource=Resource,
+        app=app,
+        request=request,
+        session=Session(),
+        ssh_available=True,
+        load_servers_config=lambda: {"servers": []},
+        save_servers_config=lambda _value: True,
+        test_ssh_connection=lambda cfg: observed.append(cfg) or {"success": True},
+    )
+    ServerTest = classes[4]
+
+    response = ServerTest().post()
+
+    assert response["success"] is True
+    assert observed[-1]["host_key_fingerprint"] == "SHA256:trusted-key"
+    assert observed[-1]["hostname"] == "new.example"
+    assert observed[-1]["port"] == 2222
