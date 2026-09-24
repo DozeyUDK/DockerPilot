@@ -27,6 +27,11 @@ from .deployment_helpers import (
     resolve_runtime_network as _resolve_runtime_network_impl,
 )
 from .deployment_history import record_deployment as _record_deployment_impl
+from .deployment_runtime import (
+    apply_container_command as _apply_container_command_impl,
+    offset_port_mapping as _offset_port_mapping_impl,
+    requires_privileged_mode as _requires_privileged_mode_impl,
+)
 from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
     prepare_image as _prepare_image_impl,
@@ -248,11 +253,7 @@ class DeploymentServiceMixin:
                     create_kwargs['network_mode'] = "host"
                 elif runtime_network:
                     create_kwargs['network'] = runtime_network
-                if hasattr(config, 'command') and config.command:
-                    create_kwargs['command'] = config.command
-                elif 'alpine' in config.image_tag.lower():
-                    # Alpine needs a command to stay running
-                    create_kwargs['command'] = ['sh', '-c', 'sleep 3600']
+                _apply_container_command_impl(create_kwargs, config)
                 
                 new_container = self.client.containers.create(**create_kwargs)
 
@@ -572,9 +573,7 @@ class DeploymentServiceMixin:
                 # Use different port for parallel testing when not using host network
                 temp_port_mapping = None  # Initialize before conditional
                 if config.port_mapping and len(config.port_mapping) > 0:
-                    temp_port_mapping = {}
-                    for container_port, host_port in config.port_mapping.items():
-                        temp_port_mapping[container_port] = str(int(host_port) + 1000)  # +1000 for temp
+                    temp_port_mapping = _offset_port_mapping_impl(config.port_mapping, 1000)
                     container_kwargs['ports'] = temp_port_mapping
                 if runtime_network and runtime_network != 'bridge':
                     container_kwargs['network'] = runtime_network
@@ -584,39 +583,20 @@ class DeploymentServiceMixin:
             
             # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
             # Also auto-detect for infrastructure containers (minikube, kubernetes, etc.)
-            requires_privileged = False
-            if hasattr(config, 'privileged') and config.privileged:
-                requires_privileged = True
-            else:
-                # Auto-detect infrastructure containers that require privileged mode
-                image_lower = config.image_tag.lower()
-                infrastructure_containers = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
-                for infra_container in infrastructure_containers:
-                    if infra_container in image_lower:
-                        requires_privileged = True
-                        self.logger.info(f"Auto-detected infrastructure container requiring privileged mode: {infra_container}")
-                        break
-                
-                # Also check if active container has privileged mode enabled
-                if active_container:
-                    try:
-                        active_privileged = active_container.attrs.get('HostConfig', {}).get('Privileged', False)
-                        if active_privileged:
-                            requires_privileged = True
-                            self.logger.info(f"Active container has privileged mode enabled, copying to new container")
-                    except Exception as e:
-                        self.logger.debug(f"Could not check active container privileged mode: {e}")
+            requires_privileged = _requires_privileged_mode_impl(
+                config,
+                active_container,
+                log_info=self.logger.info,
+                log_debug=self.logger.debug,
+                active_copy_description="new container",
+            )
             
             if requires_privileged:
                 container_kwargs['privileged'] = True
                 self.logger.info(f"Container {target_container_name} will run in privileged mode")
             
             # Add command if provided in config (for images that exit immediately without command)
-            if hasattr(config, 'command') and config.command:
-                container_kwargs['command'] = config.command
-            elif 'alpine' in config.image_tag.lower():
-                # Alpine needs a command to stay running
-                container_kwargs['command'] = ['sh', '-c', 'sleep 3600']
+            _apply_container_command_impl(container_kwargs, config)
             
             try:
                 target_container = self.client.containers.run(**container_kwargs)
@@ -860,39 +840,20 @@ class DeploymentServiceMixin:
                 
                 # Add privileged mode if requested (needed for DB2 with bind mounts to support setuid)
                 # Also auto-detect for infrastructure containers (minikube, kubernetes, etc.)
-                requires_privileged = False
-                if hasattr(config, 'privileged') and config.privileged:
-                    requires_privileged = True
-                else:
-                    # Auto-detect infrastructure containers that require privileged mode
-                    image_lower = config.image_tag.lower()
-                    infrastructure_containers = ['minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 'k3s', 'k3d']
-                    for infra_container in infrastructure_containers:
-                        if infra_container in image_lower:
-                            requires_privileged = True
-                            self.logger.info(f"Auto-detected infrastructure container requiring privileged mode: {infra_container}")
-                            break
-                    
-                    # Also check if active container has privileged mode enabled
-                    if active_container:
-                        try:
-                            active_privileged = active_container.attrs.get('HostConfig', {}).get('Privileged', False)
-                            if active_privileged:
-                                requires_privileged = True
-                                self.logger.info(f"Active container has privileged mode enabled, copying to final container")
-                        except Exception as e:
-                            self.logger.debug(f"Could not check active container privileged mode: {e}")
+                requires_privileged = _requires_privileged_mode_impl(
+                    config,
+                    active_container,
+                    log_info=self.logger.info,
+                    log_debug=self.logger.debug,
+                    active_copy_description="final container",
+                )
                 
                 if requires_privileged:
                     final_container_kwargs['privileged'] = True
                     self.logger.info(f"Final container {target_container_name} will run in privileged mode")
                 
                 # Add command if provided in config (for images that exit immediately without command)
-                if hasattr(config, 'command') and config.command:
-                    final_container_kwargs['command'] = config.command
-                elif 'alpine' in config.image_tag.lower():
-                    # Alpine needs a command to stay running
-                    final_container_kwargs['command'] = ['sh', '-c', 'sleep 3600']
+                _apply_container_command_impl(final_container_kwargs, config)
                 
                 # Create final container with retry on port conflict
                 # Note: Final container uses the same volumes from config, so data migrated to target_container
@@ -1273,9 +1234,7 @@ class DeploymentServiceMixin:
             canary_task = progress.add_task("🚀 Deploying canary (5% traffic)...", total=None)
             
             # Use different port for canary
-            canary_port_mapping = {}
-            for container_port, host_port in config.port_mapping.items():
-                canary_port_mapping[container_port] = str(int(host_port) + 100)
+            canary_port_mapping = _offset_port_mapping_impl(config.port_mapping, 100)
             
             try:
                 # Clean existing canary
