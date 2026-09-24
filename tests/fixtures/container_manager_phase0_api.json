@@ -1,0 +1,342 @@
+{
+  "source_bytes": 30063,
+  "file_lines": 625,
+  "class_lines": 593,
+  "method_count": 20,
+  "methods": {
+    "__init__": {
+      "positional": [
+        "self",
+        "client",
+        "console",
+        "logger",
+        "error_handler"
+      ],
+      "defaults": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": null
+    },
+    "list_containers": {
+      "positional": [
+        "self",
+        "show_all",
+        "format_output"
+      ],
+      "defaults": [
+        null,
+        "True",
+        "'table'"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "List[Any]"
+    },
+    "container_operation": {
+      "positional": [
+        "self",
+        "operation",
+        "container_name"
+      ],
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "update_restart_policy": {
+      "positional": [
+        "self",
+        "container_name",
+        "policy"
+      ],
+      "defaults": [
+        null,
+        null,
+        "'unless-stopped'"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    },
+    "rename_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "new_name"
+      ],
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    },
+    "run_new_container": {
+      "positional": [
+        "self",
+        "image_name",
+        "name",
+        "ports",
+        "command",
+        "environment",
+        "volumes",
+        "restart_policy",
+        "network",
+        "privileged",
+        "cpu_limit",
+        "memory_limit"
+      ],
+      "defaults": [
+        null,
+        null,
+        null,
+        "None",
+        "None",
+        "None",
+        "None",
+        "'unless-stopped'",
+        "None",
+        "False",
+        "None",
+        "None"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_normalize_volumes": {
+      "positional": [
+        "self",
+        "volumes"
+      ],
+      "defaults": [
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": null
+    },
+    "_start_container": {
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "defaults": [
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_stop_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "timeout"
+      ],
+      "defaults": [
+        null,
+        null,
+        "10"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_restart_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "timeout"
+      ],
+      "defaults": [
+        null,
+        null,
+        "10"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_remove_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "force"
+      ],
+      "defaults": [
+        null,
+        null,
+        "False"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_pause_container": {
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "defaults": [
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_unpause_container": {
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "defaults": [
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_rename_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "new_name"
+      ],
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": "kwargs",
+      "returns": "bool"
+    },
+    "_wait_for_container_status": {
+      "positional": [
+        "self",
+        "container_name",
+        "expected_status",
+        "timeout"
+      ],
+      "defaults": [
+        null,
+        null,
+        null,
+        "30"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    },
+    "view_container_logs": {
+      "positional": [
+        "self",
+        "container_names",
+        "tail"
+      ],
+      "defaults": [
+        null,
+        "None",
+        "50"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": null
+    },
+    "view_container_json": {
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "defaults": [
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": null
+    },
+    "exec_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "command"
+      ],
+      "defaults": [
+        null,
+        null,
+        "'/bin/bash'"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    },
+    "stop_and_remove_container": {
+      "positional": [
+        "self",
+        "container_name",
+        "timeout"
+      ],
+      "defaults": [
+        null,
+        null,
+        "10"
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    },
+    "exec_command_non_interactive": {
+      "positional": [
+        "self",
+        "container_name",
+        "command"
+      ],
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "vararg": null,
+      "kwonly": {},
+      "kwarg": null,
+      "returns": "bool"
+    }
+  }
+}
