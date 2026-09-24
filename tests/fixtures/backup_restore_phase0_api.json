@@ -1,0 +1,290 @@
+{
+  "bytes": 95537,
+  "class": "BackupRestoreMixin",
+  "class_lines": 1755,
+  "file_lines": 1769,
+  "method_count": 17,
+  "methods": {
+    "_backup_bind_mount_using_docker": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_path",
+        "backup_file",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_backup_directory": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_path",
+        "backup_file",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_backup_volume_using_docker": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "volume_name",
+        "backup_file",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_check_sudo_required_for_backup": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "returns": "tuple[bool, list[str], dict]",
+      "vararg": null
+    },
+    "_cleanup_backup_containers": {
+      "defaults": [
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "_copy_bind_mount_data": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_path",
+        "target_path",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_copy_container_files": {
+      "defaults": [
+        null,
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_container",
+        "target_container",
+        "source_path",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_copy_volume_data": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_volume_name",
+        "target_volume_name",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_get_sudo_password": {
+      "defaults": [
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self"
+      ],
+      "returns": "Optional[str]",
+      "vararg": null
+    },
+    "_migrate_container_data": {
+      "defaults": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_container",
+        "target_container",
+        "config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_restore_from_tar": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "tar_file",
+        "destination"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_run_sudo_command": {
+      "defaults": [
+        null,
+        null,
+        "10",
+        "False"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "command_args",
+        "timeout",
+        "check"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "backup_container_data": {
+      "defaults": [
+        null,
+        null,
+        "None",
+        "True",
+        "24"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name",
+        "backup_path",
+        "reuse_existing",
+        "max_backup_age_hours"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "backup_deployment_state": {
+      "defaults": [
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "backup_path"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "find_existing_backup": {
+      "defaults": [
+        null,
+        null,
+        "24"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name",
+        "max_age_hours"
+      ],
+      "returns": "Optional[Path]",
+      "vararg": null
+    },
+    "restore_container_data": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name",
+        "backup_path"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "restore_deployment_state": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "backup_path"
+      ],
+      "returns": "bool",
+      "vararg": null
+    }
+  },
+  "source": "src/dockerpilot/backup_restore.py"
+}
