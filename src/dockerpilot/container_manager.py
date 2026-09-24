@@ -1,11 +1,13 @@
 """Container management operations."""
-import docker
 from typing import List, Any, Optional
-from rich.panel import Panel
 
 from .container_creation import (
     normalize_volumes as _normalize_volumes_impl,
     run_new_container as _run_new_container_impl,
+)
+from .container_inspection import (
+    view_container_json as _view_container_json_impl,
+    view_container_logs as _view_container_logs_impl,
 )
 from .container_lifecycle import (
     container_operation as _container_operation_impl,
@@ -105,64 +107,12 @@ class ContainerManager:
         return _wait_for_container_status_impl(self, container_name, expected_status, timeout)
     
     def view_container_logs(self, container_names: str = None, tail: int = 50):
-        """View container logs. Supports multiple containers separated by comma.
-        
-        Args:
-            container_names: Single container name/ID or comma-separated list of names/IDs
-            tail: Number of log lines to show per container
-        """
-        if container_names:
-            # Parse multiple container names if comma-separated
-            if ',' in container_names:
-                names_list = [name.strip() for name in container_names.split(',') if name.strip()]
-            else:
-                names_list = [container_names.strip()]
-            
-            # Show logs for each container
-            for container_name in names_list:
-                try:
-                    container = self.client.containers.get(container_name)
-                    logs = container.logs(tail=tail).decode()
-                    self.console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
-                    self.console.print(f"[cyan]Container: {container_name} - Last {tail} lines[/cyan]")
-                    self.console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
-                    self.console.print(logs)
-                except docker.errors.NotFound:
-                    self.console.print(f"[red]Container '{container_name}' not found[/red]")
-                except Exception as e:
-                    self.console.print(f"[red]Error reading logs for '{container_name}': {e}[/red]")
-        else:
-            containers = self.client.containers.list(all=True)
-            if not containers:
-                self.console.print("[red]No containers found[/red]")
-                return
-            
-            self.console.print("\nSelect a container to view logs:")
-            for i, c in enumerate(containers, start=1):
-                self.console.print(f"{i}. {c.name} ({c.status})")
-            
-            choice = input("Enter number: ")
-            try:
-                idx = int(choice) - 1
-                container = containers[idx]
-                logs = container.logs(tail=tail).decode()
-                self.console.print(f"\n[cyan]Showing last {tail} lines of {container.name} logs:[/cyan]\n")
-                self.console.print(logs)
-            except (ValueError, IndexError):
-                self.console.print("[red]Invalid selection[/red]")
+        """View container logs. Supports multiple containers separated by comma."""
+        return _view_container_logs_impl(self, container_names, tail)
     
     def view_container_json(self, container_name: str):
         """Display container information in JSON format."""
-        import json
-        try:
-            container = self.client.containers.get(container_name)
-            data = container.attrs
-            json_str = json.dumps(data, indent=4, ensure_ascii=False)
-            self.console.print(Panel(json_str, title=f"Container JSON: {container_name}", expand=True))
-        except docker.errors.NotFound:
-            self.console.print(f"[red]Container '{container_name}' not found[/red]")
-        except Exception as e:
-            self.console.print(f"[red]Error fetching JSON for container '{container_name}': {e}[/red]")
+        return _view_container_json_impl(self, container_name)
 
     def exec_container(self, container_name: str, command: str = "/bin/bash") -> bool:
         """Execute interactive command in running container."""
