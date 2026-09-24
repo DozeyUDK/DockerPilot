@@ -112,8 +112,9 @@ def test_multi_selector_does_not_collapse_inside_form_scroll():
             widget = app.command_widgets["name"]
             assert isinstance(widget, tui.ResourceMultiSelector)
             assert len(widget.query(Checkbox)) == 12
-            assert widget.size.height >= 12
-            assert widget.parent.size.height >= 12
+            expected_height = tui.selector_height(12)
+            assert widget.size.height >= expected_height
+            assert widget.parent.size.height >= expected_height
 
             widget.select("app-7")
             await pilot.pause()

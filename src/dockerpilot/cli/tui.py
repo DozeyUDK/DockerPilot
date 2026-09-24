@@ -1000,15 +1000,15 @@ if TEXTUAL_AVAILABLE:
             values = self._snapshot_widget_values(self.command_widgets)
             for dest, selector_spec in self.selector_specs.items():
                 widget = self.command_widgets.get(dest)
-                if not isinstance(widget, SelectionList):
+                entries = self.available_targets.get(selector_spec.resource_type, [])
+
+                # A TextArea is the manual fallback used while no live targets exist.
+                # Preserve user-entered text if discovery still has no targets. If
+                # targets appeared, reconcile the manual values with the live list.
+                if isinstance(widget, TextArea) and not entries:
                     continue
-                available = {
-                    value
-                    for _label, value in self.available_targets.get(
-                        selector_spec.resource_type,
-                        [],
-                    )
-                }
+
+                available = {value for _label, value in entries}
                 selected = self._selector_values(values.get(dest))
                 surviving = [value for value in selected if value in available]
                 values[dest] = (
