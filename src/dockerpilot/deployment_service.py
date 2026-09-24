@@ -32,6 +32,9 @@ from .deployment_runtime import (
     offset_port_mapping as _offset_port_mapping_impl,
     requires_privileged_mode as _requires_privileged_mode_impl,
 )
+from .deployment_validation import (
+    comprehensive_container_validation as _comprehensive_container_validation_impl,
+)
 from .image_preparation import (
     ensure_image_from_existing_container as _ensure_image_from_existing_container_impl,
     prepare_image as _prepare_image_impl,
@@ -1480,212 +1483,19 @@ class DeploymentServiceMixin:
 
     def _comprehensive_container_validation(self, container, config: DeploymentConfig, 
                                           port: str, target_name: str) -> tuple:
-        """
-        Comprehensive validation of container before traffic switch.
-        Returns (is_valid, error_message)
-        
-        Checks:
-        1. Container status (must be running, not restarting)
-        2. Health check endpoint response
-        3. Container logs for errors
-        4. Resource usage (CPU, memory)
-        5. Volumes mounting
-        6. Port availability
-        7. Response time
-        8. No crash loops
-        """
-        validation_errors = []
-        
-        # 1. Check container status
-        try:
-            container.reload()  # Refresh container state
-            status = container.status
-            
-            if status != "running":
-                validation_errors.append(f"Container status is '{status}', expected 'running'")
-                return False, "; ".join(validation_errors)
-            
-            # Check restart count - be more lenient for databases that may restart during initialization
-            restart_count = container.attrs.get('RestartCount', 0) if hasattr(container, 'attrs') else 0
-            
-            # Detect if this is a database service and get its configuration
-            db_config = self._get_database_config(config.image_tag)
-            is_database = len(db_config) > 0
-            
-            # Set restart threshold based on service type (from config or default)
-            max_restarts = db_config.get('max_restart_count', 15) if is_database else 3
-            
-            if restart_count > max_restarts:
-                validation_errors.append(f"Container has restarted {restart_count} times (possible crash loop, max allowed: {max_restarts})")
-                return False, "; ".join(validation_errors)
-            
-            # For databases with high restart count, check if container is stable now
-            # Wait a bit and check if it's still running (not restarting)
-            if is_database and restart_count > 5:
-                self.logger.info(f"Database container has {restart_count} restarts, checking stability...")
-                time.sleep(5)  # Wait 5 seconds
-                try:
-                    container.reload()
-                    if container.status != "running":
-                        validation_errors.append(f"Container not stable after {restart_count} restarts (current status: {container.status})")
-                        return False, "; ".join(validation_errors)
-                    # Check if restart count increased (still restarting)
-                    new_restart_count = container.attrs.get('RestartCount', 0) if hasattr(container, 'attrs') else 0
-                    if new_restart_count > restart_count:
-                        validation_errors.append(f"Container still restarting (restart count increased from {restart_count} to {new_restart_count})")
-                        return False, "; ".join(validation_errors)
-                    self.logger.info(f"Container appears stable after {restart_count} restarts")
-                except Exception as e:
-                    self.logger.warning(f"Could not verify container stability: {e}")
-                
-        except Exception as e:
-            validation_errors.append(f"Failed to check container status: {e}")
-            return False, "; ".join(validation_errors)
-        
-        # 2. Health check endpoint (skip for non-HTTP services)
-        health_check_passed = False
-        response_time = None
-        
-        if config.health_check_endpoint is None:
-            # Non-HTTP service (SSH, Redis, etc.) - skip HTTP health check
-            self.logger.info("Skipping HTTP health check for non-HTTP service")
-            health_check_passed = True
-        else:
-            try:
-                url = f"http://localhost:{port}{config.health_check_endpoint}"
-                start_time = time.time()
-                response = requests.get(url, timeout=10)
-                response_time = time.time() - start_time
-                
-                if 200 <= response.status_code < 300:
-                    health_check_passed = True
-                    self.logger.info(f"Health check passed: {response_time:.2f}s response time")
-                else:
-                    validation_errors.append(f"Health check returned status {response.status_code}, expected 200-299")
-            except requests.exceptions.Timeout:
-                validation_errors.append(f"Health check timeout after 10s")
-            except requests.exceptions.ConnectionError:
-                validation_errors.append(f"Health check connection error - service may not be ready")
-            except Exception as e:
-                validation_errors.append(f"Health check failed: {e}")
-            
-            if not health_check_passed:
-                return False, "; ".join(validation_errors)
-        
-        # 3. Check container logs for critical errors
-        try:
-            logs = container.logs(tail=100).decode('utf-8', errors='ignore')
-            
-            # For database services, check for normal initialization patterns
-            db_config = self._get_database_config(config.image_tag)
-            if db_config:
-                log_patterns = db_config.get('log_patterns', {})
-                loading_patterns = log_patterns.get('loading_shards', []) + log_patterns.get('loading', [])
-                
-                if loading_patterns:
-                    for pattern in loading_patterns:
-                        if pattern.lower() in logs.lower():
-                            db_name = self._get_database_name(config.image_tag) or 'database'
-                            self.logger.info(f"{db_name} is loading data - this is normal and may take time")
-                            break
-            
-            # Common error patterns
-            error_patterns = [
-                'FATAL', 'CRITICAL', 'panic', 'segmentation fault',
-                'out of memory', 'cannot bind', 'address already in use',
-                'permission denied', 'access denied', 'failed to start'
-            ]
-            
-            # Special handling for OOM - only treat as error if it's actual OOM, not OOM detection warnings
-            # cadvisor and similar tools may log "OOM detection" warnings which are safe to ignore
-            oom_safe_patterns = [
-                'oom detection', 'configure.*oom', 'disabling oom', 'no oom',
-                'could not configure.*oom', 'unable to configure.*oom'
-            ]
-            
-            found_errors = []
-            logs_lower = logs.lower()
-            
-            for pattern in error_patterns:
-                if pattern.lower() in logs_lower:
-                    found_errors.append(pattern)
-            
-            # Check for OOM separately - only flag if it's not a safe OOM detection warning
-            if 'oom' in logs_lower:
-                is_safe_oom = any(safe_pattern in logs_lower for safe_pattern in oom_safe_patterns)
-                if not is_safe_oom:
-                    # Check if it's actually an OOM error (not just detection-related)
-                    oom_error_patterns = ['killed.*oom', 'out of memory', 'oom killer', 'memory limit exceeded']
-                    if any(oom_err in logs_lower for oom_err in oom_error_patterns):
-                        found_errors.append('OOM')
-                else:
-                    # It's a safe OOM detection warning, log but don't treat as error
-                    self.logger.info("Found safe OOM detection warning (not a critical error)")
-            
-            if found_errors:
-                validation_errors.append(f"Found critical errors in logs: {', '.join(found_errors)}")
-                # Don't fail immediately, but log it
-                self.logger.warning(f"Warning: Found error patterns in logs: {', '.join(found_errors)}")
-        except Exception as e:
-            self.logger.warning(f"Could not check container logs: {e}")
-        
-        # 4. Check resource usage (CPU, memory)
-        try:
-            stats = container.stats(stream=False)
-            
-            # Check memory usage
-            if 'memory_stats' in stats:
-                mem_usage = stats['memory_stats'].get('usage', 0)
-                mem_limit = stats['memory_stats'].get('limit', 1)
-                
-                if mem_limit > 0:
-                    mem_percent = (mem_usage / mem_limit) * 100.0
-                    if mem_percent > 95:
-                        validation_errors.append(f"Memory usage critical: {mem_percent:.1f}%")
-                    elif mem_percent > 80:
-                        self.logger.warning(f"Memory usage high: {mem_percent:.1f}%")
-            
-            # Check CPU usage (if available)
-            if 'cpu_stats' in stats and 'precpu_stats' in stats:
-                # CPU calculation would require more complex logic
-                # For now, just check if stats are available
-                pass
-                
-        except Exception as e:
-            self.logger.warning(f"Could not check resource usage: {e}")
-        
-        # 5. Check volumes mounting
-        try:
-            mounts = container.attrs.get('Mounts', [])
-            if config.volumes:
-                expected_volumes = len(config.volumes) if isinstance(config.volumes, (dict, list)) else 0
-                if len(mounts) < expected_volumes:
-                    validation_errors.append(f"Expected {expected_volumes} volume(s), found {len(mounts)}")
-        except Exception as e:
-            self.logger.warning(f"Could not verify volumes: {e}")
-        
-        # 6. Check response time (should be reasonable)
-        if response_time:
-            if response_time > 5.0:
-                validation_errors.append(f"Health check response time too slow: {response_time:.2f}s")
-            elif response_time > 2.0:
-                self.logger.warning(f"Health check response time slow: {response_time:.2f}s")
-        
-        # 7. Wait a bit and check again to ensure stability
-        time.sleep(2)
-        try:
-            container.reload()
-            if container.status != "running":
-                validation_errors.append(f"Container status changed to '{container.status}' after validation")
-                return False, "; ".join(validation_errors)
-        except Exception as e:
-            self.logger.warning(f"Could not re-check container status: {e}")
-        
-        # If we have critical errors, fail validation
-        if validation_errors:
-            return False, "; ".join(validation_errors)
-        
-        return True, "All validations passed"
+        """Run the comprehensive pre-traffic-switch validation."""
+        return _comprehensive_container_validation_impl(
+            container,
+            config,
+            port,
+            target_name,
+            get_database_config=self._get_database_config,
+            get_database_name=self._get_database_name,
+            logger=self.logger,
+            request_get=lambda url, **kwargs: requests.get(url, **kwargs),
+            clock=lambda: time.time(),
+            sleep=lambda seconds: time.sleep(seconds),
+        )
 
     def _get_resource_limits(self, config: DeploymentConfig) -> dict:
         """Convert resource limits to Docker API format"""
