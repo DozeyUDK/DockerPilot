@@ -210,11 +210,8 @@ def create_promotion_resources(
                         return {'error': token_message}, 403
                     sudo_password = token_password
                     app.logger.info("Using elevation token for privileged promotion flow")
-                else:
-                    # Legacy fallback for older clients
-                    sudo_password = session.get('sudo_password')
-                    if sudo_password:
-                        app.logger.info("Using legacy sudo password from session")
+                # Without an elevation token the operation remains unprivileged.
+                # Sudo credentials are never sourced from the Flask cookie session.
     
                 execution_context = _execution_context_factory(
                     get_dockerpilot,

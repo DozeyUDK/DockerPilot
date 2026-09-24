@@ -79,6 +79,17 @@ export WEB_AUTH_TOTP_SECRET=JBSWY3DPEHPK3PXP
 
 # Session inactivity timeout (minutes)
 export APP_SESSION_IDLE_MINUTES=45
+
+# Login abuse protection (failed attempts per client IP / window)
+export AUTH_LOGIN_MAX_FAILURES=5
+export AUTH_LOGIN_WINDOW_SECONDS=60
+
+# Required for stable production sessions (do not use a generated-per-start value)
+export SECRET_KEY=replace-with-a-long-random-value
+
+# Optional: provide the Fernet master key from a secret manager.
+# If omitted, Extras creates ~/.dockerpilot_extras/.secrets.key with mode 0600.
+# export DOCKERPILOT_EXTRAS_SECRET_KEY='<fernet-key>'
 ```
 
 ### 4. Using Loader Script (Recommended)
@@ -465,7 +476,11 @@ set `CORS_ORIGINS` in the process environment to the exact HTTPS origins that ho
 - **CORS**: Configure `CORS_ORIGINS` to limit access (set via `CORS_ORIGINS` environment variable)
 - **HTTPS**: Use HTTPS in production
 - **Authentication**: Optional web auth with session + MFA TOTP is available (`WEB_AUTH_ENABLED=true`)
-- **Credentials**: All passwords and SSH keys are stored in user's home directory (`~/.dockerpilot_extras/`) and never hardcoded in the application
+- **CSRF**: When web auth is enabled, all mutating `/api/*` requests require a session-bound `X-CSRF-Token`; the bundled frontend sends it automatically
+- **Login rate limiting**: Failed login attempts are bounded per client IP (`AUTH_LOGIN_MAX_FAILURES`, `AUTH_LOGIN_WINDOW_SECONDS`)
+- **Credentials at rest**: Server passwords, private keys, key passphrases and stored server TOTP secrets are encrypted before file/PostgreSQL persistence. The Fernet master key comes from `DOCKERPILOT_EXTRAS_SECRET_KEY` or `~/.dockerpilot_extras/.secrets.key` (mode `0600`)
+- **SSH host identity**: Remote SSH connections use a managed `~/.dockerpilot_extras/known_hosts`; unknown hosts must be explicitly trusted by SHA256 fingerprint and mismatches fail closed
+- **Privilege elevation**: Sudo passwords are never stored in the Flask cookie session; privileged operations use short-lived, one-time server-side elevation tokens
 
 ### Environment Variables
 
@@ -491,12 +506,25 @@ export WEB_AUTH_TOTP_SECRET=
 # Session inactivity timeout in minutes
 export APP_SESSION_IDLE_MINUTES=45
 
+# Failed-login limiter
+export AUTH_LOGIN_MAX_FAILURES=5
+export AUTH_LOGIN_WINDOW_SECONDS=60
+
+# Optional secret-store master key. If omitted, a persistent mode-0600 key file is generated.
+# export DOCKERPILOT_EXTRAS_SECRET_KEY='<fernet-key>'
+
 # Elevation token TTL in seconds (for privileged operations)
 export ELEVATION_TOKEN_TTL_SECONDS=120
 ```
 
 In PowerShell, set the same values with `$env:NAME = "value"`. For persistent deployments, define
 them in the systemd unit, container configuration, or process manager that launches Extras.
+
+### SSH host-key trust
+
+When adding or testing a remote server for the first time, Extras does not silently accept the SSH host key. The API returns the observed SHA256 fingerprint; verify it out-of-band, then use **Trust this fingerprint** in the server form. The accepted key is stored in `~/.dockerpilot_extras/known_hosts`. A later key mismatch is rejected until the operator deliberately updates trust.
+
+Legacy plaintext server credentials are migrated to encrypted-at-rest values on backend startup. Back up the secret-store master key together with persistent Extras state; losing that key makes encrypted server credentials unrecoverable.
 
 ## API Documentation
 

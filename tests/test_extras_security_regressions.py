@@ -18,6 +18,9 @@ def test_legacy_sudo_endpoint_never_assigns_password_to_cookie_session():
     auth_text = (EXTRAS / "resources" / "auth.py").read_text(encoding="utf-8")
     assert 'session["sudo_password"] =' not in auth_text
     assert "session['sudo_password'] =" not in auth_text
+    promotion_text = (EXTRAS / "resources" / "promotion.py").read_text(encoding="utf-8")
+    assert "session.get('sudo_password')" not in promotion_text
+    assert 'session.get("sudo_password")' not in promotion_text
 
 
 def test_server_credentials_are_routed_through_secret_store():
