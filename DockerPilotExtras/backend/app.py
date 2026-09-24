@@ -24,6 +24,7 @@ import base64
 import hmac
 import struct
 import binascii
+import shlex
 
 # Add parent directory to path for utils import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -57,6 +58,24 @@ from backend.secure_deploy.errors import (
     ForbiddenError,
     UnauthorizedError,
     SecureDeployError as SecureDeployGateError,
+)
+from backend.services.auth_guard import SlidingWindowRateLimiter, csrf_token_matches
+from backend.services.elevation_tokens import ElevationTokenManager
+from backend.services.secret_store import EncryptedSecretStore, SecretStoreError
+from backend.services.ssh_security import (
+    SSHHostKeyMismatch,
+    SSHHostKeyRequired,
+    create_verified_ssh_client,
+)
+from backend.services.remote_commands import (
+    build_dockerpilot_deploy_command as _svc_build_dockerpilot_deploy_command,
+    build_remote_file_write_command as _svc_build_remote_file_write_command,
+)
+from backend.services.ssh_execution import (
+    build_docker_command as _svc_build_docker_command,
+    execute_command as _svc_execute_ssh_command,
+    execute_script as _svc_execute_ssh_script,
+    open_verified_ssh_client as _svc_open_verified_ssh_client,
 )
 from backend.services.environment_status import build_environment_status as _svc_build_environment_status
 from backend.services.migration_jobs import MigrationJobRegistry
@@ -429,7 +448,8 @@ def load_deployment_config(container_name: str, env: str = None) -> dict:
         return None
 
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
+_configured_secret_key = (os.environ.get('SECRET_KEY') or '').strip()
+app.config['SECRET_KEY'] = _configured_secret_key or os.urandom(24).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # Lax is compatible with SPA-on-different-port (SameSite is scheme+eTLD+1, not port).
 # Production must set SESSION_COOKIE_SECURE=true; Secure Deploy POSTs always require CSRF,
@@ -447,6 +467,12 @@ WEB_AUTH_PASSWORD = os.environ.get('WEB_AUTH_PASSWORD', 'admin')
 WEB_AUTH_PASSWORD_HASH = os.environ.get('WEB_AUTH_PASSWORD_HASH', '')
 WEB_AUTH_TOTP_SECRET = os.environ.get('WEB_AUTH_TOTP_SECRET', '').strip()
 WEB_AUTH_TOTP_WINDOW = int(os.environ.get('WEB_AUTH_TOTP_WINDOW', '1'))
+AUTH_LOGIN_MAX_FAILURES = int(os.environ.get('AUTH_LOGIN_MAX_FAILURES', '5'))
+AUTH_LOGIN_WINDOW_SECONDS = int(os.environ.get('AUTH_LOGIN_WINDOW_SECONDS', '60'))
+_login_rate_limiter = SlidingWindowRateLimiter(
+    max_failures=AUTH_LOGIN_MAX_FAILURES,
+    window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
+)
 
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MINUTES)
 
@@ -454,6 +480,11 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MI
 ELEVATION_TOKEN_TTL_SECONDS = int(os.environ.get('ELEVATION_TOKEN_TTL_SECONDS', '120'))
 ELEVATION_TOKEN_MAX_TTL_SECONDS = int(os.environ.get('ELEVATION_TOKEN_MAX_TTL_SECONDS', '600'))
 ELEVATION_TOKEN_MAX_PER_SESSION = int(os.environ.get('ELEVATION_TOKEN_MAX_PER_SESSION', '16'))
+_elevation_token_manager = ElevationTokenManager(
+    default_ttl_seconds=ELEVATION_TOKEN_TTL_SECONDS,
+    max_ttl_seconds=ELEVATION_TOKEN_MAX_TTL_SECONDS,
+    max_per_session=ELEVATION_TOKEN_MAX_PER_SESSION,
+)
 
 cors_origins_env = os.environ.get('CORS_ORIGINS')
 if cors_origins_env:
@@ -470,10 +501,17 @@ CORS(app, supports_credentials=True, origins=cors_origins)
 api = Api(app)
 
 if WEB_AUTH_ENABLED and not WEB_AUTH_PASSWORD_HASH and WEB_AUTH_PASSWORD == 'admin':
+    if os.environ.get('FLASK_ENV') == 'production':
+        raise RuntimeError(
+            "Refusing production startup with default DockerPilot Extras credentials (admin/admin)"
+        )
     app.logger.warning(
         "WEB_AUTH is enabled with default credentials (admin/admin). "
-        "Set WEB_AUTH_PASSWORD_HASH or WEB_AUTH_PASSWORD in production."
+        "Set WEB_AUTH_PASSWORD_HASH or WEB_AUTH_PASSWORD before production."
     )
+
+if WEB_AUTH_ENABLED and os.environ.get('FLASK_ENV') == 'production' and not _configured_secret_key:
+    raise RuntimeError("SECRET_KEY must be explicitly configured when WEB_AUTH is enabled in production")
 
 
 def _parse_pbkdf2_hash(password_hash: str):
@@ -603,6 +641,7 @@ def _auth_status_payload():
         'mfa_verified': bool(session.get('auth_mfa_verified')) if authed else False,
         'session_idle_minutes': APP_SESSION_IDLE_MINUTES,
         'session_expires_in_seconds': expires_in,
+        'csrf_token': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
         'secure_deploy_csrf': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
     }
 
@@ -610,7 +649,6 @@ def _auth_status_payload():
 PUBLIC_API_PATHS = {
     '/api/health',
     '/api/auth/login',
-    '/api/auth/logout',
     '/api/auth/status',
 }
 
@@ -638,6 +676,17 @@ def require_auth_for_api():
             'error': 'Authentication required',
             'auth_required': True,
         }), 401
+
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        if not csrf_token_matches(
+            header_token=request.headers.get('X-CSRF-Token'),
+            session_token=session.get('secure_deploy_csrf'),
+        ):
+            return jsonify({
+                'success': False,
+                'error': 'CSRF token required',
+                'csrf_required': True,
+            }), 403
     return None
 
 
@@ -747,6 +796,8 @@ app.config['DEPLOYMENTS_DIR'] = app.config['CONFIG_DIR'] / "deployments"
 app.config['DEPLOYMENTS_DIR'].mkdir(exist_ok=True)
 app.config['SERVERS_DIR'] = app.config['CONFIG_DIR'] / "servers"
 app.config['SERVERS_DIR'].mkdir(exist_ok=True)
+app.config['SSH_KNOWN_HOSTS_PATH'] = app.config['CONFIG_DIR'] / "known_hosts"
+_server_secret_store = EncryptedSecretStore.from_config_dir(app.config['CONFIG_DIR'])
 
 _storage_runtime_config = {}
 _state_store = None
@@ -836,7 +887,7 @@ def create_docker_client_for_server(server_config):
     
     try:
         import docker
-        from paramiko import SSHClient, AutoAddPolicy
+        from paramiko import SSHClient
         import base64
         from io import StringIO
         
@@ -999,219 +1050,56 @@ def get_dockerpilot(server_id=None):
         return instance
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
-    """Execute any command on remote server via SSH (or local if server_config is None or id == 'local')"""
-    # Handle local server
-    if server_config is None or server_config.get('id') == 'local':
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            if check_exit_status and result.returncode != 0:
-                raise Exception(
-                    f"Command failed (exit {result.returncode}): "
-                    f"{redact_sensitive_text(result.stderr or '')}"
-                )
-            return result.stdout
-        except subprocess.TimeoutExpired:
-            raise Exception("Command timed out")
-        except Exception as e:
-            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
-    
-    if not SSH_AVAILABLE:
-        raise ImportError("SSH libraries not available")
-    
+    """Execute command locally without a shell or remotely over verified SSH."""
     try:
-        import paramiko
-        from io import StringIO
-        
-        hostname = server_config.get('hostname')
-        port = server_config.get('port', 22)
-        username = server_config.get('username')
-        auth_type = server_config.get('auth_type', 'password')
-        
-        # Create SSH client
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        
-        # Prepare authentication
-        if auth_type == 'password':
-            ssh.connect(hostname, port=port, username=username, password=server_config.get('password'), timeout=10)
-        elif auth_type == 'key':
-            key_content = server_config.get('private_key')
-            key_passphrase = server_config.get('key_passphrase')
-            if not key_content:
-                raise ValueError('Private key required for key authentication')
-            
-            # Load private key
-            key_file = StringIO(key_content)
-            try:
-                key = paramiko.RSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            except:
-                try:
-                    key_file.seek(0)
-                    key = paramiko.DSSKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                except:
-                    key_file.seek(0)
-                    key = paramiko.ECDSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            
-            ssh.connect(hostname, port=port, username=username, pkey=key, timeout=10)
-        elif auth_type == '2fa':
-            password = server_config.get('password')
-            totp_code = server_config.get('totp_code', '')
-            # For 2FA, typically password + code
-            ssh.connect(hostname, port=port, username=username, password=password + totp_code, timeout=10)
-        else:
-            raise ValueError(f'Unsupported auth type: {auth_type}')
-        
-        # Execute command
-        stdin, stdout, stderr = ssh.exec_command(command)
-        exit_status = stdout.channel.recv_exit_status()
-        output = stdout.read().decode('utf-8')
-        error_output = stderr.read().decode('utf-8')
-        
-        ssh.close()
-        
-        if check_exit_status and exit_status != 0:
-            raise Exception(
-                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
-            )
-        
-        return output
-        
-    except Exception as e:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
+        return _svc_execute_ssh_command(
+            server_config,
+            command,
+            ssh_available=SSH_AVAILABLE,
+            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+            check_exit_status=check_exit_status,
+            return_stderr=False,
+            timeout=300,
+        )
+    except Exception as exc:
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
         raise
+
 
 # Cache for sudo requirements per server
 _docker_sudo_cache = {}
-_elevation_tokens = {}
-_elevation_tokens_lock = threading.Lock()
 
 
 def _get_or_create_elevation_session_id() -> str:
-    """Get stable session-scoped ID for token binding."""
-    session_id = session.get('elevation_session_id')
-    if not session_id:
-        session_id = secrets.token_hex(16)
-        session['elevation_session_id'] = session_id
-        session.permanent = True
-    return session_id
+    """Compatibility wrapper for session-bound elevation identity."""
+    return _elevation_token_manager._get_or_create_session_id(session)
 
 
 def _cleanup_expired_elevation_tokens() -> int:
-    """Cleanup expired tokens from in-memory cache."""
-    now_ts = time.time()
-    removed = 0
-    with _elevation_tokens_lock:
-        expired = [key for key, entry in _elevation_tokens.items() if entry.get('expires_at_ts', 0) <= now_ts]
-        for key in expired:
-            _elevation_tokens.pop(key, None)
-            removed += 1
-    return removed
+    return _elevation_token_manager.cleanup_expired()
 
 
 def _issue_elevation_token(sudo_password: str, scope: dict = None, ttl_seconds: int = None) -> dict:
-    """Issue a one-time elevation token bound to current web session."""
-    if not sudo_password:
-        raise ValueError('sudo_password is required')
-
-    _cleanup_expired_elevation_tokens()
-    session_id = _get_or_create_elevation_session_id()
-    requested_ttl = int(ttl_seconds if ttl_seconds is not None else ELEVATION_TOKEN_TTL_SECONDS)
-    effective_ttl = max(30, min(requested_ttl, ELEVATION_TOKEN_MAX_TTL_SECONDS))
-    issued_at = datetime.now()
-    expires_at = issued_at + timedelta(seconds=effective_ttl)
-    token_plain = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(token_plain.encode('utf-8')).hexdigest()
-    scope_data = scope if isinstance(scope, dict) else {}
-
-    entry = {
-        'session_id': session_id,
-        'sudo_password': sudo_password,
-        'scope': scope_data,
-        'issued_at_iso': issued_at.isoformat(),
-        'expires_at_iso': expires_at.isoformat(),
-        'expires_at_ts': expires_at.timestamp(),
-    }
-
-    with _elevation_tokens_lock:
-        # Limit token count per session to reduce stale privileged material in memory.
-        session_keys = [
-            key for key, value in _elevation_tokens.items()
-            if value.get('session_id') == session_id
-        ]
-        if len(session_keys) >= ELEVATION_TOKEN_MAX_PER_SESSION:
-            session_keys.sort(key=lambda key: _elevation_tokens.get(key, {}).get('expires_at_ts', 0))
-            for key in session_keys[: len(session_keys) - ELEVATION_TOKEN_MAX_PER_SESSION + 1]:
-                _elevation_tokens.pop(key, None)
-
-        _elevation_tokens[token_hash] = entry
-
-    return {
-        'token': token_plain,
-        'expires_in': effective_ttl,
-        'expires_at': entry['expires_at_iso'],
-        'scope': scope_data,
-    }
+    return _elevation_token_manager.issue(
+        session,
+        sudo_password=sudo_password,
+        scope=scope,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 def _consume_elevation_token(token: str, expected_action: str = None, expected_scope: dict = None) -> tuple:
-    """Validate and consume one-time elevation token."""
-    if not token or not isinstance(token, str):
-        return False, 'Missing elevation token', None
-
-    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
-    current_session_id = session.get('elevation_session_id')
-    now_ts = time.time()
-
-    with _elevation_tokens_lock:
-        entry = _elevation_tokens.get(token_hash)
-        if not entry:
-            return False, 'Invalid or expired elevation token', None
-
-        if entry.get('expires_at_ts', 0) <= now_ts:
-            _elevation_tokens.pop(token_hash, None)
-            return False, 'Elevation token expired', None
-
-        if not current_session_id or entry.get('session_id') != current_session_id:
-            return False, 'Elevation token does not match active session', None
-
-        scope = entry.get('scope') or {}
-        if expected_action and scope.get('action') != expected_action:
-            return False, 'Elevation token scope mismatch (action)', None
-
-        if isinstance(expected_scope, dict):
-            for key, value in expected_scope.items():
-                if value is None:
-                    continue
-                if scope.get(key) != value:
-                    return False, f"Elevation token scope mismatch ({key})", None
-
-        sudo_password = entry.get('sudo_password')
-        _elevation_tokens.pop(token_hash, None)
-
-    return True, 'ok', sudo_password
+    return _elevation_token_manager.consume(
+        session,
+        token,
+        expected_action=expected_action,
+        expected_scope=expected_scope,
+    )
 
 
 def _revoke_elevation_tokens_for_current_session() -> int:
-    """Revoke all elevation tokens bound to current session."""
-    current_session_id = session.get('elevation_session_id')
-    if not current_session_id:
-        return 0
-    removed = 0
-    with _elevation_tokens_lock:
-        to_delete = [
-            key for key, value in _elevation_tokens.items()
-            if value.get('session_id') == current_session_id
-        ]
-        for key in to_delete:
-            _elevation_tokens.pop(key, None)
-            removed += 1
-    return removed
+    return _elevation_token_manager.revoke_for_session(session)
+
 
 def _check_docker_sudo_required(server_config):
     """Check if docker commands require sudo on the server (with caching)"""
@@ -1260,13 +1148,9 @@ def execute_docker_command_via_ssh(server_config, docker_command, check_exit_sta
     if use_sudo is None:
         use_sudo = _check_docker_sudo_required(server_config)
     
-    # Build command with or without sudo
-    if use_sudo:
-        # Use sudo docker - need to handle password if required
-        # For now, assume passwordless sudo is configured or user is in docker group
-        command = f"sudo docker {docker_command}"
-    else:
-        command = f"docker {docker_command}"
+    # Parse and re-quote Docker arguments so remote shell metacharacters never
+    # gain command-separator semantics.
+    command = _svc_build_docker_command(docker_command, use_sudo=bool(use_sudo))
     
     # For docker load, we need to check stderr too (docker load outputs to stderr)
     if return_stderr or 'load' in docker_command:
@@ -1275,90 +1159,21 @@ def execute_docker_command_via_ssh(server_config, docker_command, check_exit_sta
         return execute_command_via_ssh(server_config, command, check_exit_status=check_exit_status)
 
 def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=True):
-    """Execute command via SSH and return both stdout and stderr"""
-    # Handle local server
-    if server_config is None or server_config.get('id') == 'local':
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            if check_exit_status and result.returncode != 0:
-                raise Exception(
-                    f"Command failed (exit {result.returncode}): "
-                    f"{redact_sensitive_text(result.stderr or '')}"
-                )
-            return result.stdout, result.stderr
-        except subprocess.TimeoutExpired:
-            raise Exception("Command timed out")
-        except Exception as e:
-            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
-    
-    if not SSH_AVAILABLE:
-        raise ImportError("SSH libraries not available")
-    
+    """Execute command and return stdout/stderr without invoking a local shell."""
     try:
-        import paramiko
-        from io import StringIO
-        
-        hostname = server_config.get('hostname')
-        port = server_config.get('port', 22)
-        username = server_config.get('username')
-        auth_type = server_config.get('auth_type', 'password')
-        
-        # Create SSH client
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        
-        # Prepare authentication (same as execute_command_via_ssh)
-        if auth_type == 'password':
-            ssh.connect(hostname, port=port, username=username, password=server_config.get('password'), timeout=10)
-        elif auth_type == 'key':
-            key_content = server_config.get('private_key')
-            key_passphrase = server_config.get('key_passphrase')
-            if not key_content:
-                raise ValueError('Private key required for key authentication')
-            
-            key_file = StringIO(key_content)
-            try:
-                key = paramiko.RSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            except:
-                try:
-                    key_file.seek(0)
-                    key = paramiko.DSSKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                except:
-                    key_file.seek(0)
-                    key = paramiko.ECDSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            
-            ssh.connect(hostname, port=port, username=username, pkey=key, timeout=10)
-        elif auth_type == '2fa':
-            password = server_config.get('password')
-            totp_code = server_config.get('totp_code', '')
-            ssh.connect(hostname, port=port, username=username, password=password + totp_code, timeout=10)
-        else:
-            raise ValueError(f'Unsupported auth type: {auth_type}')
-        
-        # Execute command
-        stdin, stdout, stderr = ssh.exec_command(command)
-        exit_status = stdout.channel.recv_exit_status()
-        output = stdout.read().decode('utf-8')
-        error_output = stderr.read().decode('utf-8')
-        
-        ssh.close()
-        
-        if check_exit_status and exit_status != 0:
-            raise Exception(
-                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
-            )
-        
-        return output, error_output
-        
-    except Exception as e:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
+        return _svc_execute_ssh_command(
+            server_config,
+            command,
+            ssh_available=SSH_AVAILABLE,
+            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+            check_exit_status=check_exit_status,
+            return_stderr=True,
+            timeout=300,
+        )
+    except Exception as exc:
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
         raise
+
 
 def get_selected_server_config():
     """Get configuration for currently selected server"""
@@ -1712,22 +1527,9 @@ def _apply_env_resource_presets(deployment: dict, target_env: str) -> None:
 
 
 def _write_remote_file(server_config: dict, remote_path: str, content: str) -> None:
-    """Write text file to remote host via SSH using base64 payload."""
-    import base64
-    payload = base64.b64encode(content.encode('utf-8')).decode('ascii')
-    remote_dir = str(Path(remote_path).parent)
-    cmd = (
-        f"mkdir -p '{remote_dir}' && "
-        f"python3 - <<'PY'\n"
-        f"import base64, pathlib\n"
-        f"p = pathlib.Path(r'''{remote_path}''')\n"
-        f"p.parent.mkdir(parents=True, exist_ok=True)\n"
-        f"data = base64.b64decode(r'''{payload}'''.encode('ascii'))\n"
-        f"p.write_bytes(data)\n"
-        f"print('OK')\n"
-        f"PY"
-    )
-    execute_command_via_ssh(server_config, cmd, check_exit_status=True)
+    """Write text to a remote path using a shell-safe Python command."""
+    command = _svc_build_remote_file_write_command(remote_path, content)
+    execute_command_via_ssh(server_config, command, check_exit_status=True)
 
 
 def promote_config_to_server(server_id: str, config_path_str: str, from_env: str, to_env: str, skip_backup: bool = False) -> bool:
@@ -1767,9 +1569,11 @@ def promote_config_to_server(server_id: str, config_path_str: str, from_env: str
         _write_remote_file(server_config, remote_config_path, promoted_yaml)
 
         # Run deploy remotely
-        cmd = f"dockerpilot deploy config '{remote_config_path}' --type {deployment_type}"
-        if skip_backup:
-            cmd += " --skip-backup"
+        cmd = _svc_build_dockerpilot_deploy_command(
+            remote_config_path,
+            deployment_type,
+            skip_backup=skip_backup,
+        )
         execute_command_via_ssh(server_config, cmd, check_exit_status=True)
         return True
 
@@ -1801,6 +1605,8 @@ AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken, SudoPasswo
     ](),
     now_ts=lambda: time.time(),
     datetime_cls=datetime,
+    login_rate_limiter=_login_rate_limiter,
+    login_rate_key=lambda _username: str(request.remote_addr or 'unknown'),
 )
 
 
@@ -1913,7 +1719,7 @@ ExecuteCommand, GetCommandHelp, DockerPilotCommands = create_command_resources(
 
 try:
     import paramiko
-    from paramiko import SSHClient, AutoAddPolicy
+    from paramiko import SSHClient
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_ssh_private_key
     SSH_AVAILABLE = True
@@ -1927,20 +1733,47 @@ def get_servers_config_path():
     return _svc_get_servers_config_path(app.config['SERVERS_DIR'])
 
 def load_servers_config():
-    """Load servers configuration via configured state store."""
-    return _svc_load_servers_config(get_state_store=get_state_store, logger=app.logger)
+    """Load server config and decrypt credential fields only in process memory."""
+    raw = _svc_load_servers_config(get_state_store=get_state_store, logger=app.logger)
+    try:
+        return _server_secret_store.reveal_config(raw)
+    except SecretStoreError as exc:
+        app.logger.error("Failed to decrypt server configuration: %s", safe_error_message(exc))
+        raise
+
 
 def save_servers_config(config):
-    """Save servers configuration via configured state store."""
-    return _svc_save_servers_config(config, get_state_store=get_state_store, logger=app.logger)
+    """Encrypt credential fields before writing server config to any state backend."""
+    protected = _server_secret_store.protect_config(config or {})
+    return _svc_save_servers_config(protected, get_state_store=get_state_store, logger=app.logger)
+
+
+def _migrate_plaintext_server_secrets() -> None:
+    """One-way migration of legacy plaintext server credentials to encrypted-at-rest values."""
+    raw = _svc_load_servers_config(get_state_store=get_state_store, logger=app.logger)
+    if not _server_secret_store.has_plaintext_secrets(raw):
+        return
+    protected = _server_secret_store.protect_config(raw)
+    if not _svc_save_servers_config(protected, get_state_store=get_state_store, logger=app.logger):
+        raise RuntimeError("Failed to persist encrypted server credential migration")
+    app.logger.info("Migrated legacy server credentials to encrypted-at-rest storage")
+
 
 def convert_putty_key_to_openssh(ppk_content, passphrase=None):
     """Convert PuTTY private key (.ppk) to OpenSSH format"""
     return _svc_convert_putty_key_to_openssh(ppk_content, passphrase=passphrase)
 
+
 def test_ssh_connection(server_config):
-    """Test SSH connection to a server"""
-    return _svc_test_ssh_connection(server_config, ssh_available=SSH_AVAILABLE)
+    """Test SSH connection using strict host-key verification."""
+    return _svc_test_ssh_connection(
+        server_config,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+    )
+
+
+_migrate_plaintext_server_secrets()
 
 
 ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerTest, ServerSelect = create_server_resources(
@@ -1965,7 +1798,20 @@ ContainerMigrate = create_migration_resource(
     load_servers_config=lambda: globals()["load_servers_config"](),
     get_dockerpilot=lambda: get_dockerpilot('local'),
     execute_command_via_ssh=execute_command_via_ssh,
+    execute_shell_script_via_ssh=lambda server_config, script, check_exit_status=True: _svc_execute_ssh_script(
+        server_config,
+        script,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        check_exit_status=check_exit_status,
+        timeout=300,
+    ),
     execute_docker_command_via_ssh=execute_docker_command_via_ssh,
+    open_ssh_client_for_transfer=lambda server_config: _svc_open_verified_ssh_client(
+        server_config,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        timeout=30,
+    ),
     save_deployment_config=save_deployment_config,
     infer_port_mapping_for_host_network=_infer_port_mapping_for_host_network,
 )

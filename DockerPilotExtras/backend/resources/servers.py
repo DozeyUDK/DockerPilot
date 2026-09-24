@@ -34,6 +34,7 @@ def create_server_resources(
                         "port": server.get("port", 22),
                         "username": server.get("username"),
                         "auth_type": server.get("auth_type", "password"),
+                        "host_key_fingerprint": server.get("host_key_fingerprint"),
                         "description": server.get("description", ""),
                     }
                     safe_servers.append(safe_server)
@@ -86,6 +87,7 @@ def create_server_resources(
                     "port": data.get("port", 22),
                     "username": username,
                     "auth_type": auth_type,
+                    "host_key_fingerprint": str(data.get("host_key_fingerprint") or "").strip() or None,
                     "description": data.get("description", ""),
                 }
 
@@ -145,22 +147,24 @@ def create_server_resources(
                     server["username"] = data["username"]
                 if "description" in data:
                     server["description"] = data.get("description", "")
+                if "host_key_fingerprint" in data:
+                    server["host_key_fingerprint"] = str(data.get("host_key_fingerprint") or "").strip() or None
                 if "auth_type" in data:
                     server["auth_type"] = data["auth_type"]
 
                 auth_type = server.get("auth_type", "password")
                 if auth_type == "password":
-                    if "password" in data:
+                    if data.get("password"):
                         server["password"] = data["password"]
                 elif auth_type == "key":
-                    if "private_key" in data:
+                    if data.get("private_key"):
                         server["private_key"] = data["private_key"]
-                    if "key_passphrase" in data:
+                    if data.get("key_passphrase"):
                         server["key_passphrase"] = data.get("key_passphrase")
                 elif auth_type == "2fa":
-                    if "password" in data:
+                    if data.get("password"):
                         server["password"] = data["password"]
-                    if "totp_secret" in data:
+                    if data.get("totp_secret"):
                         server["totp_secret"] = data.get("totp_secret")
 
                 if save_servers_config(config):
@@ -283,6 +287,7 @@ def create_server_resources(
                                     "port": server.get("port", 22),
                                     "username": server.get("username"),
                                     "auth_type": server.get("auth_type"),
+                                    "host_key_fingerprint": server.get("host_key_fingerprint"),
                                 },
                             }
 

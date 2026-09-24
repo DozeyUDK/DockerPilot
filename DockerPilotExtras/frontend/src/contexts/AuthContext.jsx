@@ -26,7 +26,7 @@ export const AuthProvider = ({ children }) => {
   const [state, setState] = useState(defaultState)
 
   const applyStatus = useCallback((payload = {}) => {
-    const csrf = payload.secure_deploy_csrf || null
+    const csrf = payload.csrf_token || payload.secure_deploy_csrf || null
     setSecureDeployCsrf(csrf)
     setState(prev => ({
       ...prev,
@@ -87,11 +87,13 @@ export const AuthProvider = ({ children }) => {
     } catch (_error) {
       // Ignore API failure and clear local auth state anyway.
     } finally {
+      setSecureDeployCsrf(null)
       setState(prev => ({
         ...prev,
         checking: false,
         authenticated: false,
         username: null,
+        secureDeployCsrf: null,
       }))
     }
   }, [])

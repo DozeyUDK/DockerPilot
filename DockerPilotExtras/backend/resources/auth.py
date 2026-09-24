@@ -22,8 +22,19 @@ def create_auth_resources(
     revoke_elevation_tokens_for_current_session,
     now_ts,
     datetime_cls,
+    login_rate_limiter=None,
+    login_rate_key=None,
 ):
     """Return auth/elevation resource classes with injected dependencies."""
+
+    def _rate_key(username: str) -> str:
+        if callable(login_rate_key):
+            return str(login_rate_key(username))
+        return username or "<anonymous>"
+
+    def _record_login_failure(key: str) -> None:
+        if login_rate_limiter is not None:
+            login_rate_limiter.register_failure(key)
 
     class AuthStatus(Resource):
         """Return current authentication state for DockerPilotExtras web panel."""
@@ -51,19 +62,36 @@ def create_auth_resources(
                 username = str(data.get("username") or "").strip()
                 password = str(data.get("password") or "")
                 totp_code = str(data.get("totp_code") or "").strip()
+                rate_key = _rate_key(username)
+
+                if login_rate_limiter is not None:
+                    allowed, retry_after = login_rate_limiter.check(rate_key)
+                    if not allowed:
+                        return {
+                            "success": False,
+                            "error": "Too many login attempts. Try again later.",
+                            "retry_after_seconds": retry_after,
+                        }, 429
 
                 if not username or not password:
+                    _record_login_failure(rate_key)
                     return {"success": False, "error": "username and password are required"}, 400
                 if username != web_auth_username:
+                    _record_login_failure(rate_key)
                     return {"success": False, "error": "Invalid credentials"}, 401
                 if not verify_password(password):
+                    _record_login_failure(rate_key)
                     return {"success": False, "error": "Invalid credentials"}, 401
                 if web_auth_totp_secret and not verify_totp_code(
                     web_auth_totp_secret,
                     totp_code,
                     window=web_auth_totp_window,
                 ):
+                    _record_login_failure(rate_key)
                     return {"success": False, "error": "Invalid MFA code"}, 401
+
+                if login_rate_limiter is not None:
+                    login_rate_limiter.clear(rate_key)
 
                 session["auth_authenticated"] = True
                 session["auth_username"] = username
@@ -173,6 +201,7 @@ def create_auth_resources(
         def delete(self):
             try:
                 revoked = revoke_elevation_tokens_for_current_session()
+                # Clean legacy cookie-session fields if an old session still contains them.
                 session.pop("sudo_password", None)
                 session.pop("sudo_password_timestamp", None)
                 app.logger.info(f"Revoked {revoked} elevation token(s) for current session")
@@ -182,53 +211,40 @@ def create_auth_resources(
                 return {"error": str(exc)}, 500
 
     class SudoPassword(Resource):
-        """Store sudo password in session for backup operations."""
+        """Legacy endpoint that now returns an elevation token without storing sudo in session."""
 
         def post(self):
             try:
-                data = request.get_json()
-                sudo_password = data.get("sudo_password")
-
+                data = request.get_json() or {}
+                sudo_password = str(data.get("sudo_password") or "")
                 if not sudo_password:
                     return {"error": "sudo_password is required"}, 400
 
-                session["sudo_password"] = sudo_password
-                session["sudo_password_timestamp"] = datetime_cls.now().isoformat()
-                session.permanent = True
-
-                app.logger.info("Sudo password stored in session (not logged)")
-
-                response = {
+                # Never put privileged material in Flask's client-side signed cookie.
+                session.pop("sudo_password", None)
+                session.pop("sudo_password_timestamp", None)
+                issued = issue_elevation_token(
+                    sudo_password=sudo_password,
+                    scope={"action": "legacy.sudo_password"},
+                )
+                return {
                     "success": True,
-                    "message": "Sudo password stored securely",
+                    "message": "Elevation token issued; sudo password was not stored in session",
+                    "elevation_token": issued.get("token"),
+                    "elevation_expires_in": issued.get("expires_in"),
+                    "deprecated": True,
                 }
-                try:
-                    issued = issue_elevation_token(
-                        sudo_password=sudo_password,
-                        scope={"action": "legacy.sudo_password"},
-                    )
-                    response.update(
-                        {
-                            "elevation_token": issued.get("token"),
-                            "elevation_expires_in": issued.get("expires_in"),
-                            "deprecated": True,
-                        }
-                    )
-                except Exception:
-                    pass
-
-                return response
             except Exception as exc:
-                app.logger.error(f"Store sudo password failed: {exc}")
+                app.logger.error(f"Legacy sudo endpoint failed: {exc}")
                 return {"error": str(exc)}, 500
 
         def delete(self):
-            """Clear sudo password from session."""
+            """Revoke elevation material and clear any legacy session fields."""
             try:
-                revoke_elevation_tokens_for_current_session()
+                revoked = revoke_elevation_tokens_for_current_session()
                 session.pop("sudo_password", None)
                 session.pop("sudo_password_timestamp", None)
-                return {"success": True, "message": "Sudo password cleared"}
+                return {"success": True, "message": "Elevation credentials cleared", "revoked": revoked}
             except Exception as exc:
                 return {"error": str(exc)}, 500
 
