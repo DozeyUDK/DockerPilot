@@ -1,0 +1,532 @@
+{
+  "class_lines": 1978,
+  "file_lines": 2044,
+  "methods": {
+    "_advanced_health_check": {
+      "defaults": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "port",
+        "endpoint",
+        "timeout",
+        "max_retries"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_blue_green_deploy_enhanced": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "False"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config",
+        "build_config",
+        "skip_backup"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_build_image_enhanced": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "image_tag",
+        "build_config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_canary_deploy": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config",
+        "build_config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_comprehensive_container_validation": {
+      "defaults": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container",
+        "config",
+        "port",
+        "target_name"
+      ],
+      "returns": "tuple",
+      "vararg": null
+    },
+    "_deployment_config_from_dict": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "deployment"
+      ],
+      "returns": "DeploymentConfig",
+      "vararg": null
+    },
+    "_detect_health_check_endpoint": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "image_tag"
+      ],
+      "returns": "Optional[str]",
+      "vararg": null
+    },
+    "_discover_dockerfile_candidates": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "search_root"
+      ],
+      "returns": "list[Path]",
+      "vararg": null
+    },
+    "_ensure_image_from_existing_container": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "image_tag",
+        "container_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_get_resource_limits": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config"
+      ],
+      "returns": "dict",
+      "vararg": null
+    },
+    "_is_dockerfile_candidate": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "candidate"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_monitor_canary_performance": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "port",
+        "duration"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_normalize_volumes": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "volumes"
+      ],
+      "returns": "list",
+      "vararg": null
+    },
+    "_prepare_image": {
+      "defaults": [
+        null,
+        null,
+        "None",
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "image_tag",
+        "build_config",
+        "container_name"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "_record_deployment": {
+      "defaults": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "deployment_id",
+        "config",
+        "deployment_type",
+        "success",
+        "duration",
+        "target_env"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "_resolve_runtime_network": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "requested_network"
+      ],
+      "returns": "Optional[str]",
+      "vararg": null
+    },
+    "_rolling_deploy": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config",
+        "build_config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_run_parallel_tests": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "port",
+        "config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_run_post_promotion_validation": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "environment",
+        "config"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_run_pre_promotion_checks": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_env",
+        "target_env"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "_should_run_parallel_tests": {
+      "defaults": [
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "build_image_standalone": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "False",
+        "True",
+        "False",
+        "None"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "dockerfile_path",
+        "tag",
+        "no_cache",
+        "pull",
+        "pull_if_missing",
+        "generate_template"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "create_deployment_config": {
+      "defaults": [
+        null,
+        "'deployment.yml'"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config_path"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "create_dockerfile_template": {
+      "defaults": [
+        null,
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "destination",
+        "template_name"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "deploy_from_config": {
+      "defaults": [
+        null,
+        null,
+        "'rolling'"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "config_path",
+        "deployment_type"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "environment_promotion": {
+      "defaults": [
+        null,
+        null,
+        null,
+        "None",
+        "False"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "source_env",
+        "target_env",
+        "config_path",
+        "skip_backup"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "get_build_template_choices": {
+      "defaults": [
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self"
+      ],
+      "returns": "list[str]",
+      "vararg": null
+    },
+    "inspect_build_source": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "dockerfile_path"
+      ],
+      "returns": "dict[str, Any]",
+      "vararg": null
+    },
+    "quick_deploy": {
+      "defaults": [
+        null,
+        "'.'",
+        "None",
+        "None",
+        "None",
+        "None",
+        "None",
+        "None",
+        "True"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "dockerfile_path",
+        "image_tag",
+        "container_name",
+        "port_mapping",
+        "environment",
+        "volumes",
+        "yaml_config",
+        "cleanup_old_image"
+      ],
+      "returns": "bool",
+      "vararg": null
+    },
+    "show_deployment_history": {
+      "defaults": [
+        null,
+        "10"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "limit"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "view_container_json": {
+      "defaults": [
+        null,
+        null
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name"
+      ],
+      "returns": null,
+      "vararg": null
+    },
+    "view_container_logs": {
+      "defaults": [
+        null,
+        "None",
+        "50"
+      ],
+      "kwarg": null,
+      "kwonly": {},
+      "positional": [
+        "self",
+        "container_name",
+        "tail"
+      ],
+      "returns": null,
+      "vararg": null
+    }
+  }
+}
