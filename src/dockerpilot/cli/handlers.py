@@ -1,10 +1,26 @@
 """CLI command dispatching for DockerPilot."""
 
+import json
 import sys
 
 from .interactive import run_interactive_menu
 from .parser import build_cli_parser
 from .tui import run_tui
+
+
+def _print_json_result(pilot, data) -> None:
+    """Render structured CLI results at the CLI boundary.
+
+    Core manager methods intentionally return JSON-friendly data instead of
+    printing it so API/TUI callers can reuse them without side effects. The
+    CLI handler owns presentation when the user explicitly asks for JSON.
+    """
+    if data is None:
+        return
+    pilot.console.print(
+        json.dumps(data, indent=2, ensure_ascii=False, default=str),
+        markup=False,
+    )
 
 
 def run_cli(pilot) -> None:
@@ -94,7 +110,9 @@ def dispatch_cli_args(pilot, args, parser) -> None:
 def handle_container_cli(pilot, args):
     """Handle container CLI commands with support for multiple targets."""
     if args.container_action == 'list':
-        pilot.list_containers(show_all=args.all, format_output=args.format)
+        result = pilot.list_containers(show_all=args.all, format_output=args.format)
+        if args.format == 'json':
+            _print_json_result(pilot, result)
     elif args.container_action == 'stop-remove':
         containers = pilot._parse_multi_target(args.name)
         if not containers:
@@ -232,7 +250,9 @@ def handle_container_cli(pilot, args):
 
     elif args.container_action == 'list-images':
         hide_untagged = getattr(args, 'hide_untagged', False)
-        pilot.list_images(show_all=args.all, format_output=args.format, hide_untagged=hide_untagged)
+        result = pilot.list_images(show_all=args.all, format_output=args.format, hide_untagged=hide_untagged)
+        if args.format == 'json':
+            _print_json_result(pilot, result)
 
     elif args.container_action == 'remove-image':
         images = pilot._parse_multi_target(args.name)

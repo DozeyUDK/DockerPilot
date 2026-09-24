@@ -1,0 +1,994 @@
+{
+  "__init__": {
+    "defaults": [
+      null,
+      "None",
+      "LogLevel.INFO"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "config_file",
+      "log_level"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_check_cancel_flag": {
+    "defaults": [
+      null,
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_configure_console_streams": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_create_github_actions_config": {
+    "defaults": [
+      null,
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "output_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_create_gitlab_ci_config": {
+    "defaults": [
+      null,
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "output_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_create_jenkins_config": {
+    "defaults": [
+      null,
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "output_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_error_handler": {
+    "defaults": [
+      null,
+      null,
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "operation",
+      "container_name"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_generate_test_report": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_results"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_get_database_config": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "image_tag"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_get_database_name": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "image_tag"
+    ],
+    "returns": "str",
+    "vararg": null
+  },
+  "_handle_backup_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_handle_config_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_handle_container_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_handle_deploy_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_handle_monitor_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_handle_pipeline_cli": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_init_docker_client": {
+    "defaults": [
+      null,
+      "3"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "max_retries"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_initialize_alert_monitoring": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "alert_config_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_is_database_service": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "image_tag"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "_load_config": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "config_file"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_load_health_check_defaults": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_parse_multi_target": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "target_string"
+    ],
+    "returns": "List[str]",
+    "vararg": null
+  },
+  "_run_container_interactive": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "args"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_run_custom_test": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_config",
+      "start_time"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_run_database_test": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_config",
+      "start_time"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_run_http_test": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_config",
+      "start_time"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_run_interactive_menu": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_run_single_integration_test": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_config"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "_save_test_report": {
+    "defaults": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_results",
+      "passed",
+      "failed"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_send_notification": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "channel",
+      "message"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_setup_logging": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "level"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_show_banner": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_show_loading": {
+    "defaults": [
+      null,
+      "'Processing'",
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "message",
+      "stop_event"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_signal_handler": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "signum",
+      "frame"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_trigger_alert": {
+    "defaults": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "rule",
+      "container_name",
+      "details"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_update_progress": {
+    "defaults": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "stage",
+      "progress",
+      "message"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "_with_loading": {
+    "defaults": [
+      null,
+      "'Processing'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "message"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "check_alerts": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_stats",
+      "container_name"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "container_operation": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": "kwargs",
+    "kwonly": {},
+    "positional": [
+      "self",
+      "operation",
+      "container_name"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "create_cli_parser": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": "argparse.ArgumentParser",
+    "vararg": null
+  },
+  "create_pipeline_config": {
+    "defaults": [
+      null,
+      "'github'",
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "pipeline_type",
+      "output_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "create_production_checklist": {
+    "defaults": [
+      null,
+      "'production-checklist.md'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "output_file"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "exec_command_non_interactive": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "command"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "exec_container": {
+    "defaults": [
+      null,
+      null,
+      "'/bin/bash'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "command"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "export_configuration": {
+    "defaults": [
+      null,
+      "'docker-pilot-config.tar.gz'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "config_name"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "generate_documentation": {
+    "defaults": [
+      null,
+      "'docs'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "output_dir"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "get_container_stats": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name"
+    ],
+    "returns": "Optional[ContainerStats]",
+    "vararg": null
+  },
+  "get_container_stats_once": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "health_check_standalone": {
+    "defaults": [
+      null,
+      null,
+      "'/health'",
+      "30",
+      "10"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "port",
+      "endpoint",
+      "timeout",
+      "max_retries"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "import_configuration": {
+    "defaults": [
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "config_archive"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "integrate_with_git": {
+    "defaults": [
+      null,
+      "'.'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "repo_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "list_containers": {
+    "defaults": [
+      null,
+      "True",
+      "'table'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "show_all",
+      "format_output"
+    ],
+    "returns": "List[Any]",
+    "vararg": null
+  },
+  "list_images": {
+    "defaults": [
+      null,
+      "True",
+      "'table'",
+      "False"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "show_all",
+      "format_output",
+      "hide_untagged"
+    ],
+    "returns": "List[Any]",
+    "vararg": null
+  },
+  "monitor_container_live": {
+    "defaults": [
+      null,
+      null,
+      "30"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "duration"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "monitor_containers_dashboard": {
+    "defaults": [
+      null,
+      "None",
+      "300"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "containers",
+      "duration"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "prune_dangling_images": {
+    "defaults": [
+      null,
+      "False"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "dry_run"
+    ],
+    "returns": "dict",
+    "vararg": null
+  },
+  "remove_image": {
+    "defaults": [
+      null,
+      null,
+      "False"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "image_name",
+      "force"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "rename_container": {
+    "defaults": [
+      null,
+      null,
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "new_name"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "run_cli": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "run_integration_tests": {
+    "defaults": [
+      null,
+      "'integration-tests.yml'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "test_config_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "run_new_container": {
+    "defaults": [
+      null,
+      null,
+      null,
+      "None",
+      "None",
+      "None",
+      "None",
+      "'unless-stopped'",
+      "None",
+      "False",
+      "None",
+      "None"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "image_name",
+      "name",
+      "ports",
+      "command",
+      "environment",
+      "volumes",
+      "restart_policy",
+      "network",
+      "privileged",
+      "cpu_limit",
+      "memory_limit"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "setup_monitoring_alerts": {
+    "defaults": [
+      null,
+      "'alerts.yml'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "alert_config_path"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "show_deployment_history": {
+    "defaults": [
+      null,
+      "10"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "limit"
+    ],
+    "returns": null,
+    "vararg": null
+  },
+  "stop_and_remove_container": {
+    "defaults": [
+      null,
+      null,
+      "10"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "timeout"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "update_restart_policy": {
+    "defaults": [
+      null,
+      null,
+      "'unless-stopped'"
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self",
+      "container_name",
+      "policy"
+    ],
+    "returns": "bool",
+    "vararg": null
+  },
+  "validate_system_requirements": {
+    "defaults": [
+      null
+    ],
+    "kwarg": null,
+    "kwonly": {},
+    "positional": [
+      "self"
+    ],
+    "returns": "bool",
+    "vararg": null
+  }
+}

@@ -538,3 +538,88 @@ class ContainerManager:
             self.console.print(f"[red]Container '{container_name}' not found[/red]")
         except Exception as e:
             self.console.print(f"[red]Error fetching JSON for container '{container_name}': {e}[/red]")
+
+    def exec_container(self, container_name: str, command: str = "/bin/bash") -> bool:
+        """Execute interactive command in running container."""
+        import subprocess
+
+        with self._error_handler(f"exec into container {container_name}", container_name):
+            # Verify container exists and is running
+            container = self.client.containers.get(container_name)
+            if container.status != 'running':
+                self.console.print(f"[bold red]❌ Container '{container_name}' is not running (status: {container.status})[/bold red]")
+                return False
+
+            self.logger.info(f"Executing interactive command in container {container_name}: {command}")
+            self.console.print(f"[cyan]📟 Executing '{command}' in container '{container_name}'...[/cyan]")
+            self.console.print(f"[dim]Type 'exit' to leave the container shell[/dim]\n")
+
+            # Use subprocess to maintain interactive terminal
+            # This allows proper TTY handling for interactive bash session
+            try:
+                result = subprocess.run(
+                    ['docker', 'exec', '-it', container_name, command],
+                    check=False
+                )
+
+                if result.returncode == 0:
+                    self.console.print(f"\n[green]✅ Exited from container '{container_name}'[/green]")
+                    return True
+                else:
+                    self.console.print(f"\n[yellow]⚠️ Exec command exited with code {result.returncode}[/yellow]")
+                    return False
+
+            except FileNotFoundError:
+                self.console.print("[bold red]❌ Docker CLI not found. Please ensure Docker is installed and in PATH.[/bold red]")
+                return False
+            except Exception as e:
+                self.console.print(f"[bold red]❌ Failed to execute command: {e}[/bold red]")
+                self.logger.error(f"Exec failed: {e}")
+                return False
+
+        return False
+
+    def stop_and_remove_container(self, container_name: str, timeout: int = 10) -> bool:
+        """Stop and remove container in one operation (from dockerpilot-Lite)"""
+        with self._error_handler(f"stop and remove {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+
+            self.console.print(f"[cyan]🛑 Stopping container {container_name}...[/cyan]")
+            if container.status == "running":
+                container.stop(timeout=timeout)
+                self.console.print(f"[green]✅ Container stopped[/green]")
+            else:
+                self.console.print(f"[yellow]ℹ️ Container was not running[/yellow]")
+
+            self.console.print(f"[cyan]🗑️ Removing container {container_name}...[/cyan]")
+            container.remove()
+            self.console.print(f"[green]✅ Container {container_name} removed[/green]")
+
+            self.logger.info(f"Container {container_name} stopped and removed")
+            return True
+
+        return False
+
+    def exec_command_non_interactive(self, container_name: str, command: str) -> bool:
+        """Execute command in container non-interactively (from dockerpilot-Lite)"""
+        with self._error_handler(f"exec command in {container_name}", container_name):
+            container = self.client.containers.get(container_name)
+
+            if container.status != 'running':
+                self.console.print(f"[red]❌ Container '{container_name}' is not running[/red]")
+                return False
+
+            self.console.print(f"[cyan]⚙️ Executing: {command}[/cyan]")
+            exec_log = container.exec_run(command)
+
+            output = exec_log.output.decode()
+            self.console.print(output)
+
+            if exec_log.exit_code == 0:
+                self.console.print(f"[green]✅ Command executed successfully[/green]")
+                return True
+            else:
+                self.console.print(f"[yellow]⚠️ Command exited with code {exec_log.exit_code}[/yellow]")
+                return False
+
+        return False

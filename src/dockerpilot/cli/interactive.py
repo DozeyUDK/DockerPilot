@@ -1,5 +1,7 @@
 """Interactive CLI flows for DockerPilot."""
 
+import sys
+
 from rich.prompt import Confirm, Prompt
 
 
@@ -447,3 +449,187 @@ def run_interactive_menu(pilot):
     except Exception as e:
         pilot.logger.error(f"Interactive menu error: {e}")
         pilot.console.print(f"[red]Error: {e}[/red]")
+
+
+def run_container_interactive(pilot, args):
+    """Interactive mode for running containers - asks for all parameters one by one"""
+    pilot.console.print("\n[bold cyan]🚀 Interactive Container Run Mode[/bold cyan]")
+    pilot.console.print("[dim]Press Enter to use default value or leave empty to skip[/dim]\n")
+
+    # Image (required)
+    image_name = args.image if args.image else None
+    if not image_name:
+        image_name = Prompt.ask("Docker image name/tag", default="")
+        if not image_name:
+            pilot.console.print("[red]❌ Image name is required[/red]")
+            sys.exit(1)
+
+    # Container name (required)
+    container_name = args.name if args.name else None
+    if not container_name:
+        container_name = Prompt.ask("Container name", default="")
+        if not container_name:
+            pilot.console.print("[red]❌ Container name is required[/red]")
+            sys.exit(1)
+
+    # Port mappings
+    ports = {}
+    if args.port:
+        # Parse existing ports
+        for port_mapping in args.port:
+            if ':' in port_mapping:
+                container_port, host_port = port_mapping.split(':')
+                ports[container_port.strip()] = host_port.strip()
+
+    pilot.console.print("\n[cyan]Port mappings (format: container:host, e.g., 80:8080)[/cyan]")
+    while True:
+        port_input = Prompt.ask("Port mapping (empty to finish)", default="").strip()
+        if not port_input:
+            break
+        if ':' in port_input:
+            try:
+                container_port, host_port = port_input.split(':')
+                ports[container_port.strip()] = host_port.strip()
+                pilot.console.print(f"[green]✓ Added port mapping: {container_port} -> {host_port}[/green]")
+            except ValueError:
+                pilot.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+        else:
+            pilot.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+
+    # Environment variables
+    environment = {}
+    if args.env:
+        # Parse existing env vars
+        for env_var in args.env:
+            if '=' in env_var:
+                key, value = env_var.split('=', 1)
+                environment[key.strip()] = value.strip()
+
+    pilot.console.print("\n[cyan]Environment variables (format: KEY=VALUE)[/cyan]")
+    while True:
+        env_input = Prompt.ask("Environment variable (empty to finish)", default="").strip()
+        if not env_input:
+            break
+        if '=' in env_input:
+            key, value = env_input.split('=', 1)
+            environment[key.strip()] = value.strip()
+            pilot.console.print(f"[green]✓ Added environment variable: {key}[/green]")
+        else:
+            pilot.console.print("[yellow]⚠️ Invalid format. Use KEY=VALUE[/yellow]")
+
+    # Volumes
+    volumes = {}
+    if args.volume:
+        # Parse existing volumes
+        for volume_mapping in args.volume:
+            if ':' in volume_mapping:
+                parts = volume_mapping.split(':')
+                if len(parts) == 2:
+                    host_path, container_path = parts
+                    volumes[host_path.strip()] = container_path.strip()
+                elif len(parts) == 3:
+                    host_path, container_path, mode = parts
+                    volumes[host_path.strip()] = {
+                        'bind': container_path.strip(),
+                        'mode': mode.strip()
+                    }
+
+    pilot.console.print("\n[cyan]Volume mappings (format: host:container or host:container:mode)[/cyan]")
+    while True:
+        vol_input = Prompt.ask("Volume mapping (empty to finish)", default="").strip()
+        if not vol_input:
+            break
+        if ':' in vol_input:
+            parts = vol_input.split(':')
+            if len(parts) == 2:
+                host_path, container_path = parts
+                volumes[host_path.strip()] = container_path.strip()
+                pilot.console.print(f"[green]✓ Added volume: {host_path} -> {container_path}[/green]")
+            elif len(parts) == 3:
+                host_path, container_path, mode = parts
+                volumes[host_path.strip()] = {
+                    'bind': container_path.strip(),
+                    'mode': mode.strip()
+                }
+                pilot.console.print(f"[green]✓ Added volume: {host_path} -> {container_path} ({mode})[/green]")
+            else:
+                pilot.console.print("[yellow]⚠️ Invalid format. Use host:container or host:container:mode[/yellow]")
+        else:
+            pilot.console.print("[yellow]⚠️ Invalid format. Use host:container[/yellow]")
+
+    # Command
+    command = args.command if args.command else None
+    if not command:
+        command = Prompt.ask("Command to run (empty for default)", default="").strip()
+        command = command if command else None
+
+    # Restart policy
+    restart_policy = args.restart if args.restart else 'unless-stopped'
+    restart_policy = Prompt.ask("Restart policy", default=restart_policy, choices=['no', 'on-failure', 'always', 'unless-stopped'])
+
+    # Network
+    network = args.network if args.network else None
+    if not network:
+        network = Prompt.ask("Network name (or 'host' for host network, empty for default)", default="").strip()
+        network = network if network else None
+
+    # Privileged mode
+    privileged = args.privileged if args.privileged else False
+    if not privileged:
+        privileged = Confirm.ask("Run in privileged mode?", default=False)
+
+    # CPU limit
+    cpu_limit = args.cpu_limit if args.cpu_limit else None
+    if not cpu_limit:
+        cpu_input = Prompt.ask("CPU limit (e.g., 1.5 for 1.5 CPUs, empty to skip)", default="").strip()
+        cpu_limit = cpu_input if cpu_input and cpu_input.lower() not in ['n', 'no'] else None
+
+    # Memory limit
+    memory_limit = args.memory_limit if args.memory_limit else None
+    if not memory_limit:
+        memory_input = Prompt.ask("Memory limit (e.g., 1g for 1GB, 512m for 512MB, empty to skip)", default="").strip()
+        memory_limit = memory_input if memory_input and memory_input.lower() not in ['n', 'no'] else None
+
+    # Summary
+    pilot.console.print("\n[bold cyan]📋 Configuration Summary:[/bold cyan]")
+    pilot.console.print(f"  Image: {image_name}")
+    pilot.console.print(f"  Container name: {container_name}")
+    if ports:
+        pilot.console.print(f"  Ports: {ports}")
+    if environment:
+        pilot.console.print(f"  Environment variables: {len(environment)} set")
+    if volumes:
+        pilot.console.print(f"  Volumes: {len(volumes)} mounted")
+    if command:
+        pilot.console.print(f"  Command: {command}")
+    pilot.console.print(f"  Restart policy: {restart_policy}")
+    if network:
+        pilot.console.print(f"  Network: {network}")
+    if privileged:
+        pilot.console.print(f"  Privileged mode: enabled")
+    if cpu_limit:
+        pilot.console.print(f"  CPU limit: {cpu_limit}")
+    if memory_limit:
+        pilot.console.print(f"  Memory limit: {memory_limit}")
+
+    # Confirm
+    if not Confirm.ask("\n[bold]Proceed with container creation?[/bold]", default=True):
+        pilot.console.print("[yellow]❌ Cancelled by user[/yellow]")
+        sys.exit(0)
+
+    # Run container
+    success = pilot.run_new_container(
+        image_name=image_name,
+        name=container_name,
+        ports=ports if ports else None,
+        command=command,
+        environment=environment if environment else None,
+        volumes=volumes if volumes else None,
+        restart_policy=restart_policy,
+        network=network,
+        privileged=privileged,
+        cpu_limit=cpu_limit,
+        memory_limit=memory_limit
+    )
+    if not success:
+        sys.exit(1)

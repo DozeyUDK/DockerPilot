@@ -34,7 +34,7 @@ def test_supported_python_version_is_consistent_in_user_entrypoints():
         "install.bat",
         "DockerPilotExtras/setup_extras.sh",
         "DockerPilotExtras/check_web_setup.py",
-        "src/dockerpilot/pilot.py",
+        "src/dockerpilot/services/system_validation.py",
     ]
 
     for relative_path in paths:
@@ -47,7 +47,7 @@ def test_supported_python_version_is_consistent_in_user_entrypoints():
     assert "sys.version_info >= (3, 10)" in (ROOT / "install.bat").read_text(encoding="utf-8")
     assert "sys.version_info >= (3, 10)" in (ROOT / "DockerPilotExtras" / "setup_extras.sh").read_text(encoding="utf-8")
     assert "version.minor < 10" in (ROOT / "DockerPilotExtras" / "check_web_setup.py").read_text(encoding="utf-8")
-    assert "python_version < (3, 10)" in (ROOT / "src" / "dockerpilot" / "pilot.py").read_text(encoding="utf-8")
+    assert "python_version < (3, 10)" in (ROOT / "src" / "dockerpilot" / "services" / "system_validation.py").read_text(encoding="utf-8")
 
 
 def test_readmes_explain_saved_pipeline_library_boundaries():

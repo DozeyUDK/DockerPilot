@@ -167,6 +167,58 @@ def test_infer_resource_selector_marks_container_and_image_target_commands():
     assert rename_selector.mode == "single"
 
 
+@pytest.mark.parametrize(
+    "path,dest,resource_type,mode",
+    [
+        (("container", "remove-image"), "name", "image", "multi"),
+        (("container", "start"), "name", "container", "multi"),
+        (("container", "stop"), "name", "container", "multi"),
+        (("container", "restart"), "name", "container", "multi"),
+        (("container", "remove"), "name", "container", "multi"),
+        (("container", "pause"), "name", "container", "multi"),
+        (("container", "unpause"), "name", "container", "multi"),
+        (("container", "stop-remove"), "name", "container", "multi"),
+        (("container", "exec"), "name", "container", "multi"),
+        (("container", "logs"), "name", "container", "multi"),
+        (("container", "rename"), "name", "container", "single"),
+        (("container", "exec-simple"), "name", "container", "single"),
+        (("monitor", "dashboard"), "containers", "container", "multi"),
+        (("monitor", "live"), "container", "container", "single"),
+        (("monitor", "stats"), "container", "container", "single"),
+        (("backup", "container-data"), "container", "container", "single"),
+        (("backup", "restore-data"), "container", "container", "single"),
+    ],
+)
+def test_resource_selector_audit_covers_all_live_docker_target_fields(
+    path, dest, resource_type, mode
+):
+    parser = build_cli_parser()
+    commands = build_command_tree(parser, exclude_commands={"tui"})
+    node = _find_leaf(commands, list(path))
+    argument = next(argument for argument in node.arguments if argument.dest == dest)
+
+    selector = infer_resource_selector(node, argument)
+
+    assert selector is not None
+    assert selector.resource_type == resource_type
+    assert selector.mode == mode
+
+
+def test_resource_selector_audit_does_not_capture_new_resource_names():
+    parser = build_cli_parser()
+    commands = build_command_tree(parser, exclude_commands={"tui"})
+
+    run_node = _find_leaf(commands, ["container", "run"])
+    run_name = next(argument for argument in run_node.arguments if argument.dest == "name")
+    run_image = next(argument for argument in run_node.arguments if argument.dest == "image")
+    assert infer_resource_selector(run_node, run_name) is None
+    assert infer_resource_selector(run_node, run_image) is None
+
+    quick_node = _find_leaf(commands, ["deploy", "quick"])
+    quick_name = next(argument for argument in quick_node.arguments if argument.dest == "container_name")
+    assert infer_resource_selector(quick_node, quick_name) is None
+
+
 def test_target_formatters_include_state_and_size_metadata():
     containers = format_container_targets(
         [
