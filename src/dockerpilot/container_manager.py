@@ -2,32 +2,16 @@
 import docker
 import time
 from typing import List, Any, Optional
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
 
-from .utils import format_ports, get_container_size, calculate_uptime
+from .container_listing import (
+    container_image_label as _container_image_label,
+    list_containers as _list_containers_impl,
+)
 
 
-def _container_image_label(attrs: dict) -> str:
-    """Image reference for display without calling client.images.get.
-
-    Accessing ``Container.image`` triggers an image inspect that raises
-    ``NotFound`` when the image was removed while the container record remains.
-    """
-    if not attrs:
-        return "none"
-    cfg = attrs.get("Config") or {}
-    ref = cfg.get("Image")
-    if ref:
-        return ref
-    image_field = attrs.get("Image")
-    if isinstance(image_field, str) and image_field.startswith("sha256:"):
-        return image_field[7:19] + "…"
-    if image_field:
-        return image_field
-    return "none"
 
 
 class ContainerManager:
@@ -42,116 +26,7 @@ class ContainerManager:
     
     def list_containers(self, show_all: bool = True, format_output: str = "table") -> List[Any]:
         """Enhanced container listing with multiple output formats."""
-        with self._error_handler("list containers"):
-            containers = self.client.containers.list(all=show_all)
-            
-            if format_output == "json":
-                container_data = []
-                for c in containers:
-                    # Get state from container attributes
-                    state = c.attrs.get('State', {}).get('Status', c.status).lower()
-                    container_data.append({
-                        'id': c.short_id,
-                        'name': c.name,
-                        'status': c.status,
-                        'state': state,
-                        'image': _container_image_label(c.attrs),
-                        'ports': c.ports,
-                        'created': c.attrs['Created'],
-                        'size': get_container_size(c)
-                    })
-                # Don't print JSON in API context, just return data
-                # self.console.print_json(data=container_data)
-                return container_data
-            
-            # Enhanced table view with auto-scaling to terminal width
-            # Get terminal width for dynamic column sizing
-            terminal_width = self.console.width if hasattr(self.console, 'width') else 120
-            # Reserve space for borders and padding (approximately 8 characters per column)
-            available_width = max(80, terminal_width - 20)  # Minimum 80 chars, reserve 20 for borders
-            
-            # Calculate proportional widths based on content importance
-            # Priority: Name > Image > Ports > Status > ID > Uptime > Size > Nr
-            table = Table(
-                title="🐳 Docker Containers", 
-                show_header=True, 
-                header_style="bold blue",
-                expand=True,  # Allow table to expand to terminal width
-                show_lines=False  # Disable lines for better space usage
-            )
-            
-            # Track if Size and Uptime columns were added
-            include_size_uptime = available_width >= 100
-            
-            # Use proportional widths that adapt to terminal size
-            # For smaller terminals, some columns will be narrower
-            if available_width >= 140:
-                # Large terminal - full width columns
-                table.add_column("Nr", style="bold blue", width=4, overflow="fold")
-                table.add_column("ID", style="cyan", width=12, overflow="fold")
-                table.add_column("Name", style="green", width=min(25, int(available_width * 0.15)), overflow="fold")
-                table.add_column("Status", style="magenta", width=10, overflow="fold")
-                table.add_column("Image", style="yellow", width=min(30, int(available_width * 0.20)), overflow="fold")
-                table.add_column("Ports", style="bright_blue", width=min(30, int(available_width * 0.20)), overflow="fold")
-                table.add_column("Size", style="white", width=10, overflow="fold")
-                table.add_column("Uptime", style="bright_green", width=12, overflow="fold")
-            elif available_width >= 100:
-                # Medium terminal - reduce some columns
-                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
-                table.add_column("ID", style="cyan", width=10, overflow="fold")
-                table.add_column("Name", style="green", width=min(20, int(available_width * 0.18)), overflow="fold")
-                table.add_column("Status", style="magenta", width=8, overflow="fold")
-                table.add_column("Image", style="yellow", width=min(25, int(available_width * 0.22)), overflow="fold")
-                table.add_column("Ports", style="bright_blue", width=min(25, int(available_width * 0.22)), overflow="fold")
-                table.add_column("Size", style="white", width=8, overflow="fold")
-                table.add_column("Uptime", style="bright_green", width=10, overflow="fold")
-            else:
-                # Small terminal - minimal columns, remove less critical ones
-                table.add_column("Nr", style="bold blue", width=3, overflow="fold")
-                table.add_column("ID", style="cyan", width=8, overflow="fold")
-                table.add_column("Name", style="green", width=min(18, int(available_width * 0.25)), overflow="fold")
-                table.add_column("Status", style="magenta", width=7, overflow="fold")
-                table.add_column("Image", style="yellow", width=min(20, int(available_width * 0.30)), overflow="fold")
-                table.add_column("Ports", style="bright_blue", width=min(20, int(available_width * 0.30)), overflow="fold")
-                # Remove Size and Uptime for very small terminals to save space
-
-            for idx, c in enumerate(containers, start=1):
-                # Status formatting
-                status_color = "green" if c.status == "running" else "red" if c.status == "exited" else "yellow"
-                status = f"[{status_color}]{c.status}[/{status_color}]"
-                
-                # Ports formatting
-                ports = format_ports(c.ports)
-                
-                # Build row data
-                row_data = [
-                    str(idx),
-                    c.short_id,
-                    c.name,
-                    status,
-                    _container_image_label(c.attrs),
-                    ports
-                ]
-                
-                # Add Size and Uptime only if columns exist
-                if include_size_uptime:
-                    size = get_container_size(c)
-                    uptime = calculate_uptime(c)
-                    row_data.extend([size, uptime])
-                
-                table.add_row(*row_data)
-            
-            self.console.print(table)
-            
-            # Summary statistics
-            running = len([c for c in containers if c.status == "running"])
-            stopped = len([c for c in containers if c.status == "exited"])
-            total = len(containers)
-            
-            summary = f"📊 Summary: {total} total, {running} running, {stopped} stopped"
-            self.console.print(Panel(summary, style="bright_blue"))
-            
-            return containers
+        return _list_containers_impl(self, show_all=show_all, format_output=format_output)
     
     def container_operation(self, operation: str, container_name: str, **kwargs) -> bool:
         """Unified container operation handler with progress tracking."""
