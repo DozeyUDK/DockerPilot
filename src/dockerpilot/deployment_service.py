@@ -28,6 +28,7 @@ from .deployment_helpers import (
 )
 from .deployment_history import record_deployment as _record_deployment_impl
 from .deployment_strategies.blue_green import blue_green_deploy as _blue_green_deploy_strategy
+from .deployment_strategies.canary import canary_deploy as _canary_deploy_strategy
 from .deployment_strategies.quick import quick_deploy as _quick_deploy_strategy
 from .deployment_strategies.rolling import rolling_deploy as _rolling_deploy_strategy
 from .deployment_runtime import (
@@ -240,124 +241,8 @@ class DeploymentServiceMixin:
         )
 
     def _canary_deploy(self, config: DeploymentConfig, build_config: dict) -> bool:
-        """Canary deployment with gradual traffic shifting"""
-        self.console.print(f"\n[bold cyan]🐤 CANARY DEPLOYMENT STARTED[/bold cyan]")
-        
-        # This would require a load balancer integration
-        # For now, we'll implement a simplified version
-        
-        deployment_start = datetime.now()
-        
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-            
-            # Prepare image
-            build_task = progress.add_task("🔨 Preparing canary image...", total=None)
-            try:
-                success, message = self._prepare_image(config.image_tag, build_config, config.container_name)
-                if not success:
-                    progress.update(build_task, description=f"❌ {message}")
-                    self.console.print(f"[bold red]❌ {message}[/bold red]")
-                    return False
-                progress.update(build_task, description=f"✅ {message}")
-            except Exception as e:
-                progress.update(build_task, description="❌ Image preparation failed")
-                self.logger.error(f"Image preparation failed: {e}")
-                self.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
-                return False
-            
-            # Deploy canary container (5% traffic simulation)
-            canary_name = f"{config.container_name}_canary"
-            canary_task = progress.add_task("🚀 Deploying canary (5% traffic)...", total=None)
-            
-            # Use different port for canary
-            canary_port_mapping = _offset_port_mapping_impl(config.port_mapping, 100)
-            
-            try:
-                # Clean existing canary
-                try:
-                    old_canary = self.client.containers.get(canary_name)
-                    old_canary.stop()
-                    old_canary.remove()
-                except docker.errors.NotFound:
-                    pass
-                
-                canary_container = self.client.containers.run(
-                    image=config.image_tag,
-                    name=canary_name,
-                    detach=True,
-                    ports=canary_port_mapping,
-                    environment={**config.environment, "CANARY": "true"},
-                    volumes=self._normalize_volumes(config.volumes),
-                    restart_policy={"Name": config.restart_policy},
-                    **self._get_resource_limits(config)
-                )
-                
-                progress.update(canary_task, description="✅ Canary deployed")
-                time.sleep(5)
-                
-            except Exception as e:
-                progress.update(canary_task, description="❌ Canary deployment failed")
-                return False
-            
-            # Monitor canary
-            monitor_task = progress.add_task("📊 Monitoring canary performance...", total=None)
-            
-            canary_port = list(canary_port_mapping.values())[0]
-            if not self._monitor_canary_performance(canary_port, duration=30):
-                progress.update(monitor_task, description="❌ Canary monitoring failed")
-                # Cleanup canary
-                try:
-                    canary_container.stop()
-                    canary_container.remove()
-                except:
-                    pass
-                return False
-            
-            progress.update(monitor_task, description="✅ Canary performance acceptable")
-            
-            # Promote canary to full deployment
-            promote_task = progress.add_task("⬆️ Promoting canary to full deployment...", total=None)
-            
-            try:
-                # Stop main container
-                try:
-                    main_container = self.client.containers.get(config.container_name)
-                    main_container.stop()
-                    main_container.remove()
-                except docker.errors.NotFound:
-                    pass
-                
-                # Stop canary and redeploy as main
-                canary_container.stop()
-                canary_container.remove()
-                
-                # Deploy as main container
-                main_container = self.client.containers.run(
-                    image=config.image_tag,
-                    name=config.container_name,
-                    detach=True,
-                    ports=config.port_mapping,
-                    environment=config.environment,
-                    volumes=self._normalize_volumes(config.volumes),
-                    restart_policy={"Name": config.restart_policy},
-                    **self._get_resource_limits(config)
-                )
-                
-                progress.update(promote_task, description="✅ Canary promoted successfully")
-                
-            except Exception as e:
-                progress.update(promote_task, description="❌ Canary promotion failed")
-                return False
-        
-        deployment_end = datetime.now()
-        duration = deployment_end - deployment_start
-        
-        self._record_deployment(f"canary_{int(deployment_start.timestamp())}", config, "canary", True, duration)
-        
-        self.console.print(f"\n[bold green]🎉 CANARY DEPLOYMENT COMPLETED![/bold green]")
-        self.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
-        
-        return True
+        """Canary deployment with gradual traffic shifting."""
+        return _canary_deploy_strategy(self, config, build_config)
 
     def _prepare_image(self, image_tag: str, build_config: dict = None, container_name: Optional[str] = None):
         """Prepare image for deployment - check if exists, pull, or build."""
