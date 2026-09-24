@@ -21,6 +21,10 @@ from .container_migration import (
     copy_volume_data as _copy_volume_data_impl,
     migrate_container_data as _migrate_container_data_impl,
 )
+from .deployment_state_backup import (
+    backup_deployment_state as _backup_deployment_state_impl,
+    restore_deployment_state as _restore_deployment_state_impl,
+)
 from .backup_mounts import check_sudo_required_for_backup as _check_sudo_required_for_backup_impl
 from .backup_archive import (
     backup_bind_mount_using_docker as _backup_bind_mount_using_docker_impl,
@@ -103,170 +107,9 @@ class BackupRestoreMixin:
         return _copy_container_files_impl(self, source_container, target_container, source_path, container_name)
 
     def backup_deployment_state(self, backup_path: str = None) -> bool:
-        """Create backup of current deployment state"""
-        if not backup_path:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"backup_{timestamp}"
-        
-        backup_dir = Path(backup_path)
-        backup_dir.mkdir(exist_ok=True)
-        
-        try:
-            # Backup running containers info
-            containers = self.client.containers.list(all=True)
-            containers_backup = []
-            
-            for container in containers:
-                container_info = {
-                    'name': container.name,
-                    'image': container.image.tags[0] if container.image.tags else container.image.id,
-                    'status': container.status,
-                    'ports': container.ports,
-                    'environment': container.attrs.get('Config', {}).get('Env', []),
-                    'volumes': container.attrs.get('Mounts', []),
-                    'command': container.attrs.get('Config', {}).get('Cmd'),
-                    'created': container.attrs.get('Created'),
-                    'restart_policy': container.attrs.get('HostConfig', {}).get('RestartPolicy', {})
-                }
-                containers_backup.append(container_info)
-            
-            # Save containers backup
-            with open(backup_dir / 'containers.json', 'w') as f:
-                json.dump(containers_backup, f, indent=2)
-            
-            # Backup Docker images
-            images = self.client.images.list()
-            images_backup = []
-            
-            for image in images:
-                if image.tags:  # Only backup tagged images
-                    image_info = {
-                        'tags': image.tags,
-                        'id': image.id,
-                        'created': image.attrs.get('Created'),
-                        'size': image.attrs.get('Size')
-                    }
-                    images_backup.append(image_info)
-            
-            with open(backup_dir / 'images.json', 'w') as f:
-                json.dump(images_backup, f, indent=2)
-            
-            # Backup networks
-            networks = self.client.networks.list()
-            networks_backup = []
-            
-            for network in networks:
-                if not network.name.startswith(('bridge', 'host', 'none')):  # Skip default networks
-                    network_info = {
-                        'name': network.name,
-                        'driver': network.attrs.get('Driver'),
-                        'options': network.attrs.get('Options', {}),
-                        'labels': network.attrs.get('Labels', {}),
-                        'created': network.attrs.get('Created')
-                    }
-                    networks_backup.append(network_info)
-            
-            with open(backup_dir / 'networks.json', 'w') as f:
-                json.dump(networks_backup, f, indent=2)
-            
-            # Backup volumes
-            volumes = self.client.volumes.list()
-            volumes_backup = []
-            
-            for volume in volumes:
-                volume_info = {
-                    'name': volume.name,
-                    'driver': volume.attrs.get('Driver'),
-                    'mountpoint': volume.attrs.get('Mountpoint'),
-                    'labels': volume.attrs.get('Labels', {}),
-                    'created': volume.attrs.get('CreatedAt')
-                }
-                volumes_backup.append(volume_info)
-            
-            with open(backup_dir / 'volumes.json', 'w') as f:
-                json.dump(volumes_backup, f, indent=2)
-            
-            # Create backup summary
-            summary = {
-                'backup_time': datetime.now().isoformat(),
-                'containers_count': len(containers_backup),
-                'images_count': len(images_backup),
-                'networks_count': len(networks_backup),
-                'volumes_count': len(volumes_backup),
-                'docker_version': self.client.version()['Version']
-            }
-            
-            with open(backup_dir / 'summary.json', 'w') as f:
-                json.dump(summary, f, indent=2)
-            
-            self.console.print(f"[green]Deployment state backed up to {backup_path}/[/green]")
-            self.console.print(f"[cyan]Backup contains: {len(containers_backup)} containers, {len(images_backup)} images[/cyan]")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Backup failed: {e}")
-            return False
+        """Create a snapshot of current Docker deployment state."""
+        return _backup_deployment_state_impl(self, backup_path)
 
     def restore_deployment_state(self, backup_path: str) -> bool:
-        """Restore deployment state from backup"""
-        backup_dir = Path(backup_path)
-        
-        if not backup_dir.exists():
-            self.console.print(f"[red]Backup directory not found: {backup_path}[/red]")
-            return False
-        
-        try:
-            # Load backup summary
-            with open(backup_dir / 'summary.json', 'r') as f:
-                summary = json.load(f)
-            
-            self.console.print(f"[cyan]Restoring backup from {summary['backup_time']}[/cyan]")
-            
-            # Restore networks first
-            if (backup_dir / 'networks.json').exists():
-                with open(backup_dir / 'networks.json', 'r') as f:
-                    networks = json.load(f)
-                
-                for network_info in networks:
-                    try:
-                        self.client.networks.create(
-                            name=network_info['name'],
-                            driver=network_info['driver'],
-                            options=network_info.get('options', {}),
-                            labels=network_info.get('labels', {})
-                        )
-                        self.console.print(f"[green]Restored network: {network_info['name']}[/green]")
-                    except docker.errors.APIError as e:
-                        if "already exists" in str(e):
-                            continue
-                        self.logger.warning(f"Failed to restore network {network_info['name']}: {e}")
-            
-            # Restore volumes
-            if (backup_dir / 'volumes.json').exists():
-                with open(backup_dir / 'volumes.json', 'r') as f:
-                    volumes = json.load(f)
-                
-                for volume_info in volumes:
-                    try:
-                        self.client.volumes.create(
-                            name=volume_info['name'],
-                            driver=volume_info['driver'],
-                            labels=volume_info.get('labels', {})
-                        )
-                        self.console.print(f"[green]Restored volume: {volume_info['name']}[/green]")
-                    except docker.errors.APIError as e:
-                        if "already exists" in str(e):
-                            continue
-                        self.logger.warning(f"Failed to restore volume {volume_info['name']}: {e}")
-            
-            # Note: Images and containers would need more complex restoration logic
-            # This is a simplified implementation
-            self.console.print("[yellow]Note: Complete container restoration requires image availability[/yellow]")
-            self.console.print("[yellow]Consider using docker save/load for complete image backup[/yellow]")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Restore failed: {e}")
-            return False
+        """Restore Docker deployment state metadata from a snapshot."""
+        return _restore_deployment_state_impl(self, backup_path)
