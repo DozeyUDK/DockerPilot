@@ -3,22 +3,23 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
-import json
-import os
-import subprocess
 import time
 
-import docker
 import requests
 import yaml
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
 from .build_source import (
     discover_dockerfile_candidates as _discover_dockerfile_candidates_impl,
     inspect_build_source as _inspect_build_source_impl,
     is_dockerfile_candidate as _is_dockerfile_candidate_impl,
+)
+from .deployment_build import (
+    build_image_enhanced as _build_image_enhanced_impl,
+    build_image_standalone as _build_image_standalone_impl,
+)
+from .deployment_config_io import (
+    create_deployment_config as _create_deployment_config_impl,
+    create_dockerfile_template as _create_dockerfile_template_impl,
 )
 from .deployment_helpers import (
     deployment_config_from_dict as _deployment_config_from_dict_impl,
@@ -26,7 +27,10 @@ from .deployment_helpers import (
     normalize_volumes as _normalize_volumes_impl,
     resolve_runtime_network as _resolve_runtime_network_impl,
 )
-from .deployment_history import record_deployment as _record_deployment_impl
+from .deployment_history import (
+    record_deployment as _record_deployment_impl,
+    show_deployment_history as _show_deployment_history_impl,
+)
 from .deployment_promotion import (
     environment_promotion as _environment_promotion_impl,
     run_post_promotion_validation as _run_post_promotion_validation_impl,
@@ -36,11 +40,6 @@ from .deployment_strategies.blue_green import blue_green_deploy as _blue_green_d
 from .deployment_strategies.canary import canary_deploy as _canary_deploy_strategy
 from .deployment_strategies.quick import quick_deploy as _quick_deploy_strategy
 from .deployment_strategies.rolling import rolling_deploy as _rolling_deploy_strategy
-from .deployment_runtime import (
-    apply_container_command as _apply_container_command_impl,
-    offset_port_mapping as _offset_port_mapping_impl,
-    requires_privileged_mode as _requires_privileged_mode_impl,
-)
 from .deployment_validation import (
     comprehensive_container_validation as _comprehensive_container_validation_impl,
 )
@@ -111,50 +110,11 @@ class DeploymentServiceMixin:
 
     def create_dockerfile_template(self, destination: str, template_name: str) -> bool:
         """Create a starter Dockerfile in the requested directory."""
-        template_body = self._DOCKERFILE_TEMPLATE_BODIES.get(template_name)
-        if not template_body:
-            self.console.print(f"[red]Unknown Dockerfile template: {template_name}[/red]")
-            return False
-
-        destination_path = Path(destination).expanduser()
-        if not destination_path.is_absolute():
-            destination_path = Path.cwd() / destination_path
-        if destination_path.suffix or self._is_dockerfile_candidate(destination_path):
-            destination_path = destination_path.parent
-        destination_path.mkdir(parents=True, exist_ok=True)
-
-        dockerfile_path = destination_path / "Dockerfile"
-        if dockerfile_path.exists():
-            self.console.print(f"[yellow]Dockerfile already exists at {dockerfile_path}[/yellow]")
-            return False
-
-        dockerfile_path.write_text(template_body, encoding="utf-8")
-        self.console.print(f"[green]✅ Created {template_name} Dockerfile template at {dockerfile_path}[/green]")
-        self.logger.info(f"Created Dockerfile template '{template_name}' at {dockerfile_path}")
-        return True
+        return _create_dockerfile_template_impl(self, destination, template_name)
 
     def create_deployment_config(self, config_path: str = "deployment.yml") -> bool:
-        """Create deployment configuration template from file"""
-        try:
-            # Load template from configs directory
-            template_path = Path(__file__).parent / "configs" / "deployment.yml.template"
-            
-            if not template_path.exists():
-                self.logger.error(f"Template file not found: {template_path}")
-                self.console.print(f"[red]Template file not found: {template_path}[/red]")
-                return False
-            
-            with open(template_path, 'r', encoding='utf-8') as f:
-                template_content = f.read()
-            
-            with open(config_path, 'w', encoding='utf-8') as f:
-                f.write(template_content)
-            
-            self.console.print(f"[green]✅ Deployment configuration template created: {config_path}[/green]")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to create config template: {e}")
-            return False
+        """Create deployment configuration template from file."""
+        return _create_deployment_config_impl(self, config_path)
 
     def _deployment_config_from_dict(self, deployment: dict) -> DeploymentConfig:
         """Build DeploymentConfig from raw dict while safely ignoring unknown keys."""
@@ -262,66 +222,8 @@ class DeploymentServiceMixin:
         )
 
     def _build_image_enhanced(self, image_tag: str, build_config: dict) -> bool:
-        """Enhanced image building with advanced features"""
-        dockerfile_path = build_config.get('dockerfile_path', '.')
-        no_cache = build_config.get('no_cache', False)
-        pull = build_config.get('pull', True)
-        build_args = build_config.get('build_args', {})
-        
-        try:
-            source_info = self.inspect_build_source(dockerfile_path)
-            if source_info["status"] != "ready":
-                self.console.print(f"[bold red]❌ {source_info['message']}[/bold red]")
-                if source_info["status"] == "multiple":
-                    self.console.print("[yellow]Select one of these paths explicitly:[/yellow]")
-                    for candidate in source_info["candidates"]:
-                        self.console.print(f"  - {candidate}")
-                return False
-
-            context = source_info["context_path"]
-            dockerfile = source_info["selected_path"]
-            dockerfile_name = source_info["dockerfile_name"]
-
-            if source_info["auto_detected"]:
-                self.console.print(f"[yellow]Auto-detected Dockerfile: {dockerfile}[/yellow]")
-            
-            # Build with enhanced logging
-            self.logger.info(f"Building image {image_tag} from {context} using {dockerfile_name}")
-            
-            build_kwargs = {
-                'path': str(context),
-                'tag': image_tag,
-                'rm': True,
-                'nocache': no_cache,
-                'pull': pull,
-                'buildargs': build_args
-            }
-            if dockerfile_name and dockerfile_name != "Dockerfile":
-                build_kwargs['dockerfile'] = dockerfile_name
-            
-            # Show loading indicator during build
-            with self._with_loading("Building image"):
-                image, build_logs = self.client.images.build(**build_kwargs)
-            
-            # Process build logs
-            for log in build_logs:
-                if 'stream' in log:
-                    # Filter out verbose output for cleaner display
-                    stream = log['stream'].strip()
-                    if stream and not stream.startswith('Step'):
-                        continue  # Only show steps in production
-                
-            return True
-            
-        except docker.errors.BuildError as e:
-            self.logger.error(f"Build error: {e}")
-            for log in e.build_log:
-                if 'stream' in log:
-                    self.console.print(f"[red]{log['stream']}[/red]", end="")
-            return False
-        except Exception as e:
-            self.logger.error(f"Unexpected build error: {e}")
-            return False
+        """Enhanced image building with advanced features."""
+        return _build_image_enhanced_impl(self, image_tag, build_config)
         
     def build_image_standalone(
         self,
@@ -332,58 +234,16 @@ class DeploymentServiceMixin:
         pull_if_missing: bool = False,
         generate_template: Optional[str] = None,
     ) -> bool:
-        """Standalone image building function"""
-        source_info = self.inspect_build_source(dockerfile_path)
-
-        if source_info["status"] != "ready":
-            self.console.print(f"[yellow]{source_info['message']}[/yellow]")
-            if source_info["status"] == "multiple":
-                self.console.print("[yellow]Available Dockerfile candidates:[/yellow]")
-                for candidate in source_info["candidates"]:
-                    self.console.print(f"  - {candidate}")
-
-            if generate_template:
-                created = self.create_dockerfile_template(str(source_info["requested_path"]), generate_template)
-                if created:
-                    source_info = self.inspect_build_source(dockerfile_path)
-
-            if source_info["status"] != "ready" and pull_if_missing:
-                try:
-                    self.console.print(f"[cyan]Pulling image {tag} from registry...[/cyan]")
-                    self.client.images.pull(tag)
-                    self.console.print(f"[green]✅ Pulled image {tag} successfully[/green]")
-                    self.logger.info(f"Pulled image {tag} because no buildable Dockerfile was available")
-                    return True
-                except Exception as exc:
-                    self.console.print(f"[red]❌ Failed to pull image {tag}: {exc}[/red]")
-                    self.logger.error(f"Failed to pull image {tag}: {exc}")
-                    return False
-
-            if source_info["status"] != "ready":
-                self.console.print("[yellow]Hints:[/yellow]")
-                self.console.print("  - point build at a directory or file that contains a Dockerfile")
-                self.console.print(f"  - rerun with --pull-if-missing to pull {tag} from a registry instead")
-                self.console.print(f"  - rerun with --generate-template {{{', '.join(self.get_build_template_choices())}}} to create a starter Dockerfile")
-                return False
-
-        build_config = {
-            'dockerfile_path': str(source_info["selected_path"]),
-            'context': str(source_info["context_path"]),
-            'no_cache': no_cache,
-            'pull': pull,
-            'build_args': {}
-        }
-
-        self.console.print(f"[cyan]Building image {tag} from {source_info['context_path']}...[/cyan]")
-
-        success = self._build_image_enhanced(tag, build_config)
-
-        if success:
-            self.console.print(f"[green]✅ Image {tag} built successfully[/green]")
-        else:
-            self.console.print(f"[red]❌ Failed to build image {tag}[/red]")
-
-        return success
+        """Standalone image building function."""
+        return _build_image_standalone_impl(
+            self,
+            dockerfile_path,
+            tag,
+            no_cache=no_cache,
+            pull=pull,
+            pull_if_missing=pull_if_missing,
+            generate_template=generate_template,
+        )
 
     def _detect_health_check_endpoint(self, image_tag: str) -> Optional[str]:
         """Select a health-check endpoint for an image."""
@@ -480,50 +340,8 @@ class DeploymentServiceMixin:
         )
 
     def show_deployment_history(self, limit: int = 10):
-        """Show deployment history"""
-        history_file = "deployment_history.json"
-        
-        if not Path(history_file).exists():
-            self.console.print("[yellow]⚠️ No deployment history found[/yellow]")
-            return
-        
-        try:
-            with open(history_file, 'r') as f:
-                history_data = json.load(f)
-            
-            # Sort by timestamp, most recent first
-            history_data.sort(key=lambda x: x['timestamp'], reverse=True)
-            history_data = history_data[:limit]
-            
-            table = Table(title="🚀 Deployment History", show_header=True)
-            table.add_column("Date", style="cyan")
-            table.add_column("ID", style="blue")
-            table.add_column("Type", style="magenta")
-            table.add_column("Image", style="yellow")
-            table.add_column("Container", style="green")
-            table.add_column("Status", style="bold")
-            table.add_column("Duration", style="bright_blue")
-            
-            for record in history_data:
-                timestamp = datetime.fromisoformat(record['timestamp']).strftime('%Y-%m-%d %H:%M')
-                status = "[green]✅ Success[/green]" if record['success'] else "[red]❌ Failed[/red]"
-                duration = f"{record['duration_seconds']:.1f}s"
-                
-                table.add_row(
-                    timestamp,
-                    record['id'][:12],
-                    record['type'],
-                    record['image_tag'],
-                    record['container_name'],
-                    status,
-                    duration
-                )
-            
-            self.console.print(table)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load deployment history: {e}")
-            self.console.print(f"[red]❌ Error loading deployment history: {e}[/red]")
+        """Show deployment history."""
+        return _show_deployment_history_impl(self.console, self.logger, limit)
 
     def environment_promotion(self, source_env: str, target_env: str, 
                             config_path: str = None, skip_backup: bool = False) -> bool:
