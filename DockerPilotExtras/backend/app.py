@@ -60,6 +60,38 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.auth_guard import SlidingWindowRateLimiter, csrf_token_matches
+from backend.services.deployment_files import (
+    find_active_deployment_dir as _svc_find_active_deployment_dir,
+    find_all_deployment_dirs as _svc_find_all_deployment_dirs,
+    format_env_name as _svc_format_env_name,
+    generate_deployment_id as _svc_generate_deployment_id,
+    get_or_create_deployment_dir as _svc_get_or_create_deployment_dir,
+    load_deployment_config as _svc_load_deployment_config,
+    save_deployment_config as _svc_save_deployment_config,
+)
+from backend.services.health_detection import (
+    detect_from_running_containers as _svc_detect_health_from_containers,
+    detect_health_check_endpoint as _svc_detect_health_check_endpoint,
+)
+from backend.services.local_postgres import (
+    discover_local_postgres as _svc_discover_local_postgres,
+    ensure_local_postgres_container as _svc_ensure_local_postgres_container,
+    parse_env_list as _svc_parse_env_list,
+)
+from backend.services.environment_state import (
+    append_deployment_history_data as _svc_append_deployment_history_data,
+    get_deployment_history_data as _svc_get_deployment_history_data,
+    load_env_container_bindings as _svc_load_env_container_bindings,
+    load_env_servers_config as _svc_load_env_servers_config,
+    load_legacy_file_state_snapshot as _svc_load_legacy_file_state_snapshot,
+    migrate_legacy_file_state_to_store as _svc_migrate_legacy_file_state_to_store,
+    move_container_binding as _svc_move_container_binding,
+    move_many_container_bindings as _svc_move_many_container_bindings,
+    normalize_env_container_bindings as _svc_normalize_env_container_bindings,
+    resolve_server_id_for_env as _svc_resolve_server_id_for_env,
+    save_env_container_bindings as _svc_save_env_container_bindings,
+    save_env_servers_config as _svc_save_env_servers_config,
+)
 from backend.services.elevation_tokens import ElevationTokenManager
 from backend.services.secret_store import EncryptedSecretStore, SecretStoreError
 from backend.services.ssh_security import (
@@ -115,150 +147,25 @@ from dockerpilot.models import LogLevel
 # ==================== DEPLOYMENT MANAGEMENT HELPERS ====================
 
 def format_env_name(env: str) -> str:
-    """Format environment name for user-friendly display
-    
-    Args:
-        env: Environment name (dev/staging/prod)
-    
-    Returns:
-        Formatted name (DEV/Pre-Prod/PROD)
-    """
-    env_labels = {
-        'dev': 'DEV',
-        'staging': 'Pre-Prod',
-        'prod': 'PROD'
-    }
-    return env_labels.get(env.lower(), env.upper())
+    return _svc_format_env_name(env)
 
 def generate_deployment_id(container_name: str, image_tag: str = None) -> str:
-    """Generate unique deployment identifier
-    
-    Format: {container_name}_{hash}
-    Hash is based on container_name + image_tag + timestamp
-    """
-    timestamp = datetime.now().isoformat()
-    hash_input = f"{container_name}_{image_tag or 'latest'}_{timestamp}"
-    # Generate short hash (first 12 chars of sha256)
-    hash_value = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
-    # Create safe directory name (replace special chars)
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', container_name.lower())
-    # Create unique ID with special chars for uniqueness
-    unique_id = f"{hash_value[:4]}!{hash_value[4:8]}{hash_value[8:12]}"
-    return f"{safe_name}_{unique_id}"
+    return _svc_generate_deployment_id(container_name, image_tag)
 
 def _detect_health_check_endpoint_from_containers(image_tag: str) -> str:
-    """Dynamically detect health check endpoint from running containers
-    
-    Uses docker ps to get list of running containers and their images,
-    then builds a dynamic mapping of services to health check endpoints.
-    
-    Args:
-        image_tag: Docker image tag (e.g., 'qdrant/qdrant:latest', 'ollama/ollama:latest')
-        
-    Returns:
-        Health check endpoint path, or None for non-HTTP services
-    """
-    image_lower = image_tag.lower()
-    
-    # Try to get running containers to build dynamic service list
-    try:
-        pilot = get_dockerpilot()
-        if pilot and pilot.client:
-            # Get all running containers
-            running_containers = pilot.client.containers.list(filters={'status': 'running'})
-            
-            # Extract unique service names from running containers
-            running_services = set()
-            for container in running_containers:
-                # Get image name (without tag)
-                container_image = container.image.tags[0] if container.image.tags else container.image.id
-                # Extract service name (part before first slash or colon)
-                service_name = container_image.split('/')[-1].split(':')[0].lower()
-                running_services.add(service_name)
-            
-            app.logger.debug(f"Detected running services from containers: {sorted(running_services)}")
-            
-            # Build dynamic non-HTTP services list from running containers
-            # Check if any running container matches known non-HTTP patterns
-            non_http_keywords = ['ssh', 'redis', 'mariadb', 'mysql', 'postgres', 'postgresql', 
-                                'mongo', 'mongodb', 'db2', 'memcached', 'rabbitmq', 'kafka', 
-                                'zookeeper', 'minikube', 'kicbase', 'kubernetes', 'k8s', 'kind', 
-                                'k3s', 'k3d']
-            
-            # Check if image matches any non-HTTP service pattern
-            for keyword in non_http_keywords:
-                if keyword in image_lower:
-                    # Also check if this service is actually running
-                    if any(keyword in service for service in running_services):
-                        app.logger.info(f"Detected non-HTTP service '{keyword}' from running containers")
-                        return None
-            
-            # Build dynamic endpoint mappings from running containers
-            # Common patterns based on service names found in running containers
-            endpoint_mappings = {
-                'homeassistant': '/',
-                'home-assistant': '/',
-                'glances': '/',
-                'grafana': '/api/health',
-                'qdrant': '/healthz',
-                'ollama': '/api/version',
-                'prometheus': '/-/healthy',
-                'influxdb': '/ready',
-                'nextcloud': '/status.php',
-                'elasticsearch': '/_cluster/health',
-                'nginx': '/',
-                'apache': '/',
-                'traefik': '/ping',
-                'portainer': '/api/status'
-            }
-            
-            # Check if any running service matches our image
-            for service_name in running_services:
-                if service_name in image_lower:
-                    # Try to find endpoint mapping for this service
-                    for pattern, endpoint in endpoint_mappings.items():
-                        if pattern in service_name or service_name in pattern:
-                            app.logger.info(f"Detected service '{service_name}' from running containers -> endpoint '{endpoint}'")
-                            return endpoint
-            
-            # If service is running but no specific mapping, check generic patterns
-            for pattern, endpoint in endpoint_mappings.items():
-                if pattern in image_lower:
-                    app.logger.info(f"Detected image pattern '{pattern}' -> endpoint '{endpoint}'")
-                    return endpoint
-            
-    except Exception as e:
-        app.logger.debug(f"Could not get running containers for dynamic detection: {e}")
-    
-    # Final fallback: check for non-HTTP services even if we couldn't get containers
-    non_http_keywords = ['ssh', 'redis', 'mariadb', 'mysql', 'postgres', 'mongo', 'db2']
-    if any(keyword in image_lower for keyword in non_http_keywords):
-        return None
-    
-    # Default endpoint for HTTP services
-    return '/health'
+    return _svc_detect_health_from_containers(
+        image_tag,
+        get_dockerpilot=get_dockerpilot,
+        logger=app.logger,
+    )
 
 
 def _detect_health_check_endpoint(image_tag: str) -> str:
-    """Detect appropriate health check endpoint based on image name
-    
-    Uses DockerPilot's centralized health check detection with JSON config.
-    Falls back to dynamic detection from running containers.
-    
-    Args:
-        image_tag: Docker image tag (e.g., 'qdrant/qdrant:latest', 'ollama/ollama:latest')
-        
-    Returns:
-        Health check endpoint path, or None for non-HTTP services
-    """
-    try:
-        # Use DockerPilot's centralized function (loads from health-checks-defaults.json)
-        pilot = get_dockerpilot()
-        return pilot._detect_health_check_endpoint(image_tag)
-    except Exception as e:
-        app.logger.warning(f"Could not use pilot health check detection: {e}, using dynamic fallback")
-        # Fallback: dynamically detect services from running containers
-        return _detect_health_check_endpoint_from_containers(image_tag)
+    return _svc_detect_health_check_endpoint(
+        image_tag,
+        get_dockerpilot=get_dockerpilot,
+        logger=app.logger,
+    )
 
 
 def _extract_port_from_string(value: str):
@@ -272,180 +179,30 @@ def _infer_port_mapping_for_host_network(attrs: dict, image_tag: str = "") -> di
 
 
 def get_or_create_deployment_dir(container_name: str, image_tag: str = None, deployment_id: str = None) -> Path:
-    """Get or create deployment directory with unique identifier
-    
-    Returns:
-        Path to deployment directory
-    """
-    deployments_dir = app.config['DEPLOYMENTS_DIR']
-    
-    if deployment_id:
-        # Use provided deployment ID
-        deployment_dir = deployments_dir / deployment_id
-    else:
-        # Find existing deployment for this container or create new
-        deployment_dir = find_active_deployment_dir(container_name)
-        
-        if not deployment_dir:
-            # Create new deployment directory
-            deployment_id = generate_deployment_id(container_name, image_tag)
-            deployment_dir = deployments_dir / deployment_id
-            deployment_dir.mkdir(exist_ok=True, parents=True)
-            
-            # Create metadata file
-            metadata = {
-                'container_name': container_name,
-                'image_tag': image_tag,
-                'created_at': datetime.now().isoformat(),
-                'deployment_id': deployment_id
-            }
-            metadata_path = deployment_dir / 'metadata.json'
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
-    
-    return deployment_dir
+    return _svc_get_or_create_deployment_dir(
+        app.config['DEPLOYMENTS_DIR'],
+        container_name,
+        image_tag,
+        deployment_id,
+    )
 
 def find_active_deployment_dir(container_name: str) -> Path:
-    """Find active deployment directory for container
-    
-    Returns:
-        Path to deployment directory or None if not found
-    """
-    deployments_dir = app.config['DEPLOYMENTS_DIR']
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', container_name.lower())
-    
-    # Look for directories matching container name pattern
-    if not deployments_dir.exists():
-        return None
-    
-    # Find most recent deployment for this container
-    matching_dirs = []
-    for deployment_dir in deployments_dir.iterdir():
-        if not deployment_dir.is_dir():
-            continue
-        
-        # Check if directory name starts with container name
-        if deployment_dir.name.startswith(safe_name + '_'):
-            metadata_path = deployment_dir / 'metadata.json'
-            if metadata_path.exists():
-                try:
-                    with open(metadata_path, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-                        if metadata.get('container_name', '').lower() == container_name.lower():
-                            matching_dirs.append((deployment_dir, metadata.get('created_at', '')))
-                except:
-                    pass
-    
-    # Return most recent deployment
-    if matching_dirs:
-        matching_dirs.sort(key=lambda x: x[1], reverse=True)
-        return matching_dirs[0][0]
-    
-    return None
+    return _svc_find_active_deployment_dir(app.config['DEPLOYMENTS_DIR'], container_name)
 
 def find_all_deployment_dirs(container_name: str = None) -> list:
-    """Find all deployment directories, optionally filtered by container name
-    
-    Returns:
-        List of tuples (deployment_dir, metadata)
-    """
-    deployments_dir = app.config['DEPLOYMENTS_DIR']
-    deployments = []
-    
-    if not deployments_dir.exists():
-        return deployments
-    
-    for deployment_dir in deployments_dir.iterdir():
-        if not deployment_dir.is_dir():
-            continue
-        
-        metadata_path = deployment_dir / 'metadata.json'
-        if metadata_path.exists():
-            try:
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-                    if not container_name or metadata.get('container_name', '').lower() == container_name.lower():
-                        deployments.append((deployment_dir, metadata))
-            except:
-                pass
-    
-    # Sort by creation date, most recent first
-    deployments.sort(key=lambda x: x[1].get('created_at', ''), reverse=True)
-    return deployments
+    return _svc_find_all_deployment_dirs(app.config['DEPLOYMENTS_DIR'], container_name)
 
 def save_deployment_config(container_name: str, config: dict, env: str = None, image_tag: str = None) -> Path:
-    """Save deployment configuration to unique deployment directory
-    
-    Args:
-        container_name: Name of the container
-        config: Deployment configuration dict
-        env: Environment name (dev/staging/prod) - if None, saves as deployment.yml
-        image_tag: Image tag for deployment
-    
-    Returns:
-        Path to saved config file
-    """
-    deployment_dir = get_or_create_deployment_dir(container_name, image_tag)
-    
-    if env:
-        config_filename = f'deployment-{env}.yml'
-    else:
-        config_filename = 'deployment.yml'
-    
-    config_path = deployment_dir / config_filename
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-    
-    # Update metadata
-    metadata_path = deployment_dir / 'metadata.json'
-    if metadata_path.exists():
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-    else:
-        metadata = {
-            'container_name': container_name,
-            'image_tag': image_tag,
-            'created_at': datetime.now().isoformat(),
-            'deployment_id': deployment_dir.name
-        }
-    
-    metadata['last_updated'] = datetime.now().isoformat()
-    if env:
-        metadata[f'env_{env}_config'] = str(config_path)
-    
-    with open(metadata_path, 'w', encoding='utf-8') as f:
-        json.dump(metadata, f, indent=2)
-    
-    return config_path
+    return _svc_save_deployment_config(
+        app.config['DEPLOYMENTS_DIR'],
+        container_name,
+        config,
+        env,
+        image_tag,
+    )
 
 def load_deployment_config(container_name: str, env: str = None) -> dict:
-    """Load deployment configuration from deployment directory
-    
-    Args:
-        container_name: Name of the container
-        env: Environment name (dev/staging/prod) - if None, loads deployment.yml
-    
-    Returns:
-        Deployment configuration dict or None if not found
-    """
-    deployment_dir = find_active_deployment_dir(container_name)
-    if not deployment_dir:
-        return None
-    
-    if env:
-        config_filename = f'deployment-{env}.yml'
-    else:
-        config_filename = 'deployment.yml'
-    
-    config_path = deployment_dir / config_filename
-    if not config_path.exists():
-        return None
-    
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
-    except:
-        return None
+    return _svc_load_deployment_config(app.config['DEPLOYMENTS_DIR'], container_name, env)
 
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
 _configured_secret_key = (os.environ.get('SECRET_KEY') or '').strip()
@@ -880,116 +637,6 @@ _deployment_progress = {}  # {container_name: {'stage': str, 'progress': int, 'm
 _migration_progress = {}  # {container_name: {'stage': str, 'progress': int, 'message': str, 'timestamp': datetime}}
 _migration_cancel_flags = {}  # {container_name: bool} - flags to cancel migrations
 
-def create_docker_client_for_server(server_config):
-    """Create Docker client for remote server via SSH"""
-    if not SSH_AVAILABLE:
-        raise ImportError("SSH libraries not available")
-    
-    try:
-        import docker
-        from paramiko import SSHClient
-        import base64
-        from io import StringIO
-        
-        hostname = server_config.get('hostname')
-        port = server_config.get('port', 22)
-        username = server_config.get('username')
-        auth_type = server_config.get('auth_type', 'password')
-        
-        # Build SSH connection parameters
-        ssh_kwargs = {
-            'hostname': hostname,
-            'port': port,
-            'username': username,
-            'timeout': 10
-        }
-        
-        # Add authentication
-        if auth_type == 'password':
-            ssh_kwargs['password'] = server_config.get('password')
-        elif auth_type == 'key':
-            key_content = server_config.get('private_key')
-            key_passphrase = server_config.get('key_passphrase')
-            if not key_content:
-                raise ValueError('Private key required for key authentication')
-            
-            # Load private key
-            key_file = StringIO(key_content)
-            try:
-                key = paramiko.RSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            except:
-                try:
-                    key_file.seek(0)
-                    key = paramiko.DSSKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-                except:
-                    key_file.seek(0)
-                    key = paramiko.ECDSAKey.from_private_key(key_file, password=key_passphrase if key_passphrase else None)
-            
-            ssh_kwargs['pkey'] = key
-        else:
-            raise ValueError(f'Unsupported auth type: {auth_type}')
-        
-        # Create SSH URL for Docker
-        # Docker SDK supports ssh:// URL format
-        ssh_url = f"ssh://{username}@{hostname}:{port}"
-        
-        # Create Docker client with SSH transport
-        # Note: Docker SDK's use_ssh_client option requires SSH agent or key file path
-        # For password auth or key from memory, we need to use SSH tunnel or socket forwarding
-        
-        # Alternative approach: Use SSH socket forwarding
-        # This creates an SSH connection and forwards the Docker socket
-        
-        # For now, use base_url with SSH (if supported) or create socket forwarding
-        # Docker SDK has limited SSH support, so we'll use subprocess to forward socket
-        
-        # Simple approach: Use docker CLI with SSH context
-        # But DockerPilot uses docker SDK, so we need to provide base_url
-        
-        # Actually, Docker SDK Python doesn't directly support SSH URLs
-        # We need to either:
-        # 1. Use SSH tunnel (port forwarding)
-        # 2. Use docker context with SSH
-        # 3. Execute docker commands over SSH
-        
-        # For simplicity, let's use SSH to execute docker commands
-        # But DockerPilot uses docker SDK, so we need a wrapper
-        
-        # Best approach: Create a Docker client that executes commands over SSH
-        # This requires custom implementation or using docker-py with base_url
-        
-        # Temporary solution: Return None and handle in DockerPilot
-        # Or use docker context API
-        
-        # Actually, we can use docker's SSH context feature (Docker 18.09+)
-        # Create docker context with SSH
-        import subprocess
-        import tempfile
-        import os
-        
-        # Create temporary SSH config for docker context
-        context_name = f"dockerpilot-{hostname}-{port}"
-        
-        # Use docker context create with SSH
-        # docker context create --docker "host=ssh://user@host" context_name
-        
-        # For now, let's create a simple SSH-based docker client wrapper
-        # that executes docker commands over SSH
-        
-        # However, DockerPilotEnhanced expects a docker client object
-        # So we need to either:
-        # 1. Modify DockerPilot to accept SSH parameters
-        # 2. Create a proxy docker client that executes over SSH
-        # 3. Use docker socket forwarding
-        
-        # Simplest: Use SSH to forward Docker socket locally, then connect to forwarded socket
-        # This requires creating an SSH tunnel
-        
-        raise NotImplementedError("SSH Docker connection requires socket forwarding or Docker context. Will implement basic version.")
-        
-    except Exception as e:
-        app.logger.error(f"Failed to create Docker client for server: {e}")
-        raise
 
 def get_dockerpilot(server_id=None):
     """Get or create DockerPilot instance for current server
@@ -1027,7 +674,6 @@ def get_dockerpilot(server_id=None):
             if server_config:
                 try:
                     app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
-                    # docker_client = create_docker_client_for_server(server_config)
                 except Exception as e:
                     app.logger.error(f"Failed to create Docker client for remote server: {e}")
                     server_id = 'local'
@@ -1236,58 +882,21 @@ def get_env_servers_config_path() -> Path:
 
 
 def load_env_servers_config() -> dict:
-    """Load environment->server mapping via configured state store."""
-    try:
-        config = get_state_store().load_env_servers_config() or {}
-        config.setdefault("env_servers", {})
-        return config
-    except Exception as e:
-        app.logger.error(f"Failed to load environments config: {e}")
-        return {"env_servers": {}}
+    return _svc_load_env_servers_config(get_state_store=get_state_store, logger=app.logger)
 
 
 def save_env_servers_config(config: dict) -> bool:
-    """Save environment->server mapping via configured state store."""
-    try:
-        return bool(get_state_store().save_env_servers_config(config))
-    except Exception as e:
-        app.logger.error(f"Failed to save environments config: {e}")
-        return False
+    return _svc_save_env_servers_config(config, get_state_store=get_state_store, logger=app.logger)
 
 
 def get_deployment_history_data(limit: int = 50) -> list:
-    """Load deployment history via configured state store."""
-    try:
-        return list(get_state_store().get_deployment_history(limit=limit))
-    except TypeError:
-        # File store compatibility (older signature without limit)
-        try:
-            history = list(get_state_store().get_deployment_history())
-            return history[-limit:]
-        except Exception as e:
-            app.logger.error(f"Failed to load deployment history: {e}")
-            return []
-    except Exception as e:
-        app.logger.error(f"Failed to load deployment history: {e}")
-        return []
+    return _svc_get_deployment_history_data(get_state_store=get_state_store, limit=limit, logger=app.logger)
 
 
 def append_deployment_history_data(entry: dict, max_entries: int = 50) -> bool:
-    """Append deployment history entry via configured state store."""
-    try:
-        return bool(get_state_store().append_deployment_history(entry, max_entries=max_entries))
-    except TypeError:
-        # File store compatibility for older method signatures.
-        try:
-            history = get_deployment_history_data(limit=max_entries)
-            history.append(dict(entry))
-            return bool(get_state_store().replace_deployment_history(history[-max_entries:], max_entries=max_entries))
-        except Exception as e:
-            app.logger.error(f"Failed to append deployment history: {e}")
-            return False
-    except Exception as e:
-        app.logger.error(f"Failed to append deployment history: {e}")
-        return False
+    return _svc_append_deployment_history_data(
+        entry, get_state_store=get_state_store, max_entries=max_entries, logger=app.logger
+    )
 
 
 (
@@ -1314,127 +923,51 @@ def append_deployment_history_data(entry: dict, max_entries: int = 50) -> bool:
 
 
 def load_env_container_bindings() -> dict:
-    """Load environment->containers bindings via configured state store."""
-    try:
-        config = get_state_store().load_env_container_bindings() or {}
-        config.setdefault("env_containers", {})
-        return config
-    except Exception as e:
-        app.logger.error(f"Failed to load env container bindings: {e}")
-        return {"env_containers": {}}
+    return _svc_load_env_container_bindings(get_state_store=get_state_store, logger=app.logger)
 
 
 def save_env_container_bindings(config: dict) -> bool:
-    """Save environment->containers bindings via configured state store."""
-    try:
-        return bool(get_state_store().save_env_container_bindings(config))
-    except Exception as e:
-        app.logger.error(f"Failed to save env container bindings: {e}")
-        return False
+    return _svc_save_env_container_bindings(config, get_state_store=get_state_store, logger=app.logger)
 
 
 def _normalize_env_container_bindings(config: dict) -> dict:
-    envs = ['dev', 'staging', 'prod']
-    cfg = config if isinstance(config, dict) else {}
-    src_map = cfg.get("env_containers", {}) if isinstance(cfg.get("env_containers", {}), dict) else {}
-    normalized = {}
-    for env in envs:
-        values = src_map.get(env, [])
-        if not isinstance(values, list):
-            values = []
-        deduped = []
-        seen = set()
-        for name in values:
-            if not isinstance(name, str):
-                continue
-            clean = name.strip()
-            if not clean or clean in seen:
-                continue
-            seen.add(clean)
-            deduped.append(clean)
-        normalized[env] = deduped
-    return {"env_containers": normalized, "updated_at": datetime.now().isoformat()}
+    return _svc_normalize_env_container_bindings(config)
 
 
 def move_container_binding(container_name: str, from_env: str, to_env: str) -> bool:
-    if not container_name:
-        return False
-    data = load_env_container_bindings()
-    normalized = _normalize_env_container_bindings(data)
-    env_containers = normalized["env_containers"]
-    for env in env_containers:
-        env_containers[env] = [name for name in env_containers[env] if name != container_name]
-    if to_env in env_containers:
-        env_containers[to_env].append(container_name)
-    saved = save_env_container_bindings(_normalize_env_container_bindings(normalized))
-    if saved and '_environment_status_cache' in globals():
-        _environment_status_cache["data"] = None
-        _environment_status_cache["timestamp"] = None
-    return saved
+    return _svc_move_container_binding(
+        container_name,
+        from_env,
+        to_env,
+        load_bindings=load_env_container_bindings,
+        save_bindings=save_env_container_bindings,
+        invalidate_cache=lambda: globals()["_invalidate_environment_status_cache"](),
+    )
 
 
 def move_many_container_bindings(container_names: list, from_env: str, to_env: str) -> bool:
-    data = load_env_container_bindings()
-    normalized = _normalize_env_container_bindings(data)
-    env_containers = normalized["env_containers"]
-    unique_names = []
-    seen = set()
-    for name in container_names or []:
-        if isinstance(name, str) and name.strip() and name not in seen:
-            seen.add(name)
-            unique_names.append(name)
-    for container_name in unique_names:
-        for env in env_containers:
-            env_containers[env] = [existing for existing in env_containers[env] if existing != container_name]
-        if to_env in env_containers:
-            env_containers[to_env].append(container_name)
-    saved = save_env_container_bindings(_normalize_env_container_bindings(normalized))
-    if saved and '_environment_status_cache' in globals():
-        _environment_status_cache["data"] = None
-        _environment_status_cache["timestamp"] = None
-    return saved
+    return _svc_move_many_container_bindings(
+        container_names,
+        from_env,
+        to_env,
+        load_bindings=load_env_container_bindings,
+        save_bindings=save_env_container_bindings,
+        invalidate_cache=lambda: globals()["_invalidate_environment_status_cache"](),
+    )
 
 
 def load_legacy_file_state_snapshot() -> dict:
-    """Load state snapshot directly from legacy JSON files."""
-    file_store = _build_file_store()
-    return {
-        "servers_config": file_store.load_servers_config(),
-        "env_servers_config": file_store.load_env_servers_config(),
-        "deployment_history": file_store.get_deployment_history(),
-        "env_container_bindings": file_store.load_env_container_bindings(),
-    }
+    return _svc_load_legacy_file_state_snapshot(file_store_factory=_build_file_store)
 
 
 def migrate_legacy_file_state_to_store(target_store) -> dict:
-    """Copy legacy file state into target store. Returns migration counters."""
-    snapshot = load_legacy_file_state_snapshot()
-    servers_cfg = snapshot.get("servers_config", {}) or {"servers": [], "default_server": "local"}
-    env_cfg = snapshot.get("env_servers_config", {}) or {"env_servers": {}}
-    history = list(snapshot.get("deployment_history", []) or [])
-    env_container_bindings = snapshot.get("env_container_bindings", {}) or {"env_containers": {}}
-
-    target_store.save_servers_config(servers_cfg)
-    target_store.save_env_servers_config(env_cfg)
-    target_store.replace_deployment_history(history, max_entries=50)
-    target_store.save_env_container_bindings(_normalize_env_container_bindings(env_container_bindings))
-
-    return {
-        "servers": len(servers_cfg.get("servers", [])),
-        "env_mappings": len((env_cfg.get("env_servers") or {}).keys()),
-        "history_entries": min(len(history), 50),
-        "env_container_bindings": sum(
-            len(v)
-            for v in _normalize_env_container_bindings(env_container_bindings).get("env_containers", {}).values()
-        ),
-    }
+    return _svc_migrate_legacy_file_state_to_store(
+        target_store=target_store, file_store_factory=_build_file_store
+    )
 
 
 def resolve_server_id_for_env(env: str) -> str:
-    """Resolve which server_id should host a given environment."""
-    cfg = load_env_servers_config()
-    env_servers = cfg.get("env_servers", {}) if isinstance(cfg, dict) else {}
-    return env_servers.get(env, "local")
+    return _svc_resolve_server_id_for_env(env, load_env_servers=load_env_servers_config)
 
 
 def _get_containers_and_images_for_server(server_config) -> tuple:
@@ -1860,61 +1393,17 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
 
 
 def _parse_env_list(env_list):
-    env_map = {}
-    for item in env_list or []:
-        if isinstance(item, str) and '=' in item:
-            key, value = item.split('=', 1)
-            env_map[key] = value
-    return env_map
+    return _svc_parse_env_list(env_list)
 
 
 def discover_local_postgres(container_name: str = 'postgres-dozeyserver') -> dict:
-    """Inspect local Docker container and infer PostgreSQL connection params."""
-    try:
-        import docker
-    except ImportError as exc:
-        return {'success': False, 'error': f'Docker SDK not available: {exc}'}
-
-    client = docker.from_env()
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        return {'success': False, 'error': f'Container {container_name} not found'}
-    except Exception as exc:
-        return {'success': False, 'error': f'Failed to inspect container: {exc}'}
-
-    container.reload()
-    attrs = container.attrs or {}
-    env_map = _parse_env_list((attrs.get('Config') or {}).get('Env') or [])
-    ports = ((attrs.get('NetworkSettings') or {}).get('Ports') or {}).get('5432/tcp') or []
-    host_port = None
-    if ports and isinstance(ports, list) and ports[0]:
-        host_port = ports[0].get('HostPort')
-
-    postgres_cfg = {
-        'host': '127.0.0.1',
-        'port': int(host_port) if host_port else 5432,
-        'database': env_map.get('POSTGRES_DB', 'postgres'),
-        'user': env_map.get('POSTGRES_USER', 'postgres'),
-        'password': env_map.get('POSTGRES_PASSWORD', ''),
-        'sslmode': 'prefer',
-        'schema': DEFAULT_POSTGRES_SCHEMA,
-        'table_prefix': DEFAULT_POSTGRES_TABLE_PREFIX,
-        'auto_create_schema': DEFAULT_POSTGRES_AUTO_CREATE_SCHEMA,
-        'container_name': container_name,
-    }
-
-    return {
-        'success': True,
-        'container': {
-            'name': container.name,
-            'status': container.status,
-            'image': str(container.image.tags[0] if container.image.tags else container.image.id),
-            'id': container.id,
-        },
-        'postgres': postgres_cfg,
-        'postgres_sanitized': sanitize_postgres_config(postgres_cfg),
-    }
+    return _svc_discover_local_postgres(
+        container_name,
+        default_schema=DEFAULT_POSTGRES_SCHEMA,
+        default_table_prefix=DEFAULT_POSTGRES_TABLE_PREFIX,
+        default_auto_create_schema=DEFAULT_POSTGRES_AUTO_CREATE_SCHEMA,
+        sanitize_postgres_config=sanitize_postgres_config,
+    )
 
 
 def ensure_local_postgres_container(
@@ -1926,38 +1415,15 @@ def ensure_local_postgres_container(
     password: str,
     volume_name: str = None,
 ):
-    try:
-        import docker
-    except ImportError as exc:
-        raise RuntimeError(f'Docker SDK not available: {exc}') from exc
-
-    client = docker.from_env()
-    created = False
-    try:
-        container = client.containers.get(container_name)
-        if container.status != 'running':
-            container.start()
-            container.reload()
-    except docker.errors.NotFound:
-        env = {
-            'POSTGRES_DB': database,
-            'POSTGRES_USER': user,
-            'POSTGRES_PASSWORD': password,
-        }
-        volumes = None
-        if volume_name:
-            volumes = {volume_name: {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
-        container = client.containers.run(
-            image=image,
-            name=container_name,
-            detach=True,
-            restart_policy={'Name': 'unless-stopped'},
-            environment=env,
-            ports={'5432/tcp': int(host_port)},
-            volumes=volumes,
-        )
-        created = True
-    return container, created
+    return _svc_ensure_local_postgres_container(
+        container_name=container_name,
+        image=image,
+        host_port=host_port,
+        database=database,
+        user=user,
+        password=password,
+        volume_name=volume_name,
+    )
 
 
 (
