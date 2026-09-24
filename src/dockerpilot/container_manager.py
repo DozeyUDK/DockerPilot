@@ -6,6 +6,10 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
 
+from .container_creation import (
+    normalize_volumes as _normalize_volumes_impl,
+    run_new_container as _run_new_container_impl,
+)
 from .container_listing import (
     container_image_label as _container_image_label,
     list_containers as _list_containers_impl,
@@ -109,161 +113,16 @@ class ContainerManager:
                          network: str = None, privileged: bool = False,
                          cpu_limit: str = None, memory_limit: str = None,
                          **kwargs) -> bool:
-        """Run a new container with full configuration options.
-        
-        Args:
-            image_name: Docker image name/tag
-            name: Container name
-            ports: Port mapping dict (e.g., {'80': '8080'})
-            command: Command to run in container
-            environment: Environment variables dict
-            volumes: Volume mappings dict (supports both formats)
-            restart_policy: Restart policy (no, on-failure, always, unless-stopped)
-            network: Network name or 'host' for host network
-            privileged: Run container in privileged mode
-            cpu_limit: CPU limit (e.g., '1.5' for 1.5 CPUs)
-            memory_limit: Memory limit (e.g., '1g' for 1GB)
-        """
-        try:
-            self.console.print(f"[cyan]🚀 Starting new container '{name}' from image '{image_name}'...[/cyan]")
-            
-            # Prepare container creation parameters
-            container_kwargs = {
-                'image': image_name,
-                'name': name,
-                'detach': True,
-            }
-            
-            # Add ports if provided
-            if ports:
-                container_kwargs['ports'] = ports
-                self.console.print(f"[dim]  Ports: {ports}[/dim]")
-            
-            # Add command if provided
-            if command:
-                container_kwargs['command'] = command
-                self.console.print(f"[dim]  Command: {command}[/dim]")
-            
-            # Add environment variables if provided
-            if environment:
-                container_kwargs['environment'] = environment
-                env_count = len(environment)
-                self.console.print(f"[dim]  Environment variables: {env_count} set[/dim]")
-            
-            # Add volumes if provided
-            if volumes:
-                # Normalize volumes format
-                normalized_volumes = self._normalize_volumes(volumes)
-                container_kwargs['volumes'] = normalized_volumes
-                vol_count = len(normalized_volumes)
-                self.console.print(f"[dim]  Volumes: {vol_count} mounted[/dim]")
-            
-            # Add restart policy
-            container_kwargs['restart_policy'] = {"Name": restart_policy}
-            self.console.print(f"[dim]  Restart policy: {restart_policy}[/dim]")
-            
-            # Add network if specified
-            if network:
-                if network == 'host':
-                    container_kwargs['network_mode'] = 'host'
-                else:
-                    container_kwargs['network'] = network
-                self.console.print(f"[dim]  Network: {network}[/dim]")
-            
-            # Add privileged mode if requested
-            if privileged:
-                container_kwargs['privileged'] = True
-                self.console.print(f"[dim]  Privileged mode: enabled[/dim]")
-            
-            # Add resource limits
-            resource_limits = {}
-            if cpu_limit:
-                try:
-                    cpu_limit_nano = float(cpu_limit) * 1000000000
-                    resource_limits['nano_cpus'] = int(cpu_limit_nano)
-                    self.console.print(f"[dim]  CPU limit: {cpu_limit}[/dim]")
-                except ValueError:
-                    self.logger.warning(f"Invalid CPU limit format: {cpu_limit}")
-            
-            if memory_limit:
-                try:
-                    memory_str = memory_limit.lower()
-                    if memory_str.endswith('g'):
-                        memory_bytes = int(float(memory_str[:-1]) * 1024 * 1024 * 1024)
-                    elif memory_str.endswith('m'):
-                        memory_bytes = int(float(memory_str[:-1]) * 1024 * 1024)
-                    else:
-                        memory_bytes = int(memory_str)
-                    resource_limits['mem_limit'] = memory_bytes
-                    self.console.print(f"[dim]  Memory limit: {memory_limit}[/dim]")
-                except ValueError:
-                    self.logger.warning(f"Invalid memory limit format: {memory_limit}")
-            
-            if resource_limits:
-                container_kwargs.update(resource_limits)
-            
-            # Create and start container
-            container = self.client.containers.run(**container_kwargs)
-            
-            self.console.print(f"[green]✅ Container '{name}' started successfully (ID: {container.short_id})[/green]")
-            self.logger.info(f"Container {name} started from image {image_name}")
-            return True
-            
-        except docker.errors.ImageNotFound:
-            self.console.print(f"[bold red]❌ Image not found: {image_name}[/bold red]")
-            self.logger.error(f"Image not found: {image_name}")
-            return False
-        except docker.errors.APIError as e:
-            error_msg = str(e)
-            self.console.print(f"[bold red]❌ Docker API error:[/bold red] {error_msg}")
-            self.logger.error(f"Docker API error: {e}")
-            return False
-        except Exception as e:
-            self.console.print(f"[bold red]❌ Failed to start container: {e}[/bold red]")
-            self.logger.error(f"Container start failed: {e}")
-            return False
+        """Run a new container with full configuration options."""
+        return _run_new_container_impl(
+            self, image_name, name, ports=ports, command=command, environment=environment,
+            volumes=volumes, restart_policy=restart_policy, network=network, privileged=privileged,
+            cpu_limit=cpu_limit, memory_limit=memory_limit, **kwargs,
+        )
     
     def _normalize_volumes(self, volumes):
-        """Normalize volumes format for Docker API.
-        
-        Supports multiple formats:
-        - Dict with bind/mode: {'/host/path': {'bind': '/container/path', 'mode': 'rw'}}
-        - Simple dict: {'/host/path': '/container/path'}
-        - Named volumes: {'volume_name': '/container/path'}
-        """
-        if not volumes:
-            return []
-        
-        if isinstance(volumes, list):
-            return volumes
-        
-        if not isinstance(volumes, dict):
-            self.logger.warning(f"Volumes is not a dict or list, got {type(volumes)}")
-            return []
-        
-        normalized = []
-        for key, value in volumes.items():
-            if isinstance(value, dict):
-                # Already in correct format with bind and mode
-                if 'bind' in value:
-                    bind_path = value['bind']
-                    mode = value.get('mode', 'rw')
-                    normalized.append(f"{key}:{bind_path}:{mode}")
-                else:
-                    self.logger.warning(f"Volume dict for '{key}' missing 'bind', skipping")
-            elif isinstance(value, str):
-                # Simple format: host_path -> container_path
-                # Check if it's a named volume (doesn't start with /)
-                if not key.startswith('/') and not key.startswith('./') and not key.startswith('../'):
-                    # Named volume
-                    normalized.append(f"{key}:{value}")
-                else:
-                    # Bind mount
-                    normalized.append(f"{key}:{value}")
-            else:
-                self.logger.warning(f"Unknown volume format for key '{key}': {type(value)}")
-        
-        return normalized
+        """Normalize volumes format for Docker API."""
+        return _normalize_volumes_impl(self, volumes)
     
     def _start_container(self, container_name: str, **kwargs) -> bool:
         """Start container with enhanced validation."""
