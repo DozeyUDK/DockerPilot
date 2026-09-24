@@ -3,6 +3,7 @@
 from datetime import datetime
 from io import StringIO
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,6 +77,12 @@ def test_container_backup_treats_container_without_mounts_as_success():
     )
 
     assert container_backup.backup_container_data(host, "demo", reuse_existing=False) is True
+
+
+def test_container_backup_keeps_subprocess_available_for_bind_mount_sizing():
+    """The bind-mount sizing path uses run() and catches TimeoutExpired."""
+    assert container_backup.subprocess is subprocess
+    assert container_backup.subprocess.TimeoutExpired is subprocess.TimeoutExpired
 
 
 def test_backup_restore_facade_delegates_container_backup(monkeypatch):
