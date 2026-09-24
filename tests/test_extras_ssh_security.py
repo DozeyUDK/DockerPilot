@@ -33,6 +33,22 @@ class EmptyHostKeys:
         raise AssertionError("unexpected save")
 
 
+class RecordingHostKeys:
+    def __init__(self, host_name: str, key):
+        self._entries = {host_name: {key.get_name(): key}}
+        self.saved_to = None
+
+    def lookup(self, name):
+        return self._entries.get(name)
+
+    def add(self, host_name, key_type, key):
+        self._entries.setdefault(host_name, {})[key_type] = key
+
+    def save(self, path):
+        self.saved_to = path
+        Path(path).touch()
+
+
 def test_unknown_host_requires_explicit_fingerprint(tmp_path: Path, monkeypatch):
     key = FakeKey()
     monkeypatch.setattr(ssh_security, "probe_host_key", lambda *_a, **_kw: key)
@@ -75,6 +91,62 @@ def test_pinned_fingerprint_mismatch_is_rejected(tmp_path: Path, monkeypatch):
                 "hostname": "host.example",
                 "port": 22,
                 "host_key_fingerprint": "SHA256:not-the-key",
+            },
+            known_hosts_path=tmp_path / "known_hosts",
+        )
+
+
+def test_explicit_new_pin_replaces_stale_known_host_key(tmp_path: Path, monkeypatch):
+    old_key = FakeKey(b"old-key")
+    new_key = FakeKey(b"new-key")
+    host_keys = RecordingHostKeys("host.example", old_key)
+    monkeypatch.setattr(ssh_security, "probe_host_key", lambda *_a, **_kw: new_key)
+    monkeypatch.setattr(ssh_security, "_load_known_hosts", lambda _path: host_keys)
+    path = tmp_path / "known_hosts"
+
+    returned = ssh_security.ensure_host_key_trusted(
+        {
+            "hostname": "host.example",
+            "port": 22,
+            "host_key_fingerprint": ssh_security.key_fingerprint_sha256(new_key),
+        },
+        known_hosts_path=path,
+    )
+
+    assert returned.asbytes() == new_key.asbytes()
+    assert host_keys.lookup("host.example")[new_key.get_name()].asbytes() == new_key.asbytes()
+    assert host_keys.saved_to == str(path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_stale_known_host_key_without_new_pin_still_fails_closed(tmp_path: Path, monkeypatch):
+    old_key = FakeKey(b"old-key")
+    new_key = FakeKey(b"new-key")
+    host_keys = RecordingHostKeys("host.example", old_key)
+    monkeypatch.setattr(ssh_security, "probe_host_key", lambda *_a, **_kw: new_key)
+    monkeypatch.setattr(ssh_security, "_load_known_hosts", lambda _path: host_keys)
+
+    with pytest.raises(ssh_security.SSHHostKeyMismatch):
+        ssh_security.ensure_host_key_trusted(
+            {"hostname": "host.example", "port": 22},
+            known_hosts_path=tmp_path / "known_hosts",
+        )
+
+
+def test_explicit_pin_overrides_stale_matching_known_hosts_entry(tmp_path: Path, monkeypatch):
+    """A historical known_hosts key must not override a newer explicit pin."""
+    observed_key = FakeKey(b"observed-old-key")
+    pinned_key = FakeKey(b"operator-pinned-new-key")
+    host_keys = RecordingHostKeys("host.example", observed_key)
+    monkeypatch.setattr(ssh_security, "probe_host_key", lambda *_a, **_kw: observed_key)
+    monkeypatch.setattr(ssh_security, "_load_known_hosts", lambda _path: host_keys)
+
+    with pytest.raises(ssh_security.SSHHostKeyMismatch):
+        ssh_security.ensure_host_key_trusted(
+            {
+                "hostname": "host.example",
+                "port": 22,
+                "host_key_fingerprint": ssh_security.key_fingerprint_sha256(pinned_key),
             },
             known_hosts_path=tmp_path / "known_hosts",
         )
