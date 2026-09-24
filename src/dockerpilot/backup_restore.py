@@ -1,13 +1,7 @@
 """Backup and restore services extracted from DockerPilotEnhanced."""
 
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import json
-import os
-import subprocess
-import time
-import docker
 from .execution_context import resolve_sudo_password
 from .backup_discovery import find_existing_backup as _find_existing_backup_impl
 from .container_backup import backup_container_data as _backup_container_data_impl
