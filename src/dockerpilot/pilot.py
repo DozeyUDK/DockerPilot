@@ -4,6 +4,7 @@
 
 import argparse
 import signal
+import threading
 import sys
 from contextlib import contextmanager
 from pathlib import Path
