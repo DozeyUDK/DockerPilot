@@ -1,0 +1,19 @@
+{
+  "class_name": "MonitoringManager",
+  "source_file": "src/dockerpilot/monitoring.py",
+  "baseline": {
+    "bytes": 17970,
+    "file_lines": 374,
+    "class_lines": 358,
+    "method_count": 7
+  },
+  "methods": [
+    {"name": "__init__", "signature": "self, client, console, logger, metrics_file: str='docker_metrics.json', error_handler=None"},
+    {"name": "get_container_stats", "signature": "self, container_name: str"},
+    {"name": "monitor_containers_dashboard", "signature": "self, containers: List[str]=None, duration: int=300"},
+    {"name": "_save_metrics_history", "signature": "self, metrics_history: Dict"},
+    {"name": "_show_monitoring_summary", "signature": "self, metrics_history: Dict"},
+    {"name": "get_container_stats_once", "signature": "self, container_name: str"},
+    {"name": "monitor_container_live", "signature": "self, container_name: str, duration: int=30"}
+  ]
+}
