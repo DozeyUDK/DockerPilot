@@ -78,6 +78,18 @@ from backend.services.local_postgres import (
     ensure_local_postgres_container as _svc_ensure_local_postgres_container,
     parse_env_list as _svc_parse_env_list,
 )
+from backend.services.promotion_runtime import (
+    apply_env_resource_presets as _svc_apply_env_resource_presets,
+    promote_config_to_server as _svc_promote_config_to_server,
+    write_remote_file as _svc_write_remote_file,
+)
+from backend.services.state_store_runtime import StateStoreRuntime
+from backend.services.server_runtime import (
+    get_containers_and_images_for_server as _svc_get_containers_and_images_for_server,
+    get_or_create_pilot as _svc_get_or_create_pilot,
+    get_selected_server_config as _svc_get_selected_server_config,
+    get_server_config_by_id as _svc_get_server_config_by_id,
+)
 from backend.services.environment_state import (
     append_deployment_history_data as _svc_append_deployment_history_data,
     get_deployment_history_data as _svc_get_deployment_history_data,
@@ -556,71 +568,47 @@ app.config['SERVERS_DIR'].mkdir(exist_ok=True)
 app.config['SSH_KNOWN_HOSTS_PATH'] = app.config['CONFIG_DIR'] / "known_hosts"
 _server_secret_store = EncryptedSecretStore.from_config_dir(app.config['CONFIG_DIR'])
 
+_state_store_runtime = StateStoreRuntime(
+    config_dir=app.config['CONFIG_DIR'],
+    servers_dir=app.config['SERVERS_DIR'],
+    file_store_cls=FileStateStore,
+    create_store_fn=create_store,
+    resolve_storage_config_fn=resolve_storage_config,
+    sanitize_postgres_config_fn=sanitize_postgres_config,
+    logger=app.logger,
+)
+# Compatibility mirrors retained for callers/tests that inspect legacy globals.
 _storage_runtime_config = {}
 _state_store = None
 _storage_init_warning = None
 
+def _sync_storage_runtime_compat() -> None:
+    global _state_store, _storage_runtime_config, _storage_init_warning
+    _state_store = _state_store_runtime.store
+    _storage_runtime_config = dict(_state_store_runtime.runtime_config)
+    _storage_init_warning = _state_store_runtime.init_warning
+
 
 def _build_file_store() -> FileStateStore:
-    return FileStateStore(
-        config_dir=app.config['CONFIG_DIR'],
-        servers_dir=app.config['SERVERS_DIR'],
-    )
+    return _state_store_runtime.build_file_store()
 
 
 def init_state_store(runtime_config: dict = None) -> tuple:
-    """Initialize storage backend and fallback to file mode on errors."""
-    global _state_store, _storage_runtime_config, _storage_init_warning
-    cfg = runtime_config or resolve_storage_config(app.config['CONFIG_DIR'])
-    try:
-        _state_store = create_store(
-            config_dir=app.config['CONFIG_DIR'],
-            servers_dir=app.config['SERVERS_DIR'],
-            resolved_cfg=cfg,
-        )
-        _storage_runtime_config = cfg
-        _storage_init_warning = None
-        return True, None
-    except Exception as exc:
-        _storage_init_warning = str(exc)
-        app.logger.error(
-            f"Failed to initialize storage backend '{cfg.get('backend', 'unknown')}': {exc}. "
-            "Falling back to file storage."
-        )
-        fallback_cfg = {"backend": "file", "postgres": {}}
-        _state_store = _build_file_store()
-        _storage_runtime_config = fallback_cfg
-        return False, str(exc)
+    result = _state_store_runtime.init(runtime_config)
+    _sync_storage_runtime_compat()
+    return result
 
 
 def get_state_store():
-    if _state_store is None:
-        init_state_store()
-    return _state_store
+    store = _state_store_runtime.get()
+    _sync_storage_runtime_compat()
+    return store
 
 
 def get_storage_status() -> dict:
-    store = get_state_store()
-    mode = getattr(store, "mode", "file")
-    healthy = False
-    schema_version = None
-    error = None
-    try:
-        healthy = bool(store.is_healthy())
-        schema_version = store.schema_version()
-    except Exception as exc:
-        error = str(exc)
-    return {
-        "backend": mode,
-        "healthy": healthy,
-        "schema_version": schema_version,
-        "warning": _storage_init_warning,
-        "error": error,
-        "config": {
-            "backend": _storage_runtime_config.get("backend", "file"),
-            "postgres": sanitize_postgres_config(_storage_runtime_config.get("postgres", {})),
-        },
-    }
+    status = _state_store_runtime.status()
+    _sync_storage_runtime_compat()
+    return status
 
 
 init_state_store()
@@ -639,61 +627,25 @@ _migration_cancel_flags = {}  # {container_name: bool} - flags to cancel migrati
 
 
 def get_dockerpilot(server_id=None):
-    """Get or create DockerPilot instance for current server
-
-    Flask embeds DockerPilot without registering process signal handlers.
-    Cache construction is serialized because request threads can arrive
-    before the first instance has been initialized.
-    """
-    global _dockerpilot_instances, _current_server_id
-    
-    # Request handlers may use the selected server. Background-safe callers
-    # pass an explicit id and therefore do not need Flask session state.
+    global _current_server_id
     if server_id is None:
         server_id = session.get('selected_server', 'local')
-    
-    with _dockerpilot_instances_lock:
-        # Cache lookup and construction must be atomic: duplicate pilots own
-        # separate Docker clients and used to race during concurrent requests.
-        if server_id in _dockerpilot_instances:
-            return _dockerpilot_instances[server_id]
-
-        config_path = app.config['CONFIG_DIR'] / 'deployment.yml'
-        config_path_str = str(config_path) if config_path.exists() else None
-
-        # For remote servers, we need to configure Docker client for SSH.
-        docker_client = None
-        if server_id != 'local':
-            config = load_servers_config()
-            server_config = None
-            for server in config.get('servers', []):
-                if server.get('id') == server_id:
-                    server_config = server
-                    break
-
-            if server_config:
-                try:
-                    app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
-                except Exception as e:
-                    app.logger.error(f"Failed to create Docker client for remote server: {e}")
-                    server_id = 'local'
-                    if server_id in _dockerpilot_instances:
-                        return _dockerpilot_instances[server_id]
-
-        try:
-            instance = DockerPilotEnhanced(
-                config_file=config_path_str,
-                log_level=LogLevel.INFO,
-                register_signal_handlers=False,
-            )
-            _dockerpilot_instances[server_id] = instance
-            _current_server_id = server_id
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to initialize DockerPilot: {e}")
-            raise
-
+    try:
+        instance, resolved_server_id = _svc_get_or_create_pilot(
+            server_id,
+            instances=_dockerpilot_instances,
+            lock=_dockerpilot_instances_lock,
+            config_dir=app.config['CONFIG_DIR'],
+            load_servers_config=load_servers_config,
+            pilot_cls=DockerPilotEnhanced,
+            log_level=LogLevel.INFO,
+            logger=app.logger,
+        )
+        _current_server_id = resolved_server_id
         return instance
+    except Exception as exc:
+        app.logger.error("Failed to initialize DockerPilot: %s", exc)
+        raise
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
     """Execute command locally without a shell or remotely over verified SSH."""
@@ -822,24 +774,13 @@ def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_stat
 
 
 def get_selected_server_config():
-    """Get configuration for currently selected server"""
     try:
         selected_server_id = session.get('selected_server', 'local')
-        app.logger.debug(f"Selected server ID from session: {selected_server_id}")
-        
-        if selected_server_id == 'local':
-            return None
-        
-        config = load_servers_config()
-        for server in config.get('servers', []):
-            if server.get('id') == selected_server_id:
-                app.logger.info(f"Found server config for {selected_server_id}: {server.get('hostname')}")
-                return server
-        
-        app.logger.warning(f"Server {selected_server_id} not found in config, falling back to local")
-        return None
-    except Exception as e:
-        app.logger.error(f"Error getting selected server config: {e}", exc_info=True)
+        return _svc_get_selected_server_config(
+            selected_server_id, load_servers_config=load_servers_config, logger=app.logger
+        )
+    except Exception as exc:
+        app.logger.error("Error getting selected server config: %s", exc, exc_info=True)
         return None
 
 
@@ -971,148 +912,43 @@ def resolve_server_id_for_env(env: str) -> str:
 
 
 def _get_containers_and_images_for_server(server_config) -> tuple:
-    """Get containers and images list for one server (local or remote).
-
-    Returns (containers, images, host_error). host_error is set when Docker inventory
-    could not be read (typically SSH unreachable); omitted when data was returned.
-    """
-    if server_config is None:
-        server_config = {'id': 'local'}
-    containers = []
-    images = []
-    container_error = None
-    image_error = None
-    try:
-        out = execute_docker_command_via_ssh(
-            server_config,
-            r"ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'",
-            check_exit_status=False
-        )
-        for line in (out or "").strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 4:
-                containers.append({
-                    "name": parts[0].lstrip("/"),
-                    "image": parts[1],
-                    "state": parts[2].lower(),
-                    "status": parts[3],
-                })
-    except Exception as e:
-        app.logger.warning(f"Failed to get containers for server {server_config.get('id', '?')}: {e}")
-        container_error = str(e)
-    try:
-        out = execute_docker_command_via_ssh(
-            server_config,
-            r"images --format '{{.Repository}}\t{{.Tag}}'",
-            check_exit_status=False
-        )
-        for line in (out or "").strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 2 and parts[0] and parts[0] != "<none>":
-                tag = f"{parts[0]}:{parts[1]}"
-                if tag not in images:
-                    images.append(tag)
-    except Exception as e:
-        app.logger.warning(f"Failed to get images for server {server_config.get('id', '?')}: {e}")
-        image_error = str(e)
-
-    host_error = None
-    if container_error or image_error:
-        if not containers and not images:
-            if container_error and image_error and container_error == image_error:
-                host_error = container_error
-            else:
-                host_error = "; ".join(
-                    msg for msg in (container_error, image_error) if msg
-                )
-    return containers, images, host_error
+    return _svc_get_containers_and_images_for_server(
+        server_config, execute_docker_command=execute_docker_command_via_ssh, logger=app.logger
+    )
 
 
 def get_server_config_by_id(server_id: str):
-    """Return server config dict from servers.json by id."""
-    if server_id == 'local':
-        return {'id': 'local'}
-    config = load_servers_config()
-    for server in config.get('servers', []):
-        if server.get('id') == server_id:
-            return server
-    return None
+    return _svc_get_server_config_by_id(server_id, load_servers_config=load_servers_config)
 
 
 def _apply_env_resource_presets(deployment: dict, target_env: str) -> None:
-    """Apply environment resource presets in-place (cpu/memory)."""
-    env_configs = {
-        'dev': {'cpu': '0.5', 'memory': '512Mi'},
-        'staging': {'cpu': '1.0', 'memory': '1Gi'},
-        'prod': {'cpu': '2.0', 'memory': '2Gi'},
-    }
-    preset = env_configs.get(target_env)
-    if not preset:
-        return
-    deployment['cpu_limit'] = preset['cpu']
-    deployment['memory_limit'] = preset['memory']
+    return _svc_apply_env_resource_presets(deployment, target_env)
 
 
 def _write_remote_file(server_config: dict, remote_path: str, content: str) -> None:
-    """Write text to a remote path using a shell-safe Python command."""
-    command = _svc_build_remote_file_write_command(remote_path, content)
-    execute_command_via_ssh(server_config, command, check_exit_status=True)
+    return _svc_write_remote_file(
+        server_config,
+        remote_path,
+        content,
+        build_remote_file_write_command=_svc_build_remote_file_write_command,
+        execute_command=execute_command_via_ssh,
+    )
 
 
 def promote_config_to_server(server_id: str, config_path_str: str, from_env: str, to_env: str, skip_backup: bool = False) -> bool:
-    """Promote by deploying on the target server (env -> server mapping).
-
-    For remote servers, we SSH in, write the promoted config, and run dockerpilot there.
-    """
-    try:
-        if not config_path_str or not Path(config_path_str).exists():
-            raise FileNotFoundError(f"Config file not found: {config_path_str}")
-
-        with open(config_path_str, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
-
-        deployment = config.get('deployment') or {}
-        if not isinstance(deployment, dict):
-            raise ValueError("Invalid deployment config format (deployment must be a dict)")
-
-        container_name = deployment.get('container_name') or Path(config_path_str).parent.name.split('_')[0]
-        _apply_env_resource_presets(deployment, to_env)
-
-        # Choose deployment strategy by environment
-        deployment_type = 'blue-green' if to_env == 'prod' else 'rolling'
-
-        # Local target: use in-process pilot (existing behavior)
-        if server_id == 'local':
-            pilot = get_dockerpilot()
-            return bool(pilot.environment_promotion(from_env, to_env, config_path_str, skip_backup))
-
-        server_config = get_server_config_by_id(server_id)
-        if not server_config:
-            raise ValueError(f"Target server '{server_id}' not found in servers config")
-
-        # Write promoted config to remote ~/.dockerpilot_extras/deployments/<container>/deployment-<env>.yml
-        remote_config_path = f"/home/{server_config.get('username','root')}/.dockerpilot_extras/deployments/{container_name}/deployment-{to_env}.yml"
-        promoted_yaml = yaml.dump(config, default_flow_style=False, allow_unicode=True)
-        _write_remote_file(server_config, remote_config_path, promoted_yaml)
-
-        # Run deploy remotely
-        cmd = _svc_build_dockerpilot_deploy_command(
-            remote_config_path,
-            deployment_type,
-            skip_backup=skip_backup,
-        )
-        execute_command_via_ssh(server_config, cmd, check_exit_status=True)
-        return True
-
-    except Exception as e:
-        app.logger.error(f"Remote promotion failed ({from_env}->{to_env} on {server_id}): {e}", exc_info=True)
-        return False
+    return _svc_promote_config_to_server(
+        server_id,
+        config_path_str,
+        from_env,
+        to_env,
+        skip_backup,
+        get_dockerpilot=get_dockerpilot,
+        get_server_config_by_id=get_server_config_by_id,
+        write_remote_file_fn=_write_remote_file,
+        build_dockerpilot_deploy_command=_svc_build_dockerpilot_deploy_command,
+        execute_command=execute_command_via_ssh,
+        logger=app.logger,
+    )
 
 AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken, SudoPassword = create_auth_resources(
     Resource=Resource,
