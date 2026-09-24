@@ -48,10 +48,20 @@ def _facade_signatures():
     return out, cls
 
 
-def test_pilot_facade_exact_phase0_signatures_are_preserved():
+def test_pilot_facade_preserves_phase0_signatures_plus_current_main_constructor_flag():
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
     current, _ = _facade_signatures()
-    assert current == baseline
+
+    # The Phase 0 snapshot remains historical. Current main intentionally added
+    # register_signal_handlers to __init__; preserve that API while requiring every
+    # other facade signature to remain identical to the Phase 0 compatibility surface.
+    expected = dict(baseline)
+    expected["__init__"] = dict(baseline["__init__"])
+    expected["__init__"]["positional"] = [
+        "self", "config_file", "log_level", "register_signal_handlers"
+    ]
+    expected["__init__"]["defaults"] = [None, "None", "LogLevel.INFO", "True"]
+    assert current == expected
 
 
 def test_pilot_facade_stays_below_regrowth_budget():

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip('textual')
-from textual.widgets import Button, Checkbox, Label, Select, Static
+from textual.widgets import Button, Checkbox, Label, Select, Static, TextArea
 
 from dockerpilot.cli import tui
 from dockerpilot.cli.parser import build_cli_parser
@@ -17,13 +17,17 @@ class FakePilot:
         self.containers = [{'name': 'web', 'state': 'running', 'image': 'demo'},
                            {'name': 'api', 'state': 'running', 'image': 'demo'}]
         self.error = None
+        self.container_list_calls = 0
+        self.image_list_calls = 0
 
     def list_containers(self, **kwargs):
+        self.container_list_calls += 1
         if self.error:
             raise self.error
         return list(self.containers)
 
     def list_images(self, **kwargs):
+        self.image_list_calls += 1
         if self.error:
             raise self.error
         return []
@@ -119,6 +123,14 @@ def test_multi_selector_does_not_collapse_inside_form_scroll():
     asyncio.run(scenario())
 
 
+async def run_finished(app, pilot):
+    for _ in range(30):
+        await pilot.pause()
+        if not app._command_running:
+            return
+    pytest.fail('TUI command did not finish')
+
+
 def test_incomplete_quote_is_editable_and_run_is_rejected(monkeypatch):
     dispatched = []
     monkeypatch.setattr(tui, 'capture_cli_execution', lambda *a, **kw: dispatched.append(a) or (0, 'OK'))
@@ -140,7 +152,7 @@ def test_incomplete_quote_is_editable_and_run_is_rejected(monkeypatch):
             app.command_widgets['env'].load_text('KEY="two words"')
             await pilot.pause()
             app._start_run()
-            await pilot.pause()
+            await run_finished(app, pilot)
             assert len(dispatched) == 1
             assert 'KEY=two words' in dispatched[0][2]
             assert not app._command_running
@@ -392,6 +404,165 @@ def test_command_exception_unlocks_controls(monkeypatch):
             assert not app._command_running
             assert not app.query_one('#run-command', Button).disabled
             assert not app.query_one('#refresh-targets', Button).disabled
+    asyncio.run(scenario())
+
+
+def test_successful_mutation_refreshes_targets_and_preserves_other_form_values(monkeypatch):
+    backend = FakePilot()
+
+    def stop_api(*_args, **_kwargs):
+        backend.containers = backend.containers[:1]
+        return 0, 'stopped api'
+
+    monkeypatch.setattr(tui, 'capture_cli_execution', stop_api)
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'stop'))
+            app.command_widgets['name'].select('api')
+            app.command_widgets['timeout'].value = '47'
+            initial_container_calls = backend.container_list_calls
+
+            app._start_run()
+            await run_finished(app, pilot)
+
+            assert backend.container_list_calls == initial_container_calls + 1
+            assert [value for _, value in app.available_targets['container']] == ['web']
+            assert app.command_widgets['name'].selected == []
+            assert app.command_widgets['timeout'].value == '47'
+            assert 'Command completed inside TUI' in str(app.query_one('#status', Static).render())
+            assert 'Loaded 1 containers' in str(app.query_one('#status', Static).render())
+    asyncio.run(scenario())
+
+
+def test_successful_read_only_command_does_not_refresh_targets(monkeypatch):
+    monkeypatch.setattr(tui, 'capture_cli_execution', lambda *_args, **_kwargs: (0, 'listed'))
+
+    async def scenario():
+        backend = FakePilot()
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'list'))
+            initial_calls = (backend.container_list_calls, backend.image_list_calls)
+
+            app._start_run()
+            await run_finished(app, pilot)
+
+            assert (backend.container_list_calls, backend.image_list_calls) == initial_calls
+
+    asyncio.run(scenario())
+
+
+def test_mutation_removing_last_target_clears_stale_live_selection(monkeypatch):
+    backend = FakePilot()
+    backend.containers = [{'name': 'api', 'state': 'running', 'image': 'demo'}]
+
+    def remove_api(*_args, **_kwargs):
+        backend.containers = []
+        return 0, 'removed api'
+
+    monkeypatch.setattr(tui, 'capture_cli_execution', remove_api)
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'remove'))
+            app.command_widgets['name'].select('api')
+
+            app._start_run()
+            await run_finished(app, pilot)
+
+            assert app.available_targets['container'] == []
+            assert isinstance(app.command_widgets['name'], TextArea)
+            assert app.command_widgets['name'].text == ''
+
+    asyncio.run(scenario())
+
+
+def test_partial_mutation_failure_still_refreshes_changed_targets(monkeypatch):
+    backend = FakePilot()
+
+    def remove_one_then_fail(*_args, **_kwargs):
+        backend.containers = backend.containers[1:]
+        return 1, 'removed web; missing target failed'
+
+    monkeypatch.setattr(tui, 'capture_cli_execution', remove_one_then_fail)
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'remove'))
+            app.command_widgets['name'].select('web')
+            app.command_widgets['name'].select('api')
+
+            app._start_run()
+            await run_finished(app, pilot)
+
+            assert [value for _, value in app.available_targets['container']] == ['api']
+            assert app.command_widgets['name'].selected == ['api']
+            status = str(app.query_one('#status', Static).render())
+            assert 'exit status 1' in status
+            assert 'Loaded 1 containers' in status
+
+    asyncio.run(scenario())
+
+
+def test_failed_post_command_refresh_keeps_success_and_cached_targets(monkeypatch):
+    backend = FakePilot()
+
+    def successful_command_then_failed_refresh(*_args, **_kwargs):
+        backend.error = RuntimeError('refresh unavailable')
+        return 0, 'container stopped'
+
+    monkeypatch.setattr(tui, 'capture_cli_execution', successful_command_then_failed_refresh)
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'stop'))
+            app.command_widgets['name'].select('api')
+
+            app._start_run()
+            await run_finished(app, pilot)
+
+            assert [value for _, value in app.available_targets['container']] == ['web', 'api']
+            status = str(app.query_one('#status', Static).render())
+            assert 'Command completed inside TUI' in status
+            assert 'refresh unavailable' in status
+            assert 'container stopped' in '\n'.join(
+                str(line) for line in app.query_one('#results').lines
+            )
+    asyncio.run(scenario())
+
+
+def test_post_command_refresh_exception_does_not_reclassify_command_success(monkeypatch):
+    monkeypatch.setattr(tui, 'capture_cli_execution', lambda *_args, **_kwargs: (0, 'stopped'))
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        async with app.run_test(size=(140, 55)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, 'container', 'stop'))
+            app.command_widgets['name'].select('api')
+
+            async def failed_refresh():
+                raise RuntimeError('render refresh failed')
+
+            monkeypatch.setattr(app, '_refresh_targets_after_command', failed_refresh)
+            app._start_run()
+            await run_finished(app, pilot)
+
+            status = str(app.query_one('#status', Static).render())
+            assert 'Command completed inside TUI' in status
+            assert 'render refresh failed' in status
+            assert 'Inline execution failed' not in status
+
     asyncio.run(scenario())
 
 

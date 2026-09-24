@@ -68,6 +68,37 @@ class TuiCommandHandoff:
     argv: List[str]
 
 
+_TARGET_MUTATING_COMMANDS = frozenset(
+    {
+        ("container", "start"),
+        ("container", "stop"),
+        ("container", "restart"),
+        ("container", "remove"),
+        ("container", "pause"),
+        ("container", "unpause"),
+        ("container", "rename"),
+        ("container", "stop-remove"),
+        ("container", "run"),
+        ("container", "remove-image"),
+        ("container", "prune-images"),
+        ("deploy", "config"),
+        ("deploy", "quick"),
+        ("promote",),
+        ("build",),
+    }
+)
+
+
+def should_refresh_targets_after_command(
+    command: CommandNode,
+    values: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return whether a command attempt can stale cached Docker targets."""
+    if command.path == ("container", "prune-images") and (values or {}).get("dry_run"):
+        return False
+    return command.path in _TARGET_MUTATING_COMMANDS
+
+
 def _is_subparsers_action(action: argparse.Action) -> bool:
     """Return True when the action holds nested subparsers."""
     return action.__class__.__name__ == "_SubParsersAction"
@@ -964,6 +995,29 @@ if TEXTUAL_AVAILABLE:
                     values[dest] = widget.value
             return values
 
+        def _snapshot_values_after_target_refresh(self) -> Dict[str, Any]:
+            """Keep manual values but discard vanished live-resource selections."""
+            values = self._snapshot_widget_values(self.command_widgets)
+            for dest, selector_spec in self.selector_specs.items():
+                widget = self.command_widgets.get(dest)
+                if not isinstance(widget, SelectionList):
+                    continue
+                available = {
+                    value
+                    for _label, value in self.available_targets.get(
+                        selector_spec.resource_type,
+                        [],
+                    )
+                }
+                selected = self._selector_values(values.get(dest))
+                surviving = [value for value in selected if value in available]
+                values[dest] = (
+                    surviving
+                    if selector_spec.mode == "multi"
+                    else (surviving[0] if surviving else "")
+                )
+            return values
+
         @staticmethod
         def _textarea_value(value: Any) -> str:
             """Convert selector/list values to the editable multiline representation."""
@@ -1090,13 +1144,25 @@ if TEXTUAL_AVAILABLE:
                 # have completed while Docker discovery was running.
                 async with self._form_render_lock:
                     command = self.selected_command
-                    values = self._snapshot_widget_values(self.command_widgets)
+                    values = self._snapshot_values_after_target_refresh()
                     if command:
                         await self._render_command_form_locked(command, values)
                 status.update(status_message)
             finally:
                 self._targets_refreshing = False
                 self._set_run_state(self._command_running)
+
+        async def _refresh_targets_after_command(self) -> str:
+            """Refresh selectors after a mutation without changing command success."""
+            status_message = await self._refresh_available_targets_async()
+            # Capture the current form after discovery: users may navigate or edit
+            # while the command and refresh run in background threads.
+            async with self._form_render_lock:
+                command = self.selected_command
+                values = self._snapshot_values_after_target_refresh()
+                if command:
+                    await self._render_command_form_locked(command, values)
+            return status_message
 
         def action_quit(self) -> None:
             """Keep the app mounted until a pending command or refresh finishes."""
@@ -1135,8 +1201,9 @@ if TEXTUAL_AVAILABLE:
                     status.update(message or "Select a runnable command first.")
                     return
 
+                executed_command = self.selected_command
                 argv = build_command_argv(
-                    self.selected_command,
+                    executed_command,
                     self._values_from_widgets(self.command_widgets),
                     global_arguments=self.global_arguments,
                     global_values=self._values_from_widgets(self.global_widgets),
@@ -1144,11 +1211,11 @@ if TEXTUAL_AVAILABLE:
                 command_values = self._values_from_widgets(self.command_widgets)
                 command_text = " ".join(shlex.quote(part) for part in argv)
 
-                if should_launch_in_external_terminal(self.selected_command):
+                if should_launch_in_external_terminal(executed_command):
                     self.exit(TuiCommandHandoff(argv=argv))
                     return
 
-                blocking_reason = requires_tty_or_live_ui(self.selected_command, command_values)
+                blocking_reason = requires_tty_or_live_ui(executed_command, command_values)
                 if blocking_reason:
                     self._append_result_block(
                         command_text,
@@ -1170,10 +1237,23 @@ if TEXTUAL_AVAILABLE:
                 )
                 self._append_result_block(command_text, return_code, output)
 
+                refresh_message = None
+                if should_refresh_targets_after_command(executed_command, command_values):
+                    try:
+                        refresh_message = await self._refresh_targets_after_command()
+                    except Exception as exc:
+                        refresh_message = f"Could not refresh Docker targets: {exc}"
+
                 if return_code == 0:
-                    status.update("Command completed inside TUI.")
+                    completion_message = "Command completed inside TUI."
+                    if refresh_message:
+                        completion_message = f"{completion_message} {refresh_message}"
+                    status.update(completion_message)
                 else:
-                    status.update(f"Command finished with exit status {return_code}.")
+                    completion_message = f"Command finished with exit status {return_code}."
+                    if refresh_message:
+                        completion_message = f"{completion_message} {refresh_message}"
+                    status.update(completion_message)
             except Exception as exc:
                 self._append_result_block(command_text, 1, f"Inline execution failed.\n{exc}")
                 status.update(f"Inline execution failed: {exc}")

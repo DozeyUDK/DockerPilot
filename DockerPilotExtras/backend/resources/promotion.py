@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import threading
 
+from backend.security import safe_error_message
+from backend.services.migration_execution import DockerPilotExecutionContext
+from backend.services.migration_runner import MigrationSpec
+
 
 def create_promotion_resources(
     *,
@@ -22,14 +26,16 @@ def create_promotion_resources(
     move_container_binding,
     format_env_name,
     find_active_deployment_dir,
-    ContainerMigrate_cls,
+    migration_runner,
+    execution_context_factory=DockerPilotExecutionContext,
 ):
     """Return environment promotion resource classes with injected dependencies."""
 
     datetime = datetime_cls
     _deployment_progress = deployment_progress
     _consume_elevation_token = consume_elevation_token
-    ContainerMigrate = ContainerMigrate_cls
+    _migration_runner = migration_runner
+    _execution_context_factory = execution_context_factory
 
     class HealthCheck(Resource):
         """Health check endpoint"""
@@ -159,8 +165,7 @@ def create_promotion_resources(
         """Promote single container from one environment to another"""
         def post(self):
             container_name = None
-            pilot = None
-            sudo_password_applied = False
+            execution_context = None
             try:
                 data = request.get_json()
                 from_env = data.get('from_env')
@@ -174,25 +179,22 @@ def create_promotion_resources(
                 if not from_env or not to_env or not container_name:
                     return {'error': 'Missing required parameters'}, 400
                 
-                # Initialize progress tracking
-                _deployment_progress[container_name] = {
-                    'stage': 'initializing',
-                    'progress': 0,
-                    'message': f'Inicjalizacja promocji {container_name}...',
-                    'timestamp': datetime.now().isoformat()
-                }
-                
                 app.logger.info(f"Promoting single container {container_name} from {from_env} to {to_env}")
+
+                def initialize_promotion_progress():
+                    _deployment_progress[container_name] = {
+                        'stage': 'initializing',
+                        'progress': 0,
+                        'message': f'Inicjalizacja promocji {container_name}...',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    _deployment_progress[container_name] = {
+                        'stage': 'preparing',
+                        'progress': 10,
+                        'message': 'Preparing promotion...',
+                        'timestamp': datetime.now().isoformat()
+                    }
                 
-                # Update progress
-                _deployment_progress[container_name] = {
-                    'stage': 'preparing',
-                    'progress': 10,
-                    'message': 'Preparing promotion...',
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                pilot = get_dockerpilot()
                 sudo_password = None
                 if elevation_token:
                     token_ok, token_message, token_password = _consume_elevation_token(
@@ -214,9 +216,10 @@ def create_promotion_resources(
                     if sudo_password:
                         app.logger.info("Using legacy sudo password from session")
     
-                if sudo_password:
-                    pilot._sudo_password = sudo_password
-                    sudo_password_applied = True
+                execution_context = _execution_context_factory(
+                    get_dockerpilot,
+                    sudo_password=sudo_password,
+                )
                 
                 try:
                     # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
@@ -225,70 +228,94 @@ def create_promotion_resources(
                     target_server_id = resolve_server_id_for_env(to_env)
     
                     if source_server_id == target_server_id:
-                        _deployment_progress[container_name] = {
-                            'stage': 'deploying',
-                            'progress': 30,
-                            'message': (
-                                f'Promoting {container_name} on shared server '
-                                f'({format_env_name(from_env)} -> {format_env_name(to_env)})...'
-                            ),
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        deployment_dir = find_active_deployment_dir(container_name)
-                        if not deployment_dir:
-                            raise FileNotFoundError(f"No active deployment directory found for {container_name}")
-                        config_path = deployment_dir / f'deployment-{from_env}.yml'
-                        if not config_path.exists():
-                            config_path = deployment_dir / 'deployment.yml'
-                        if not config_path.exists():
-                            raise FileNotFoundError(
-                                f"Deployment config not found for {container_name} and env {from_env}"
-                            )
-                        success = promote_config_to_server(
-                            target_server_id,
-                            str(config_path),
-                            from_env,
-                            to_env,
-                            bool(skip_backup),
-                        )
-                        body = {
-                            'mode': 'same-server',
-                            'config_path': str(config_path),
-                            'source_server_id': source_server_id,
-                            'target_server_id': target_server_id,
-                        }
-                    else:
-                        _deployment_progress[container_name] = {
-                            'stage': 'migrating',
-                            'progress': 20,
-                            'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
-                            'timestamp': datetime.now().isoformat()
-                        }
-    
-                        # Reuse the existing migration implementation by calling the migrate resource in a test request context.
-                        with app.test_request_context(
-                            '/api/containers/migrate',
-                            method='POST',
-                            json={
-                                'container_name': container_name,
+                        def promote_on_shared_server():
+                            initialize_promotion_progress()
+                            _deployment_progress[container_name] = {
+                                'stage': 'deploying',
+                                'progress': 30,
+                                'message': (
+                                    f'Promoting {container_name} on shared server '
+                                    f'({format_env_name(from_env)} -> {format_env_name(to_env)})...'
+                                ),
+                                'timestamp': datetime.now().isoformat()
+                            }
+                            deployment_dir = find_active_deployment_dir(container_name)
+                            if not deployment_dir:
+                                raise FileNotFoundError(
+                                    f"No active deployment directory found for {container_name}"
+                                )
+                            config_path = deployment_dir / f'deployment-{from_env}.yml'
+                            if not config_path.exists():
+                                config_path = deployment_dir / 'deployment.yml'
+                            if not config_path.exists():
+                                raise FileNotFoundError(
+                                    f"Deployment config not found for {container_name} and env {from_env}"
+                                )
+                            details = {
+                                'mode': 'same-server',
+                                'config_path': str(config_path),
                                 'source_server_id': source_server_id,
                                 'target_server_id': target_server_id,
-                                'include_data': bool(include_data),
-                                'stop_source': bool(stop_source),
-                            },
+                            }
+                            promoted = promote_config_to_server(
+                                target_server_id,
+                                str(config_path),
+                                from_env,
+                                to_env,
+                                bool(skip_backup),
+                            )
+                            return {
+                                'success': bool(promoted),
+                                'details': details,
+                            }
+
+                        promotion_result = _migration_runner.run_operation_inline(
+                            container_name,
+                            promote_on_shared_server,
+                            execution_context=execution_context,
+                        )
+                        if promotion_result.status in {409, 503}:
+                            return promotion_result.to_response()
+                        success = promotion_result.completed_successfully
+                        body = promotion_result.body
+                        if (
+                            success
+                            and isinstance(promotion_result.body, dict)
+                            and isinstance(promotion_result.body.get('details'), dict)
                         ):
-                            migrate_result = ContainerMigrate().post()
+                            body = promotion_result.body['details']
+                    else:
+                        def mark_cross_server_migration_started():
+                            initialize_promotion_progress()
+                            _deployment_progress[container_name] = {
+                                'stage': 'migrating',
+                                'progress': 20,
+                                'message': f'Migrating {container_name} from {format_env_name(from_env)} to {format_env_name(to_env)}...',
+                                'timestamp': datetime.now().isoformat()
+                            }
     
-                        # Flask-RESTful resources may return (dict, status) tuples
-                        if isinstance(migrate_result, tuple) and len(migrate_result) >= 2:
-                            body, status = migrate_result[0], migrate_result[1]
-                            if status >= 400:
-                                success = False
-                            else:
-                                success = True
-                        else:
-                            body = migrate_result
-                            success = True
+                        # Promotion must wait for the real synchronous migration
+                        # outcome; an accepted async job is not a completed promotion.
+                        migrate_result = _migration_runner.run_inline(
+                            MigrationSpec(
+                                container_name=container_name,
+                                source_server_id=source_server_id,
+                                target_server_id=target_server_id,
+                                include_data=bool(include_data),
+                                stop_source=bool(stop_source),
+                            ),
+                            execution_context=execution_context,
+                            on_reserved=mark_cross_server_migration_started,
+                        )
+                        if migrate_result.status in {409, 503}:
+                            return migrate_result.to_response()
+                        body = migrate_result.body
+                        success = migrate_result.completed_successfully
+                        if not migrate_result.is_terminal:
+                            body = {
+                                'error': 'Migration was accepted but has not completed',
+                                'details': migrate_result.body,
+                            }
                     
                     # Wait a moment for final progress callback from pilot
                     import time
@@ -302,9 +329,25 @@ def create_promotion_resources(
                         try:
                             move_container_binding(container_name, from_env, to_env)
                         except Exception as binding_err:
-                            app.logger.warning(
-                                f"Failed to update env container binding for {container_name}: {binding_err}"
+                            app.logger.error(
+                                "Failed to update env container binding for %s: %s",
+                                container_name,
+                                safe_error_message(binding_err),
                             )
+                            _deployment_progress[container_name] = {
+                                'stage': 'failed',
+                                'progress': 99,
+                                'message': 'Migration completed, but environment binding update failed',
+                                'timestamp': datetime.now().isoformat(),
+                            }
+                            return {
+                                'success': False,
+                                'partial': True,
+                                'reconciliation_required': True,
+                                'error': 'Migration completed, but environment binding update failed',
+                                'container_name': container_name,
+                                'details': body,
+                            }, 500
                         # Only set 'completed' if pilot didn't already do it via callback
                         if current_stage != 'completed':
                             _deployment_progress[container_name] = {
@@ -330,9 +373,14 @@ def create_promotion_resources(
                                 'timestamp': datetime.now().isoformat()
                             }
                         app.logger.error(f"Failed to promote {container_name}")
+                        error = (
+                            body.get('error')
+                            if isinstance(body, dict)
+                            else None
+                        ) or f'Failed to promote {container_name}'
                         return {
                             'success': False,
-                            'error': body.get('error') if isinstance(body, dict) else f'Failed to promote {container_name}'
+                            'error': error,
                         }, 500
                         
                 except Exception as e:
@@ -365,12 +413,6 @@ def create_promotion_resources(
                     del _deployment_progress[container_name]
                 app.logger.error(f"Promotion request error: {e}")
                 return {'error': str(e)}, 500
-            finally:
-                if pilot is not None and sudo_password_applied:
-                    try:
-                        pilot._sudo_password = None
-                    except Exception:
-                        pass
     
 
     return HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle

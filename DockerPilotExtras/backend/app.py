@@ -6,6 +6,7 @@ Backend for CI/CD Pipeline Management
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from flask_restful import Api, Resource
+import atexit
 import os
 import json
 import yaml
@@ -36,10 +37,12 @@ from utils.pipeline_generator import (
 )
 from backend.api import register_api_routes
 from backend.preflight import run_preflight_checks
+from backend.security import redact_sensitive_text, safe_error_message
 from backend.resources.auth import create_auth_resources
 from backend.resources.commands import create_command_resources
 from backend.resources.environment import create_environment_resources
 from backend.resources.migration import create_migration_resource
+from backend.resources.migration_async import create_async_migration_resources
 from backend.resources.pipeline import create_pipeline_resources
 from backend.resources.promotion import create_promotion_resources
 from backend.resources.progress import create_progress_resources
@@ -56,6 +59,8 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.environment_status import build_environment_status as _svc_build_environment_status
+from backend.services.migration_jobs import MigrationJobRegistry
+from backend.services.migration_service import MigrationService
 from backend.services.host_network import (
     extract_port_from_string as _svc_extract_port_from_string,
     infer_port_mapping_for_host_network as _svc_infer_port_mapping_for_host_network,
@@ -814,6 +819,7 @@ init_state_store()
 
 # DockerPilot instance cache (per server)
 _dockerpilot_instances = {}  # {server_id: DockerPilotEnhanced instance}
+_dockerpilot_instances_lock = threading.RLock()
 _current_server_id = None
 
 # Global progress tracking for deployments
@@ -934,93 +940,63 @@ def create_docker_client_for_server(server_config):
         app.logger.error(f"Failed to create Docker client for server: {e}")
         raise
 
-def get_dockerpilot():
+def get_dockerpilot(server_id=None):
     """Get or create DockerPilot instance for current server
-    
-    Note: Signal handlers are skipped in Flask context as they only work
-    in the main thread of the main interpreter.
+
+    Flask embeds DockerPilot without registering process signal handlers.
+    Cache construction is serialized because request threads can arrive
+    before the first instance has been initialized.
     """
     global _dockerpilot_instances, _current_server_id
     
-    # Get selected server from session
-    selected_server_id = session.get('selected_server', 'local')
+    # Request handlers may use the selected server. Background-safe callers
+    # pass an explicit id and therefore do not need Flask session state.
+    if server_id is None:
+        server_id = session.get('selected_server', 'local')
     
-    # If server changed, we might need a new instance
-    # But for now, let's support per-server caching
-    server_id = selected_server_id
-    
-    # Check if we have instance for this server
-    if server_id in _dockerpilot_instances:
-        return _dockerpilot_instances[server_id]
-    
-    # Create new instance
-    config_path = app.config['CONFIG_DIR'] / 'deployment.yml'
-    config_path_str = str(config_path) if config_path.exists() else None
-    
-    # For remote servers, we need to configure Docker client for SSH
-    docker_client = None
-    if server_id != 'local':
-        # Load server config
-        config = load_servers_config()
-        server_config = None
-        for server in config.get('servers', []):
-            if server.get('id') == server_id:
-                server_config = server
-                break
-        
-        if server_config:
-            try:
-                # Try to create Docker client for remote server
-                # For now, we'll use SSH to execute docker commands
-                # This requires modifying how DockerPilot works, or using a wrapper
-                app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
-                # docker_client = create_docker_client_for_server(server_config)
-            except Exception as e:
-                app.logger.error(f"Failed to create Docker client for remote server: {e}")
-                # Fall back to local
-                server_id = 'local'
-    
-    # Temporarily patch signal.signal to avoid errors in Flask threads
-    import signal
-    original_signal = signal.signal
-    
-    def safe_signal(signum, handler):
-        """Safe signal handler that only works in main thread"""
+    with _dockerpilot_instances_lock:
+        # Cache lookup and construction must be atomic: duplicate pilots own
+        # separate Docker clients and used to race during concurrent requests.
+        if server_id in _dockerpilot_instances:
+            return _dockerpilot_instances[server_id]
+
+        config_path = app.config['CONFIG_DIR'] / 'deployment.yml'
+        config_path_str = str(config_path) if config_path.exists() else None
+
+        # For remote servers, we need to configure Docker client for SSH.
+        docker_client = None
+        if server_id != 'local':
+            config = load_servers_config()
+            server_config = None
+            for server in config.get('servers', []):
+                if server.get('id') == server_id:
+                    server_config = server
+                    break
+
+            if server_config:
+                try:
+                    app.logger.warning(f"Remote server {server_id} selected, but Docker over SSH not fully implemented yet. Using local Docker.")
+                    # docker_client = create_docker_client_for_server(server_config)
+                except Exception as e:
+                    app.logger.error(f"Failed to create Docker client for remote server: {e}")
+                    server_id = 'local'
+                    if server_id in _dockerpilot_instances:
+                        return _dockerpilot_instances[server_id]
+
         try:
-            return original_signal(signum, handler)
-        except ValueError:
-            # Signal handlers only work in main thread
-            # In Flask context, we skip them
-            pass
-    
-    # Patch signal.signal during initialization
-    signal.signal = safe_signal
-    
-    try:
-        instance = DockerPilotEnhanced(
-            config_file=config_path_str,
-            log_level=LogLevel.INFO
-        )
-        
-        # If we have a remote docker client, we could set it here
-        # But DockerPilotEnhanced doesn't expose client setter easily
-        # For now, we'll use subprocess-based approach for remote servers
-        
-        # Store instance
-        _dockerpilot_instances[server_id] = instance
-        _current_server_id = server_id
-        
-    except Exception as e:
-        # If initialization fails, log error but don't crash
-        # The instance will be None and we'll handle it in endpoints
-        import logging
-        logging.error(f"Failed to initialize DockerPilot: {e}")
-        raise
-    finally:
-        # Restore original signal.signal
-        signal.signal = original_signal
-            
-    return instance
+            instance = DockerPilotEnhanced(
+                config_file=config_path_str,
+                log_level=LogLevel.INFO,
+                register_signal_handlers=False,
+            )
+            _dockerpilot_instances[server_id] = instance
+            _current_server_id = server_id
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to initialize DockerPilot: {e}")
+            raise
+
+        return instance
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
     """Execute any command on remote server via SSH (or local if server_config is None or id == 'local')"""
@@ -1035,12 +1011,15 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
                 timeout=300
             )
             if check_exit_status and result.returncode != 0:
-                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                raise Exception(
+                    f"Command failed (exit {result.returncode}): "
+                    f"{redact_sensitive_text(result.stderr or '')}"
+                )
             return result.stdout
         except subprocess.TimeoutExpired:
-            raise Exception(f"Command timeout: {command}")
+            raise Exception("Command timed out")
         except Exception as e:
-            raise Exception(f"Command failed: {str(e)}")
+            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
     
     if not SSH_AVAILABLE:
         raise ImportError("SSH libraries not available")
@@ -1097,12 +1076,14 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
         ssh.close()
         
         if check_exit_status and exit_status != 0:
-            raise Exception(f"Command failed (exit {exit_status}): {error_output}")
+            raise Exception(
+                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
+            )
         
         return output
         
     except Exception as e:
-        app.logger.error(f"Failed to execute command via SSH: {e}")
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
         raise
 
 # Cache for sudo requirements per server
@@ -1306,12 +1287,15 @@ def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_stat
                 timeout=300
             )
             if check_exit_status and result.returncode != 0:
-                raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                raise Exception(
+                    f"Command failed (exit {result.returncode}): "
+                    f"{redact_sensitive_text(result.stderr or '')}"
+                )
             return result.stdout, result.stderr
         except subprocess.TimeoutExpired:
-            raise Exception(f"Command timeout: {command}")
+            raise Exception("Command timed out")
         except Exception as e:
-            raise Exception(f"Command failed: {str(e)}")
+            raise Exception(f"Command failed: {redact_sensitive_text(e)}") from e
     
     if not SSH_AVAILABLE:
         raise ImportError("SSH libraries not available")
@@ -1366,12 +1350,14 @@ def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_stat
         ssh.close()
         
         if check_exit_status and exit_status != 0:
-            raise Exception(f"Command failed (exit {exit_status}): {error_output}")
+            raise Exception(
+                f"Command failed (exit {exit_status}): {redact_sensitive_text(error_output)}"
+            )
         
         return output, error_output
         
     except Exception as e:
-        app.logger.error(f"Failed to execute command via SSH: {e}")
+        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(e))
         raise
 
 def get_selected_server_config():
@@ -1497,6 +1483,7 @@ def append_deployment_history_data(entry: dict, max_entries: int = 50) -> bool:
     DeploymentConfig,
     DeploymentExecute,
     DeploymentHistory,
+    PipelineLibrary,
 ) = create_pipeline_resources(
     Resource=Resource,
     app=app,
@@ -1976,11 +1963,33 @@ ContainerMigrate = create_migration_resource(
     migration_progress=_migration_progress,
     migration_cancel_flags=_migration_cancel_flags,
     load_servers_config=lambda: globals()["load_servers_config"](),
-    get_dockerpilot=get_dockerpilot,
+    get_dockerpilot=lambda: get_dockerpilot('local'),
     execute_command_via_ssh=execute_command_via_ssh,
     execute_docker_command_via_ssh=execute_docker_command_via_ssh,
     save_deployment_config=save_deployment_config,
     infer_port_mapping_for_host_network=_infer_port_mapping_for_host_network,
+)
+
+
+_migration_job_registry = MigrationJobRegistry()
+_migration_service = MigrationService(
+    ContainerMigrate.migration_runner,
+    registry=_migration_job_registry,
+    max_workers=1,
+    queue_capacity=2,
+)
+ContainerMigrate.migration_runner = _migration_service
+ContainerMigrationCollection, ContainerMigrationJob = create_async_migration_resources(
+    Resource=Resource,
+    request=request,
+    migration_service=_migration_service,
+)
+atexit.register(
+    lambda: _migration_service.shutdown(
+        wait=True,
+        cancel_pending=True,
+        timeout=2.0,
+    )
 )
 
 
@@ -1991,7 +2000,7 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
     session=session,
     datetime_cls=datetime,
     deployment_progress=_deployment_progress,
-    get_dockerpilot=get_dockerpilot,
+    get_dockerpilot=lambda: get_dockerpilot('local'),
     consume_elevation_token=lambda *args, **kwargs: globals()["_consume_elevation_token"](*args, **kwargs),
     find_all_deployment_configs_for_env=find_all_deployment_configs_for_env,
     resolve_server_id_for_env=resolve_server_id_for_env,
@@ -2000,7 +2009,7 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
     move_container_binding=move_container_binding,
     format_env_name=format_env_name,
     find_active_deployment_dir=find_active_deployment_dir,
-    ContainerMigrate_cls=ContainerMigrate,
+    migration_runner=ContainerMigrate.migration_runner,
 )
 
 
@@ -2196,6 +2205,7 @@ register_api_routes(
     AuthLogout=AuthLogout,
     PipelineGenerate=PipelineGenerate,
     PipelineSave=PipelineSave,
+    PipelineLibrary=PipelineLibrary,
     PipelineDeploymentConfig=PipelineDeploymentConfig,
     PipelineIntegration=PipelineIntegration,
     DeploymentConfig=DeploymentConfig,
@@ -2235,6 +2245,8 @@ register_api_routes(
     ServerSelect=ServerSelect,
     BlueGreenReplace=BlueGreenReplace,
     ContainerMigrate=ContainerMigrate,
+    ContainerMigrationCollection=ContainerMigrationCollection,
+    ContainerMigrationJob=ContainerMigrationJob,
     MigrationProgress=MigrationProgress,
     CancelMigration=CancelMigration,
     SecureDeployDrafts=SecureDeployDrafts,

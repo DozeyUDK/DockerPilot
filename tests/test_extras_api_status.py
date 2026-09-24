@@ -1,8 +1,11 @@
 """API tests for DockerPilotExtras status endpoint."""
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import importlib
+import signal
 import sys
+import threading
 
 import pytest
 
@@ -117,3 +120,61 @@ def test_status_endpoint_remote_probe_errors(monkeypatch):
     assert "ssh timeout" in payload["docker"]["error"]
     assert "Stage Node" in payload["dockerpilot"]["error"]
     assert "ssh timeout" in payload["dockerpilot"]["error"]
+
+
+def test_get_dockerpilot_constructs_cached_instance_once_without_patching_signals(monkeypatch):
+    backend_app_module = _load_backend_app_module(monkeypatch)
+    monkeypatch.setattr(backend_app_module, "_dockerpilot_instances", {})
+    constructor_entered = threading.Event()
+    release_constructor = threading.Event()
+    created = []
+
+    def signal_sentinel(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(signal, "signal", signal_sentinel)
+
+    class _ConstructedPilot:
+        def __init__(self, **kwargs):
+            created.append((kwargs, signal.signal))
+            constructor_entered.set()
+            assert release_constructor.wait(timeout=2)
+
+    monkeypatch.setattr(backend_app_module, "DockerPilotEnhanced", _ConstructedPilot)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(backend_app_module.get_dockerpilot, "local")
+        assert constructor_entered.wait(timeout=2)
+        second = pool.submit(backend_app_module.get_dockerpilot, "local")
+        release_constructor.set()
+        first_instance = first.result(timeout=2)
+        second_instance = second.result(timeout=2)
+
+    assert first_instance is second_instance
+    assert len(created) == 1
+    assert created[0][0]["register_signal_handlers"] is False
+    assert created[0][1] is signal_sentinel
+    assert signal.signal is signal_sentinel
+
+
+def test_get_dockerpilot_does_not_cache_failed_construction_and_can_retry(monkeypatch):
+    backend_app_module = _load_backend_app_module(monkeypatch)
+    instances = {}
+    monkeypatch.setattr(backend_app_module, "_dockerpilot_instances", instances)
+    attempts = []
+
+    class _RetryingPilot:
+        def __init__(self, **_kwargs):
+            attempts.append(object())
+            if len(attempts) == 1:
+                raise RuntimeError("constructor failed")
+
+    monkeypatch.setattr(backend_app_module, "DockerPilotEnhanced", _RetryingPilot)
+
+    with pytest.raises(RuntimeError, match="constructor failed"):
+        backend_app_module.get_dockerpilot("local")
+
+    assert instances == {}
+    pilot = backend_app_module.get_dockerpilot("local")
+    assert isinstance(pilot, _RetryingPilot)
+    assert len(attempts) == 2

@@ -30,7 +30,9 @@ api.interceptors.request.use((config) => {
 // Pipeline API
 export const pipelineAPI = {
   generate: (data) => api.post('/pipeline/generate', data),
-  save: (data) => api.post('/pipeline/save', data)
+  save: (data) => api.post('/pipeline/save', data),
+  saved: () => api.get('/pipeline/saved'),
+  readSaved: (filename) => api.get(`/pipeline/saved/${encodeURIComponent(filename)}`)
 }
 
 // Environment API
@@ -103,6 +105,20 @@ export const statusAPI = {
     working_directory: workingDirectory 
   }),
   getCommandHelp: (program) => api.get('/command/help', { params: { program } }),
+  startMigration: (containerName, sourceServerId, targetServerId, includeData = false, stopSource = false) =>
+    api.post('/containers/migrations', {
+      container_name: containerName,
+      source_server_id: sourceServerId,
+      target_server_id: targetServerId,
+      include_data: includeData,
+      stop_source: stopSource
+    }),
+  listActiveMigrations: () => api.get('/containers/migrations'),
+  getMigration: (migrationId) =>
+    api.get(`/containers/migrations/${encodeURIComponent(migrationId)}`),
+  cancelMigrationById: (migrationId) =>
+    api.delete(`/containers/migrations/${encodeURIComponent(migrationId)}`),
+  // Legacy synchronous migration endpoints remain available for older callers.
   migrateContainer: (containerName, sourceServerId, targetServerId, includeData = false, stopSource = false) => 
     api.post('/containers/migrate', {
       container_name: containerName,

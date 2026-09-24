@@ -13,8 +13,8 @@ from pathlib import Path
 def check_python_version():
     """Check Python version"""
     version = sys.version_info
-    if version.major < 3 or (version.major == 3 and version.minor < 9):
-        print(f"❌ Python 3.9+ required. Found: {version.major}.{version.minor}")
+    if version.major < 3 or (version.major == 3 and version.minor < 10):
+        print(f"❌ Python 3.10+ required. Found: {version.major}.{version.minor}")
         return False
     print(f"✓ Python {version.major}.{version.minor}.{version.micro}")
     return True
@@ -171,4 +171,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

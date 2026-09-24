@@ -19,10 +19,17 @@ if ($Extras) {
 Write-Host "[*] Checking prerequisites..." -ForegroundColor Yellow
 try {
     $pythonVersion = python --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "python-not-ready" }
+    python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Python 3.10 or higher is required. Found: $pythonVersion" -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
     Write-Host "[OK] $pythonVersion found" -ForegroundColor Green
 } catch {
     Write-Host "[ERROR] Python is not installed or not in PATH" -ForegroundColor Red
-    Write-Host "Please install Python 3.9 or higher from https://www.python.org/" -ForegroundColor Yellow
+    Write-Host "Please install Python 3.10 or higher from https://www.python.org/" -ForegroundColor Yellow
     Read-Host "Press Enter to exit"
     exit 1
 }

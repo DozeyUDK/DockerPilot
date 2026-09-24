@@ -20,12 +20,18 @@ echo [*] Checking prerequisites...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python is not installed or not in PATH
-    echo Please install Python 3.9 or higher from https://www.python.org/
+    echo Please install Python 3.10 or higher from https://www.python.org/
     pause
     exit /b 1
 )
 
 for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYTHON_VERSION=%%v
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo [ERROR] Python 3.10 or higher is required. Found: %PYTHON_VERSION%
+    pause
+    exit /b 1
+)
 echo [OK] Python %PYTHON_VERSION% found
 
 REM Check Docker

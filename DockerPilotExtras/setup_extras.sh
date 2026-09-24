@@ -11,6 +11,17 @@ echo "DockerPilot Extras - Setup"
 echo "============================================================"
 echo ""
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ Python 3.10 or higher is required, but python3 was not found."
+    exit 1
+fi
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    echo "❌ Python 3.10 or higher is required. Found: $(python3 --version 2>&1)"
+    exit 1
+fi
+echo "✅ $(python3 --version 2>&1)"
+echo ""
+
 # Python venv (avoids PEP 668 externally-managed-environment on Ubuntu/Debian 24.04+)
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment..."

@@ -12,6 +12,7 @@ def register_api_routes(
     AuthLogout,
     PipelineGenerate,
     PipelineSave,
+    PipelineLibrary,
     PipelineDeploymentConfig,
     PipelineIntegration,
     DeploymentConfig,
@@ -51,6 +52,8 @@ def register_api_routes(
     ServerSelect,
     BlueGreenReplace,
     ContainerMigrate,
+    ContainerMigrationCollection,
+    ContainerMigrationJob,
     MigrationProgress,
     CancelMigration,
     SecureDeployDrafts=None,
@@ -73,6 +76,11 @@ def register_api_routes(
     api.add_resource(AuthLogout, "/api/auth/logout")
     api.add_resource(PipelineGenerate, "/api/pipeline/generate")
     api.add_resource(PipelineSave, "/api/pipeline/save")
+    api.add_resource(
+        PipelineLibrary,
+        "/api/pipeline/saved",
+        "/api/pipeline/saved/<string:filename>",
+    )
     api.add_resource(PipelineDeploymentConfig, "/api/pipeline/deployment-config")
     api.add_resource(PipelineIntegration, "/api/pipeline/integrate")
     api.add_resource(DeploymentConfig, "/api/deployment/config")
@@ -112,6 +120,11 @@ def register_api_routes(
     api.add_resource(ServerSelect, "/api/servers/select")
     api.add_resource(BlueGreenReplace, "/api/containers/blue-green-replace")
     api.add_resource(ContainerMigrate, "/api/containers/migrate")
+    api.add_resource(ContainerMigrationCollection, "/api/containers/migrations")
+    api.add_resource(
+        ContainerMigrationJob,
+        "/api/containers/migrations/<string:migration_id>",
+    )
     api.add_resource(MigrationProgress, "/api/containers/migration-progress")
     api.add_resource(CancelMigration, "/api/containers/cancel-migration")
     if SecureDeployDrafts is not None:

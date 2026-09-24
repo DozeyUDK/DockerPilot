@@ -1,96 +1,47 @@
-import React from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
-import { ThemeProvider, useTheme } from './contexts/ThemeContext'
+import React, { lazy, Suspense } from 'react'
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ServerProvider } from './contexts/ServerContext'
-import ServerSelector from './components/ServerSelector'
-import Login from './pages/Login'
-import Pipelines from './pages/Pipelines'
-import Environments from './pages/Environments'
-import Status from './pages/Status'
-import SecureDeploy from './pages/SecureDeploy'
-import './App.css'
+import AppNavigation from './components/AppNavigation'
+import RouteErrorBoundary from './components/RouteErrorBoundary'
 
-function Navigation() {
+const Login = lazy(() => import('./pages/Login'))
+const Pipelines = lazy(() => import('./pages/Pipelines'))
+const Environments = lazy(() => import('./pages/Environments'))
+const Status = lazy(() => import('./pages/Status'))
+const SecureDeploy = lazy(() => import('./pages/SecureDeploy'))
+
+function RouteLoading({ fullPage = false }) {
+  const content = (
+    <div className="card route-loading-card" role="status" aria-live="polite" aria-busy="true">
+      <h2 className="card-title">Loading view...</h2>
+      <p>Please wait.</p>
+    </div>
+  )
+
+  if (fullPage) {
+    return <main className="main-content route-loading route-loading-full">{content}</main>
+  }
+
+  return <div className="route-loading">{content}</div>
+}
+
+function AuthenticatedRoutes() {
   const location = useLocation()
-  const { theme, toggleTheme } = useTheme()
-  const { authEnabled, username, logout } = useAuth()
-
-  const navItems = [
-    { path: '/', label: 'CI/CD Pipelines', component: Pipelines },
-    { path: '/environments', label: 'Environments', component: Environments },
-    { path: '/status', label: 'Status', component: Status },
-    { path: '/secure-deploy', label: 'Secure Deploy', component: SecureDeploy }
-  ]
 
   return (
-    <nav className="navbar">
-      <div className="nav-container">
-        <div className="nav-brand">
-          <h1>DockerPilot Web Panel</h1>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <ul className="nav-menu">
-            {navItems.map((item) => (
-              <li key={item.path}>
-                <Link
-                  to={item.path}
-                  className={location.pathname === item.path ? 'active' : ''}
-                >
-                  {item.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-          {authEnabled && username && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white' }}>
-              <span style={{ fontSize: '0.9rem', opacity: 0.9 }}>
-                {username}
-              </span>
-              <button
-                type="button"
-                onClick={logout}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '4px',
-                  color: 'white',
-                  padding: '0.35rem 0.6rem',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem'
-                }}
-                title="Sign out"
-              >
-                Logout
-              </button>
-            </div>
-          )}
-          <ServerSelector />
-          <button
-            onClick={toggleTheme}
-            className="theme-toggle"
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            style={{
-              background: 'rgba(255, 255, 255, 0.2)',
-              border: '1px solid rgba(255, 255, 255, 0.3)',
-              borderRadius: '4px',
-              padding: '0.5rem',
-              cursor: 'pointer',
-              fontSize: '1.2rem',
-              color: 'white',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '40px',
-              height: '40px',
-              transition: 'all 0.3s'
-            }}
-          >
-            {theme === 'dark' ? '☀️' : '🌙'}
-          </button>
-        </div>
-      </div>
-    </nav>
+    <RouteErrorBoundary resetKey={location.pathname}>
+      <Suspense fallback={<RouteLoading />}>
+        <Routes>
+          <Route path="/" element={<Pipelines />} />
+          <Route path="/deployments" element={<Navigate to="/environments" replace />} />
+          <Route path="/environments" element={<Environments />} />
+          <Route path="/status" element={<Status />} />
+          <Route path="/secure-deploy" element={<SecureDeploy />} />
+        </Routes>
+      </Suspense>
+    </RouteErrorBoundary>
   )
 }
 
@@ -100,10 +51,10 @@ function AppShell() {
   if (checking) {
     return (
       <div className="App">
-        <main className="main-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="card" style={{ maxWidth: '420px', width: '100%', textAlign: 'center' }}>
+        <main className="main-content session-check">
+          <div className="card session-check-card">
             <h3 className="card-title">Checking session...</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: 0 }}>Please wait.</p>
+            <p className="session-check-copy">Please wait.</p>
           </div>
         </main>
       </div>
@@ -113,7 +64,11 @@ function AppShell() {
   if (authEnabled && !authenticated) {
     return (
       <div className="App">
-        <Login />
+        <RouteErrorBoundary resetKey="login" fullPage>
+          <Suspense fallback={<RouteLoading fullPage />}>
+            <Login />
+          </Suspense>
+        </RouteErrorBoundary>
       </div>
     )
   }
@@ -122,15 +77,9 @@ function AppShell() {
     <ServerProvider>
       <Router>
         <div className="App">
-          <Navigation />
+          <AppNavigation />
           <main className="main-content">
-            <Routes>
-              <Route path="/" element={<Pipelines />} />
-              <Route path="/deployments" element={<Navigate to="/environments" replace />} />
-              <Route path="/environments" element={<Environments />} />
-              <Route path="/status" element={<Status />} />
-              <Route path="/secure-deploy" element={<SecureDeploy />} />
-            </Routes>
+            <AuthenticatedRoutes />
           </main>
         </div>
       </Router>
@@ -149,4 +98,3 @@ function App() {
 }
 
 export default App
-

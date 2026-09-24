@@ -1,13 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { pipelineAPI, dockerAPI, fileBrowserAPI } from '../services/api'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
+import groovy from 'react-syntax-highlighter/dist/esm/languages/prism/groovy'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { useTheme } from '../contexts/ThemeContext'
+import Modal from '../components/Modal'
 import { PIPELINE_PRESETS, applyPreset, formSnapshot, isSnapshotCurrent, orderedStages, validatePipelineForm } from '../utils/pipelineWorkbench.mjs'
+import {
+  formatPipelineModifiedAt,
+  formatPipelineSize,
+  isSavedPipelineDetailCurrent,
+  normalizeSavedPipelines,
+  pipelineDownloadDescriptor,
+  pipelineLanguage,
+  reconcileSelectedPipeline,
+} from '../utils/savedPipelineLibrary.mjs'
 import '../App.css'
 
+SyntaxHighlighter.registerLanguage('groovy', groovy)
+SyntaxHighlighter.registerLanguage('yaml', yaml)
+
 function Pipelines() {
-  const { theme } = useTheme()
   const [formData, setFormData] = useState({
     type: 'gitlab',
     project_name: '',
@@ -51,11 +64,62 @@ function Pipelines() {
   const [browserPath, setBrowserPath] = useState('')
   const [browserItems, setBrowserItems] = useState([])
   const [loadingBrowser, setLoadingBrowser] = useState(false)
+  const [savedPipelines, setSavedPipelines] = useState([])
+  const [selectedPipeline, setSelectedPipeline] = useState(null)
+  const [loadingSavedPipelines, setLoadingSavedPipelines] = useState(false)
+  const [loadingSavedPipeline, setLoadingSavedPipeline] = useState(false)
+  const [savedPipelineError, setSavedPipelineError] = useState('')
+  const savedListRequest = useRef(0)
+  const savedDetailRequest = useRef(0)
+  const savedPipelinesRef = useRef([])
 
   useEffect(() => {
     loadDockerImages()
     loadDockerfiles()
+    loadSavedPipelines()
   }, [])
+
+  const loadSavedPipelines = async () => {
+    const requestId = ++savedListRequest.current
+    ++savedDetailRequest.current
+    setLoadingSavedPipelines(true)
+    setLoadingSavedPipeline(false)
+    setSavedPipelineError('')
+    try {
+      const response = await pipelineAPI.saved()
+      if (requestId !== savedListRequest.current) return
+      const pipelines = normalizeSavedPipelines(response.data?.pipelines)
+      savedPipelinesRef.current = pipelines
+      setSavedPipelines(pipelines)
+      setSelectedPipeline(current => reconcileSelectedPipeline(current, pipelines))
+    } catch (error) {
+      if (requestId !== savedListRequest.current) return
+      setSavedPipelineError(error.response?.data?.error || 'Could not load saved pipelines')
+    } finally {
+      if (requestId === savedListRequest.current) setLoadingSavedPipelines(false)
+    }
+  }
+
+  const openSavedPipeline = async (savedFilename) => {
+    const requestId = ++savedDetailRequest.current
+    setLoadingSavedPipeline(true)
+    setSavedPipelineError('')
+    try {
+      const response = await pipelineAPI.readSaved(savedFilename)
+      if (requestId !== savedDetailRequest.current) return
+      const pipeline = response.data?.pipeline
+      const metadata = normalizeSavedPipelines([pipeline])[0]
+      if (!metadata || !isSavedPipelineDetailCurrent(pipeline, savedPipelinesRef.current)) {
+        throw new TypeError('Invalid saved pipeline response')
+      }
+      setSelectedPipeline(pipeline)
+    } catch (error) {
+      if (requestId !== savedDetailRequest.current) return
+      setSavedPipelineError(error.response?.data?.error || 'Could not open saved pipeline')
+    } finally {
+      if (requestId === savedDetailRequest.current) setLoadingSavedPipeline(false)
+    }
+  }
 
   const loadDockerImages = async () => {
     setLoadingImages(true)
@@ -205,6 +269,7 @@ function Pipelines() {
       })
       if (response.data.success) {
         setMessage({ type: 'success', text: `Pipeline saved: ${response.data.path}` })
+        loadSavedPipelines()
       }
     } catch (error) {
       setMessage({ 
@@ -225,6 +290,20 @@ function Pipelines() {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleSavedDownload = () => {
+    if (!selectedPipeline) return
+    const download = pipelineDownloadDescriptor(selectedPipeline)
+    const blob = new Blob([download.content], { type: download.mimeType })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = download.filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
     URL.revokeObjectURL(url)
   }
 
@@ -714,315 +793,207 @@ function Pipelines() {
         </div>
       </div>
 
-      {/* File Browser Modal */}
-      {showFileBrowser && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={() => setShowFileBrowser(false)}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '600px',
-            maxHeight: '80vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Browse files</h3>
-              <button 
-                onClick={() => setShowFileBrowser(false)}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  fontSize: '1.5rem', 
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
+      <section className="card saved-pipelines-card" aria-labelledby="saved-pipelines-title">
+        <div className="saved-pipelines-header">
+          <div>
+            <h3 id="saved-pipelines-title" className="card-title">Saved Pipelines</h3>
+            <p className="saved-pipelines-description">Open or download generated pipeline artifacts. Saved files are read-only here.</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={loadSavedPipelines}
+            disabled={loadingSavedPipelines}
+          >
+            {loadingSavedPipelines ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+
+        {savedPipelineError && <div className="alert alert-error">{savedPipelineError}</div>}
+
+        <div className="saved-pipelines-layout">
+          <div className="saved-pipeline-list" aria-live="polite">
+            {loadingSavedPipelines && savedPipelines.length === 0 && <div className="spinner"></div>}
+            {!loadingSavedPipelines && savedPipelines.length === 0 && (
+              <p className="saved-pipelines-empty">No saved pipelines yet. Generate and save one above.</p>
+            )}
+            {savedPipelines.map(pipeline => (
+              <div
+                key={pipeline.filename}
+                className={`saved-pipeline-row${selectedPipeline?.filename === pipeline.filename ? ' selected' : ''}`}
               >
-                ×
-              </button>
-            </div>
-            
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ 
-                display: 'flex', 
-                gap: '0.5rem', 
-                alignItems: 'center',
-                marginBottom: '0.5rem'
-              }}>
-                <button 
-                  onClick={() => {
-                    const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
-                    loadFileBrowser(parentPath)
-                  }}
-                  disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
-                  style={{ padding: '0.25rem 0.5rem' }}
+                <div className="saved-pipeline-summary">
+                  <strong>{pipeline.filename}</strong>
+                  <span>{pipeline.type} · {formatPipelineSize(pipeline.size_bytes)}</span>
+                  <span>Modified {formatPipelineModifiedAt(pipeline.modified_at)}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => openSavedPipeline(pipeline.filename)}
+                  disabled={loadingSavedPipelines}
                 >
-                  ↑ Back
-                </button>
-                <input
-                  type="text"
-                  value={browserPath}
-                  onChange={(e) => setBrowserPath(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      loadFileBrowser(browserPath)
-                    }
-                  }}
-                  style={{ 
-                    flex: 1, 
-                    padding: '0.5rem',
-                    backgroundColor: 'var(--input-bg)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--input-border)',
-                    borderRadius: '4px'
-                  }}
-                  placeholder="Enter path..."
-                />
-                <button 
-                  onClick={() => loadFileBrowser(browserPath)}
-                  style={{ padding: '0.5rem 1rem' }}
-                >
-                  Go
+                  Open
                 </button>
               </div>
-            </div>
+            ))}
+          </div>
 
-            {loadingBrowser ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
-            ) : (
-              <div style={{ 
-                border: '1px solid var(--border-color)', 
-                borderRadius: '4px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                backgroundColor: 'var(--bg-tertiary)'
-              }}>
-                {browserItems.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    Empty directory
+          <div className="saved-pipeline-detail">
+            {loadingSavedPipeline && <div className="spinner"></div>}
+            {!loadingSavedPipeline && !selectedPipeline && (
+              <p className="saved-pipelines-empty">Select a saved pipeline to preview it.</p>
+            )}
+            {!loadingSavedPipeline && selectedPipeline && (
+              <>
+                <div className="saved-pipeline-detail-header">
+                  <div>
+                    <strong>{selectedPipeline.filename}</strong>
+                    <span>{formatPipelineSize(selectedPipeline.size_bytes)}</span>
                   </div>
-                ) : (
-                  browserItems.map((item, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => {
-                        if (item.is_dir) {
-                          loadFileBrowser(item.path)
-                        } else if (item.name.toLowerCase().includes('dockerfile')) {
-                          selectFileFromBrowser(item.path)
-                        }
-                      }}
-                      style={{
-                        padding: '0.75rem',
-                        cursor: item.is_dir || item.name.toLowerCase().includes('dockerfile') ? 'pointer' : 'default',
-                        borderBottom: '1px solid var(--border-color)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        backgroundColor: item.name.toLowerCase().includes('dockerfile') 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)',
-                        color: 'var(--text-primary)'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (item.is_dir || item.name.toLowerCase().includes('dockerfile')) {
-                          e.target.style.backgroundColor = 'var(--bg-tertiary)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        e.target.style.backgroundColor = item.name.toLowerCase().includes('dockerfile') 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)'
-                      }}
-                    >
-                      <span style={{ fontSize: '1.2rem' }}>
-                        {item.is_dir ? '📁' : item.name.toLowerCase().includes('dockerfile') ? '🐳' : '📄'}
-                      </span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: item.is_dir ? 'bold' : 'normal' }}>
-                          {item.name}
-                        </div>
-                        {item.is_file && (
-                          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {(item.size / 1024).toFixed(2)} KB
-                          </div>
-                        )}
-                      </div>
-                      {item.name.toLowerCase().includes('dockerfile') && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            selectFileFromBrowser(item.path)
-                          }}
-                          style={{
-                            padding: '0.25rem 0.5rem',
-                            backgroundColor: '#007bff',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Select
-                        </button>
+                  <button type="button" className="btn btn-success" onClick={handleSavedDownload}>Download</button>
+                </div>
+                <SyntaxHighlighter
+                  language={pipelineLanguage(selectedPipeline.type)}
+                  style={vscDarkPlus}
+                  customStyle={{ borderRadius: '4px', maxHeight: '420px' }}
+                >
+                  {selectedPipeline.content}
+                </SyntaxHighlighter>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <Modal
+        open={showFileBrowser}
+        onClose={() => setShowFileBrowser(false)}
+        title="Browse files"
+      >
+        <div className="browser-toolbar">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
+              loadFileBrowser(parentPath)
+            }}
+            disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
+          >
+            ↑ Back
+          </button>
+          <input
+            type="text"
+            className="form-control"
+            value={browserPath}
+            onChange={event => setBrowserPath(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') loadFileBrowser(browserPath)
+            }}
+            aria-label="File browser path"
+            placeholder="Enter path..."
+          />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => loadFileBrowser(browserPath)}
+          >
+            Go
+          </button>
+        </div>
+
+        {loadingBrowser ? (
+          <div className="browser-status" role="status">Loading...</div>
+        ) : (
+          <div className="browser-list">
+            {browserItems.length === 0 ? (
+              <div className="browser-status">Empty directory</div>
+            ) : (
+              browserItems.map(item => {
+                const isDockerfile = item.name.toLowerCase().includes('dockerfile')
+                const isActionable = item.is_dir || isDockerfile
+                return (
+                  <button
+                    type="button"
+                    key={item.path}
+                    className={`browser-item${isDockerfile ? ' browser-item-highlighted' : ''}`}
+                    disabled={!isActionable}
+                    onClick={() => {
+                      if (item.is_dir) loadFileBrowser(item.path)
+                      else if (isDockerfile) selectFileFromBrowser(item.path)
+                    }}
+                  >
+                    <span className="browser-item-icon" aria-hidden="true">
+                      {item.is_dir ? '📁' : isDockerfile ? '🐳' : '📄'}
+                    </span>
+                    <span className="browser-item-content">
+                      <span className="browser-item-name">{item.name}</span>
+                      {item.is_file && (
+                        <span className="browser-item-meta">{(item.size / 1024).toFixed(2)} KB</span>
                       )}
-                    </div>
-                  ))
-                )}
-              </div>
+                    </span>
+                    {isDockerfile && <span className="browser-select-label">Select</span>}
+                  </button>
+                )
+              })
             )}
           </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={showImageBrowser}
+        onClose={() => setShowImageBrowser(false)}
+        title="Browse Docker images"
+        size="large"
+      >
+        <div className="browser-toolbar">
+          <input
+            type="search"
+            className="form-control"
+            placeholder="Search images..."
+            value={imageSearch}
+            onChange={event => setImageSearch(event.target.value)}
+            aria-label="Search Docker images"
+          />
         </div>
-      )}
 
-      {/* Docker Images Browser Modal */}
-      {showImageBrowser && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={() => setShowImageBrowser(false)}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '700px',
-            maxHeight: '80vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Browse Docker images</h3>
-              <button 
-                onClick={() => setShowImageBrowser(false)}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  fontSize: '1.5rem', 
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={{ marginBottom: '1rem' }}>
-              <input
-                type="text"
-                placeholder="Search images..."
-                value={imageSearch}
-                onChange={(e) => setImageSearch(e.target.value)}
-                style={{ 
-                  width: '100%', 
-                  padding: '0.5rem',
-                  backgroundColor: 'var(--input-bg)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--input-border)',
-                  borderRadius: '4px'
-                }}
-              />
-            </div>
-
-            {loadingImages ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading images...</div>
+        {loadingImages ? (
+          <div className="browser-status" role="status">Loading images...</div>
+        ) : (
+          <div className="browser-list">
+            {filteredImages.length === 0 ? (
+              <div className="browser-status">
+                {imageSearch ? 'No images found matching the search' : 'No Docker images'}
+              </div>
             ) : (
-              <div style={{ 
-                border: '1px solid var(--border-color)', 
-                borderRadius: '4px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                backgroundColor: 'var(--bg-tertiary)'
-              }}>
-                {filteredImages.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    {imageSearch ? 'No images found matching the search' : 'No Docker images'}
-                  </div>
-                ) : (
-                  filteredImages.map((img, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => selectImageFromBrowser(img.name)}
-                      style={{
-                        padding: '1rem',
-                        cursor: 'pointer',
-                        borderBottom: '1px solid var(--border-color)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '1rem',
-                        backgroundColor: 'var(--card-bg)',
-                        color: 'var(--text-primary)'
-                      }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--bg-tertiary)'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--card-bg)'}
-                    >
-                      <span style={{ fontSize: '2rem' }}>🐳</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'bold', fontSize: '1.1rem', marginBottom: '0.25rem' }}>
-                          {img.name}
-                        </div>
-                        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                          {img.id && <span>ID: <code style={{ backgroundColor: 'var(--bg-tertiary)', padding: '0.2rem 0.4rem', borderRadius: '3px' }}>{img.id}</code></span>}
-                          {img.size && <span>Size: <strong>{img.size}</strong></span>}
-                          {img.created && <span>Created: {img.created.split(' ')[0]}</span>}
-                        </div>
-                        {img.repository !== '<none>' && img.tag !== '<none>' && (
-                          <div style={{ fontSize: '0.85rem', color: '#999', marginTop: '0.25rem' }}>
-                            Repository: {img.repository} • Tag: {img.tag}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          selectImageFromBrowser(img.name)
-                        }}
-                        style={{
-                          padding: '0.5rem 1rem',
-                          backgroundColor: '#007bff',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        Select
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
+              filteredImages.map(img => (
+                <button
+                  type="button"
+                  key={`${img.id || img.name}-${img.name}`}
+                  className="browser-item"
+                  onClick={() => selectImageFromBrowser(img.name)}
+                >
+                  <span className="browser-item-icon browser-item-icon-large" aria-hidden="true">🐳</span>
+                  <span className="browser-item-content">
+                    <span className="browser-item-name">{img.name}</span>
+                    <span className="browser-item-meta">
+                      {img.id && <span>ID: <code>{img.id}</code></span>}
+                      {img.size && <span>Size: <strong>{img.size}</strong></span>}
+                      {img.created && <span>Created: {img.created.split(' ')[0]}</span>}
+                    </span>
+                    {img.repository !== '<none>' && img.tag !== '<none>' && (
+                      <span className="browser-item-meta">Repository: {img.repository} • Tag: {img.tag}</span>
+                    )}
+                  </span>
+                  <span className="browser-select-label">Select</span>
+                </button>
+              ))
             )}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   )
 }

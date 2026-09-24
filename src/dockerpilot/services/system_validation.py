@@ -13,8 +13,8 @@ def validate_system_requirements(console: Any, client: Any) -> bool:
     requirements_met = True
 
     python_version = sys.version_info
-    if python_version < (3, 9):
-        console.print("[red]❌ Python 3.9+ required[/red]")
+    if python_version < (3, 10):
+        console.print("[red]❌ Python 3.10+ required[/red]")
         requirements_met = False
     else:
         console.print(f"[green]✓ Python {python_version.major}.{python_version.minor}[/green]")

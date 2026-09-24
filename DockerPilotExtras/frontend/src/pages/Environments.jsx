@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { environmentAPI, statusAPI, fileBrowserAPI, serversAPI } from '../services/api'
+import Modal from '../components/Modal'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
+import {
+  canCancelMigration,
+  createMigrationPoller,
+  isTerminalMigration,
+  selectRestorableMigration,
+} from '../utils/migrationJobs.mjs'
+import { isCurrentKeyFileRead } from '../utils/serverKeyFileRead.mjs'
 import '../App.css'
 
 function Environments() {
   const { theme } = useTheme()
-  const { servers, selectedServer, loadServers, selectServer } = useServer()
+  const { servers, selectedServer, selectedServerReady, loadServers, selectServer } = useServer()
   const [loading, setLoading] = useState({})
   const [message, setMessage] = useState(null)
   const [environmentsData, setEnvironmentsData] = useState(null)
@@ -57,6 +65,8 @@ function Environments() {
     totp_code: '',
     description: ''
   })
+  const serverKeyReaderRef = useRef(null)
+  const serverKeyReadGenerationRef = useRef(0)
   const [testingServer, setTestingServer] = useState(false) // Testing server connection
   const [testingServerResult, setTestingServerResult] = useState(null) // Test result
   const [showMigrateModal, setShowMigrateModal] = useState(false) // Show migrate container modal
@@ -64,29 +74,83 @@ function Environments() {
   const [migrationTargetServer, setMigrationTargetServer] = useState('') // Target server ID
   const [migrationIncludeData, setMigrationIncludeData] = useState(false) // Include volumes/data
   const [migrationStopSource, setMigrationStopSource] = useState(false) // Stop source container
-  const [migrationProgress, setMigrationProgress] = useState(null) // Migration progress tracking
-  const [migrationStarted, setMigrationStarted] = useState(false) // Migration polling guard
-  const migrationProgressRef = useRef(null)
-  const migratingContainerRef = useRef(null)
+  const [migrationJob, setMigrationJob] = useState(null)
+  const [migrationTrackingError, setMigrationTrackingError] = useState(null)
+  const [migrationTrackingStopped, setMigrationTrackingStopped] = useState(false)
+  const [cancellingMigrationId, setCancellingMigrationId] = useState(null)
+  const [migrationStartingContainer, setMigrationStartingContainer] = useState(null)
+  const [migrationPollGeneration, setMigrationPollGeneration] = useState(0)
+  const [migrationDiscoveryGeneration, setMigrationDiscoveryGeneration] = useState(0)
+  const migrationSubmitGenerationRef = useRef(0)
+  const migrationSessionGenerationRef = useRef(0)
+  const migrationJobRef = useRef(null)
+  const ignoredMigrationIdsRef = useRef(new Set())
   const [envServersMap, setEnvServersMap] = useState({}) // env -> server_id (dev/staging/prod)
   const [loadingEnvServersMap, setLoadingEnvServersMap] = useState(true)
   const [savingEnvServersMap, setSavingEnvServersMap] = useState(false)
   const [envServersMapDraft, setEnvServersMapDraft] = useState({}) // local draft before Save
   const [environmentStatusFetchError, setEnvironmentStatusFetchError] = useState(null)
 
-  useEffect(() => {
-    migrationProgressRef.current = migrationProgress
-  }, [migrationProgress])
-
-  useEffect(() => {
-    migratingContainerRef.current = migratingContainer
-  }, [migratingContainer])
-
   const environments = [
     { name: 'dev', label: 'DEV', color: '#28a745' },
     { name: 'staging', label: 'Pre-Prod', color: '#ffc107' },
     { name: 'prod', label: 'PROD', color: '#dc3545' }
   ]
+
+  useEffect(() => () => {
+    migrationSubmitGenerationRef.current += 1
+    migrationSessionGenerationRef.current += 1
+    serverKeyReadGenerationRef.current += 1
+    if (serverKeyReaderRef.current?.readyState === 1) {
+      serverKeyReaderRef.current?.abort()
+    }
+    serverKeyReaderRef.current = null
+  }, [])
+
+  // Async jobs outlive the page. Recover the oldest active job for the
+  // selected source server after a reload, while letting any user action win
+  // a race with this discovery request.
+  useEffect(() => {
+    const sessionGeneration = migrationSessionGenerationRef.current
+    let cancelled = false
+
+    const recoverActiveMigration = async () => {
+      if (!selectedServerReady || migrationJobRef.current || migrationStartingContainer) return
+      try {
+        const response = await statusAPI.listActiveMigrations()
+        if (
+          cancelled ||
+          migrationSessionGenerationRef.current !== sessionGeneration ||
+          migrationJobRef.current
+        ) return
+
+        const job = selectRestorableMigration(
+          response.data?.jobs?.filter(candidate => !ignoredMigrationIdsRef.current.has(candidate?.id)),
+          selectedServer || 'local',
+        )
+        if (!response.data?.success || !job) return
+
+        migrationJobRef.current = job
+        setMigrationJob(job)
+        setMigratingContainer(job.container_name)
+        setMigrationTargetServer(job.metadata?.target_server_id || '')
+        setMigrationIncludeData(Boolean(job.metadata?.include_data))
+        setMigrationStopSource(Boolean(job.metadata?.stop_source))
+        setMigrationTrackingError(null)
+        setMigrationTrackingStopped(false)
+        setLoading(prev => ({ ...prev, [`migrate_${job.container_name}`]: true }))
+        setMessage({
+          type: 'warning',
+          text: `Resumed migration tracking for ${job.container_name}`,
+        })
+      } catch {
+        // Discovery is best-effort; normal page operation remains available.
+      }
+    }
+
+    recoverActiveMigration()
+    return () => { cancelled = true }
+  }, [selectedServer, selectedServerReady, migrationDiscoveryGeneration])
 
   useEffect(() => {
     loadEnvironmentsStatus()
@@ -301,133 +365,68 @@ function Environments() {
     }
   }, [promotingContainer])
   
-  // Poll migration progress when migrating container
-  // Only start polling when migration is actually in progress (has progress or loading flag)
+  // Track one stable migration ID. The poller schedules the next request only
+  // after the current request settles, so slow responses can never overlap.
   useEffect(() => {
-    if (!migratingContainer) {
-      return
-    }
-    
-    // Don't start polling until migration actually starts
-    if (!migrationStarted) {
-      return
-    }
-    
-    let intervalId = null
-    let consecutiveNoProgress = 0
-    const MAX_CONSECUTIVE_NO_PROGRESS = 10 // Increased from 3 to allow more time for migration to start
-    
-    const pollMigrationProgress = async () => {
-      if (!migratingContainerRef.current) {
-        if (intervalId) {
-          clearInterval(intervalId)
+    const migrationId = migrationJob?.id
+    if (!migrationId || !migratingContainer || isTerminalMigration(migrationJob)) return
+
+    const poller = createMigrationPoller({
+      migrationId,
+      fetchJob: async (id) => {
+        const response = await statusAPI.getMigration(id)
+        const job = response.data?.job
+        if (
+          !response.data?.success ||
+          !job ||
+          job.id !== id ||
+          job.container_name !== migratingContainer
+        ) {
+          throw new Error('Invalid migration status response')
         }
-        return
-      }
-      
-      // Capture current container name to avoid stale closure
-      const containerName = migratingContainerRef.current
-      
-      try {
-        const response = await statusAPI.getMigrationProgress(containerName)
-        
-        // Check if container changed (might have been cleared during async call)
-        if (migratingContainerRef.current !== containerName) {
-          if (intervalId) {
-            clearInterval(intervalId)
-          }
-          return
+        return job
+      },
+      onSnapshot: (job) => {
+        setMigrationTrackingError(null)
+        setMigrationTrackingStopped(false)
+        migrationJobRef.current = job
+        setMigrationJob(job)
+      },
+      onTerminal: (job) => {
+        setLoading(prev => ({ ...prev, [`migrate_${job.container_name}`]: false }))
+        const terminalMessages = {
+          completed: { type: 'success', text: 'Container migration completed' },
+          failed: { type: 'error', text: 'Container migration failed. Check migration activity.' },
+          cancelled: { type: 'warning', text: 'Container migration cancelled' },
         }
-        
-        if (response.data.success && response.data.progress) {
-          const progress = response.data.progress
-          setMigrationProgress(progress)
-          consecutiveNoProgress = 0 // Reset counter on successful progress
-          // Clear loading flag when we get progress updates
-          setLoading(prev => ({ ...prev, [`migrate_${containerName}`]: false }))
-          
-          // Stop polling if migration is completed, failed, or cancelled
-          if (progress.stage === 'completed' || 
-              progress.stage === 'failed' || 
-              progress.stage === 'error' ||
-              progress.stage === 'cancelled') {
-            // Stop polling immediately
-            if (intervalId) {
-              clearInterval(intervalId)
-              intervalId = null
-            }
-            // Wait a bit before clearing to show final message
-            setTimeout(() => {
-              // Double-check that this is still the same container (might have started new migration)
-              if (migratingContainerRef.current === containerName) {
-                setMigrationProgress(null)
-                setMigratingContainer(null)
-                setShowMigrateModal(false)
-                setMigrationStarted(false)
-                loadEnvironmentsStatus()
-              }
-            }, 3000) // 3 seconds to show final message (reduced from 5)
-            return
+        setMessage(terminalMessages[job.status])
+        loadEnvironmentsStatus()
+      },
+      onError: (error, { consecutiveFailures }) => {
+        if (error.response?.status === 404) {
+          if (consecutiveFailures < 3) {
+            setMigrationTrackingError(
+              `Migration was not found (attempt ${consecutiveFailures}/3). Retrying…`,
+            )
+            return true
           }
-        } else {
-          // No progress found - but only close modal if migration was actually started
-          // (i.e., we had progress before but now it's gone, meaning it completed and was cleaned up)
-          if (migrationProgressRef.current !== null) {
-            // We had progress before, so migration was running - might have completed
-            consecutiveNoProgress++
-            if (consecutiveNoProgress >= MAX_CONSECUTIVE_NO_PROGRESS) {
-              // Stop polling if no progress found after several attempts
-              if (intervalId) {
-                clearInterval(intervalId)
-                intervalId = null
-              }
-              // Migration likely completed and was cleaned up - close modal
-              setMigrationProgress(null)
-              setMigratingContainer(null)
-              setShowMigrateModal(false)
-              setMigrationStarted(false)
-              loadEnvironmentsStatus()
-              return
-            }
-          }
-          // If no progress and migration hasn't started yet, don't close modal
-          // Just reset counter to allow more time
-          consecutiveNoProgress = 0
+          setMigrationTrackingError(
+            'Migration tracking was lost. The backend may have restarted or routed this request to another worker.',
+          )
+          setMigrationTrackingStopped(true)
+          setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: false }))
+          return false
         }
-      } catch (error) {
-        console.error('Error polling migration progress:', error)
-        // Only count errors if migration was actually started
-        if (migrationProgressRef.current !== null) {
-          consecutiveNoProgress++
-          // Stop polling after too many consecutive errors
-          if (consecutiveNoProgress >= MAX_CONSECUTIVE_NO_PROGRESS) {
-            if (intervalId) {
-              clearInterval(intervalId)
-              intervalId = null
-            }
-            setMessage({ 
-              type: 'error', 
-              text: 'Error checking migration progress. Check backend logs.' 
-            })
-            setMigrationProgress(null)
-            setMigratingContainer(null)
-            setShowMigrateModal(false)
-            setMigrationStarted(false)
-          }
-        }
-      }
-    }
-    
-    // Poll immediately and then every 2 seconds
-    pollMigrationProgress()
-    intervalId = setInterval(pollMigrationProgress, 2000)
-    
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [migratingContainer, migrationStarted])
+        setMigrationTrackingError(
+          `Migration status is temporarily unavailable (attempt ${consecutiveFailures}). Retrying…`,
+        )
+        return true
+      },
+    })
+
+    poller.start()
+    return () => poller.stop()
+  }, [migrationJob?.id, migratingContainer, migrationPollGeneration])
   
   const resetSudoModalState = () => {
     setShowSudoModal(false)
@@ -544,7 +543,16 @@ function Environments() {
     }
   }
 
+  const invalidateServerKeyRead = () => {
+    serverKeyReadGenerationRef.current += 1
+    if (serverKeyReaderRef.current?.readyState === 1) {
+      serverKeyReaderRef.current?.abort()
+    }
+    serverKeyReaderRef.current = null
+  }
+
   const openServerModal = (server = null) => {
+    invalidateServerKeyRead()
     if (server) {
       setEditingServer(server)
       setServerForm({
@@ -567,6 +575,7 @@ function Environments() {
   }
 
   const resetServerForm = () => {
+    invalidateServerKeyRead()
     setEditingServer(null)
     setServerForm({
       name: '',
@@ -583,15 +592,47 @@ function Environments() {
     })
   }
 
+  const closeServerModal = () => {
+    setShowServerModal(false)
+    resetServerForm()
+  }
+
   const handleKeyFileUpload = (event) => {
     const file = event.target.files[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        setServerForm({ ...serverForm, private_key: e.target.result })
-      }
-      reader.readAsText(file)
+    if (!file) return
+
+    invalidateServerKeyRead()
+    const generation = serverKeyReadGenerationRef.current
+    const reader = new FileReader()
+    serverKeyReaderRef.current = reader
+
+    reader.onload = event => {
+      if (!isCurrentKeyFileRead(
+        reader,
+        serverKeyReaderRef.current,
+        generation,
+        serverKeyReadGenerationRef.current,
+      )) return
+      serverKeyReaderRef.current = null
+      setServerForm(previous => ({ ...previous, private_key: event.target.result }))
     }
+    reader.onerror = () => {
+      if (serverKeyReaderRef.current === reader) serverKeyReaderRef.current = null
+    }
+    reader.onabort = reader.onerror
+    reader.readAsText(file)
+  }
+
+  const handlePrivateKeyChange = event => {
+    invalidateServerKeyRead()
+    const privateKey = event.target.value
+    setServerForm(previous => ({ ...previous, private_key: privateKey }))
+  }
+
+  const handleServerAuthTypeChange = event => {
+    invalidateServerKeyRead()
+    const authType = event.target.value
+    setServerForm(previous => ({ ...previous, auth_type: authType }))
   }
 
   const getTargetServerDisplay = (env) => {
@@ -837,12 +878,43 @@ function Environments() {
   }
 
   const handleMigrateContainer = async (containerName) => {
+    if (migrationStartingContainer) {
+      if (migratingContainer === containerName) {
+        setShowMigrateModal(true)
+      } else {
+        setMessage({
+          type: 'warning',
+          text: `Migration submission is still pending for ${migrationStartingContainer}.`,
+        })
+      }
+      return
+    }
+    if (migrationJob && isTerminalMigration(migrationJob) && migratingContainer === containerName) {
+      setShowMigrateModal(true)
+      return
+    }
+    if (migrationJob && !isTerminalMigration(migrationJob)) {
+      if (migratingContainer === containerName) {
+        setShowMigrateModal(true)
+      } else {
+        setMessage({
+          type: 'warning',
+          text: `Migration ${migrationJob.id} is still active for ${migratingContainer}.`,
+        })
+      }
+      return
+    }
+    migrationSubmitGenerationRef.current += 1
+    migrationSessionGenerationRef.current += 1
     setMigratingContainer(containerName)
     setShowMigrateModal(true)
     setMigrationTargetServer('')
     setMigrationIncludeData(false)
     setMigrationStopSource(false)
-    setMigrationStarted(false)
+    migrationJobRef.current = null
+    setMigrationJob(null)
+    setMigrationTrackingError(null)
+    setMigrationTrackingStopped(false)
   }
 
   const executeMigration = async () => {
@@ -856,67 +928,190 @@ function Environments() {
       return
     }
 
-    setLoading({ ...loading, [`migrate_${migratingContainer}`]: true })
+    setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: true }))
     setMessage(null)
-    // Don't set initial progress here - let backend set it and polling will pick it up
-    // setMigrationProgress will be updated by polling useEffect
+    const containerName = migratingContainer
+    const submitGeneration = migrationSubmitGenerationRef.current + 1
+    migrationSubmitGenerationRef.current = submitGeneration
+    const sessionGeneration = migrationSessionGenerationRef.current
+    setMigrationStartingContainer(containerName)
 
     try {
-      // Start migration (non-blocking, progress will be polled)
-      const response = await statusAPI.migrateContainer(
-        migratingContainer,
+      const response = await statusAPI.startMigration(
+        containerName,
         selectedServer || 'local',
         migrationTargetServer,
         migrationIncludeData,
         migrationStopSource
       )
+      if (
+        migrationSubmitGenerationRef.current !== submitGeneration ||
+        migrationSessionGenerationRef.current !== sessionGeneration
+      ) return
 
-      if (!response.data.success) {
+      const job = response.data?.job
+      if (!response.data?.success || !response.data?.migration_id || !job) {
         setMessage({ type: 'error', text: response.data.error || 'Error during migration' })
-        setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: false }))
-        setMigrationProgress(null)
-        setMigrationStarted(false)
-        // Don't close modal on error - let user see the error message
-        // setMigratingContainer(null)
+        setLoading(prev => ({ ...prev, [`migrate_${containerName}`]: false }))
       } else {
-        // Migration started successfully - polling will pick up progress
-        // Keep loading flag set so polling knows migration has started
-        setMigrationStarted(true)
+        migrationJobRef.current = job
+        setMigrationJob(job)
+        setMigrationTrackingError(null)
+        setMigrationTrackingStopped(false)
       }
-      // Progress will be updated via polling - don't clear loading here, let polling handle it
     } catch (error) {
+      if (
+        migrationSubmitGenerationRef.current !== submitGeneration ||
+        migrationSessionGenerationRef.current !== sessionGeneration
+      ) return
+      const conflictJobId = error.response?.status === 409
+        ? error.response?.data?.migration_id
+        : null
+      if (conflictJobId) {
+        const reconnectingJob = {
+          id: conflictJobId,
+          container_name: containerName,
+          status: 'queued',
+          stage: 'queued',
+          progress: 0,
+          message: 'Reconnecting to the active migration…',
+          events: [],
+        }
+        migrationJobRef.current = reconnectingJob
+        setMigrationJob(reconnectingJob)
+        setMigrationTrackingError(null)
+        setMigrationTrackingStopped(false)
+        setMessage({ type: 'warning', text: 'Reconnected to an active migration' })
+        return
+      }
       setMessage({ 
         type: 'error', 
         text: error.response?.data?.error || 'Error migrating container' 
       })
-      setLoading({ ...loading, [`migrate_${migratingContainer}`]: false })
-      setMigrationProgress(null)
-      setMigratingContainer(null)
-      setMigrationStarted(false)
+      setLoading(prev => ({ ...prev, [`migrate_${containerName}`]: false }))
+    } finally {
+      if (
+        migrationSubmitGenerationRef.current === submitGeneration &&
+        migrationSessionGenerationRef.current === sessionGeneration
+      ) {
+        setMigrationStartingContainer(null)
+      }
     }
   }
 
   const handleCancelMigration = async () => {
-    if (!migratingContainer) return
+    if (!migratingContainer || !migrationJob?.id || !canCancelMigration(migrationJob)) return
     
     if (!window.confirm(`Are you sure you want to cancel migration of container ${migratingContainer}?`)) {
       return
     }
     
+    const cancellingJobId = migrationJob.id
+    const sessionGeneration = migrationSessionGenerationRef.current
+    setCancellingMigrationId(cancellingJobId)
     try {
-      const response = await statusAPI.cancelMigration(migratingContainer)
-      if (response.data.success) {
-        setMessage({ type: 'warning', text: 'Container migration cancelled' })
-        // Progress will be updated via polling to show cancellation
+      const response = await statusAPI.cancelMigrationById(cancellingJobId)
+      if (migrationSessionGenerationRef.current !== sessionGeneration) return
+      if (response.data?.success && response.data?.job) {
+        const responseJob = response.data.job
+        const currentJob = migrationJobRef.current
+        const responseIsStale = (
+          !currentJob ||
+          currentJob.id !== cancellingJobId ||
+          responseJob.id !== cancellingJobId ||
+          responseJob.container_name !== migratingContainer ||
+          isTerminalMigration(currentJob) ||
+          (
+            currentJob.updated_at &&
+            responseJob.updated_at &&
+            currentJob.updated_at > responseJob.updated_at
+          )
+        )
+        if (!responseIsStale) {
+          migrationJobRef.current = responseJob
+          setMigrationJob(responseJob)
+          if (isTerminalMigration(responseJob)) {
+            setMigrationTrackingError(null)
+            setMigrationTrackingStopped(false)
+            setLoading(prev => ({ ...prev, [`migrate_${responseJob.container_name}`]: false }))
+            const terminalMessages = {
+              completed: { type: 'success', text: 'Container migration completed' },
+              failed: { type: 'error', text: 'Container migration failed. Check migration activity.' },
+              cancelled: { type: 'warning', text: 'Container migration cancelled' },
+            }
+            setMessage(terminalMessages[responseJob.status])
+            loadEnvironmentsStatus()
+          } else {
+            setMessage({ type: 'warning', text: 'Migration cancellation requested' })
+          }
+        }
       } else {
         setMessage({ type: 'error', text: response.data.error || 'Error cancelling migration' })
       }
     } catch (error) {
+      if (migrationSessionGenerationRef.current !== sessionGeneration) return
+      if (
+        error.response?.status === 409 &&
+        error.response?.data?.code === 'migration_cancellation_too_late'
+      ) {
+        setMessage({ type: 'warning', text: 'Migration is already finalizing and can no longer be cancelled' })
+        return
+      }
       setMessage({ 
         type: 'error', 
         text: error.response?.data?.error || 'Error cancelling migration' 
       })
+    } finally {
+      if (migrationSessionGenerationRef.current === sessionGeneration) {
+        setCancellingMigrationId(null)
+      }
     }
+  }
+
+  const closeMigrationModal = () => {
+    setShowMigrateModal(false)
+    if (migrationStartingContainer) return
+    if (migrationJob && !isTerminalMigration(migrationJob)) return
+
+    migrationSubmitGenerationRef.current += 1
+    migrationSessionGenerationRef.current += 1
+    if (migratingContainer) {
+      setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: false }))
+    }
+    setMigratingContainer(null)
+    migrationJobRef.current = null
+    setMigrationJob(null)
+    setMigrationTrackingError(null)
+    setMigrationTrackingStopped(false)
+    setCancellingMigrationId(null)
+    setMigrationStartingContainer(null)
+    setMigrationDiscoveryGeneration(generation => generation + 1)
+  }
+
+  const retryMigrationTracking = () => {
+    if (!migrationJob?.id || isTerminalMigration(migrationJob)) return
+    setMigrationTrackingError(null)
+    setMigrationTrackingStopped(false)
+    setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: true }))
+    setMigrationPollGeneration(generation => generation + 1)
+  }
+
+  const stopMigrationTracking = () => {
+    migrationSubmitGenerationRef.current += 1
+    migrationSessionGenerationRef.current += 1
+    if (migrationJob?.id) ignoredMigrationIdsRef.current.add(migrationJob.id)
+    if (migratingContainer) {
+      setLoading(prev => ({ ...prev, [`migrate_${migratingContainer}`]: false }))
+    }
+    setShowMigrateModal(false)
+    setMigratingContainer(null)
+    migrationJobRef.current = null
+    setMigrationJob(null)
+    setMigrationTrackingError(null)
+    setMigrationTrackingStopped(false)
+    setCancellingMigrationId(null)
+    setMigrationStartingContainer(null)
+    setMigrationDiscoveryGeneration(generation => generation + 1)
   }
 
   const handleStopPromotion = async (containerName) => {
@@ -1095,8 +1290,6 @@ function Environments() {
     skipBackup,
     elevationToken = null
   ) => {
-    console.log(`[continuePromotion] Called for ${containerName}`, { selectedEnv, targetEnv, skipBackup })
-    
     // Final confirmation (include target server when env->server mapping is used)
     const targetServerDisplay = envServersMap[targetEnv] ? getTargetServerDisplay(targetEnv) : null
     if (!skipBackup) {
@@ -1104,7 +1297,6 @@ function Environments() {
         ? `Promote container ${containerName} from ${sourceLabel} to ${targetLabel}?\n\nTarget server: ${targetServerDisplay}`
         : `Are you sure you want to promote container ${containerName} from ${sourceLabel} to ${targetLabel}?`
       const confirmed = window.confirm(msg)
-      console.log(`[continuePromotion] User confirmed: ${confirmed}`)
       if (!confirmed) {
         if (elevationToken) {
           try {
@@ -1113,28 +1305,24 @@ function Environments() {
             // Ignore cleanup errors
           }
         }
-        console.log(`[continuePromotion] User cancelled, returning`)
         return
       }
     }
     
     setPromotingContainer(containerName)
     try {
-      console.log(`[continuePromotion] Preparing config for ${containerName} to ${targetEnv}`)
       // First, prepare config for target environment
       const prepareResponse = await environmentAPI.prepareConfig(containerName, targetEnv, selectedEnv)
-      console.log(`[continuePromotion] Prepare config response:`, prepareResponse.data)
       
       if (!prepareResponse.data.success) {
         const errorMsg = prepareResponse.data.error || 'Error preparing configuration'
-        console.error(`[continuePromotion] Prepare config failed: ${errorMsg}`)
+        console.error('[continuePromotion] Prepare config failed')
         setMessage({ type: 'error', text: errorMsg })
         setPromotingContainer(null)
         return
       }
       
       // Then promote to target environment (with optional skipBackup flag)
-      console.log(`Promoting ${containerName} from ${selectedEnv} to ${targetEnv}`)
       const promoteResponse = await environmentAPI.promoteSingle(
         selectedEnv,
         targetEnv,
@@ -1143,7 +1331,6 @@ function Environments() {
         true,
         elevationToken
       )
-      console.log(`Promote response:`, promoteResponse.data)
       
       // Clear one-time elevation tokens and legacy sudo password after promotion
       try {
@@ -1167,11 +1354,11 @@ function Environments() {
         await loadEnvironmentsStatus()
       } else {
         const errorMsg = promoteResponse.data.error || 'Error during promotion'
-        console.error(`Promotion failed: ${errorMsg}`)
+        console.error('[continuePromotion] Promotion failed')
         setMessage({ type: 'error', text: errorMsg })
       }
     } catch (error) {
-      console.error(`Promotion error for ${containerName}:`, error)
+      console.error('[continuePromotion] Promotion request failed')
       const errorMsg = error.response?.data?.error || 'Error promoting container'
       setMessage({ 
         type: 'error', 
@@ -1949,20 +2136,32 @@ function Environments() {
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             <button
                               onClick={() => handleMigrateContainer(container.name)}
-                              disabled={loading[`migrate_${container.name}`]}
+                              disabled={Boolean(
+                                (migrationStartingContainer && migrationStartingContainer !== container.name) ||
+                                (loading[`migrate_${container.name}`] &&
+                                  migrationStartingContainer !== container.name &&
+                                  !(migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name))
+                              )}
                               style={{
                                 padding: '0.5rem 1rem',
-                                backgroundColor: loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
+                                backgroundColor: migrationStartingContainer === container.name ||
+                                  (migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name)
+                                  ? '#17a2b8'
+                                  : loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: loading[`migrate_${container.name}`] ? 'not-allowed' : 'pointer',
+                                cursor: migrationStartingContainer && migrationStartingContainer !== container.name ? 'not-allowed' : 'pointer',
                                 fontWeight: '600',
                                 fontSize: '0.85rem'
                               }}
                               title="Migrate container to another server"
                             >
-                              {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
+                              {migrationStartingContainer === container.name
+                                ? 'Starting…'
+                                : migrationJob && migratingContainer === container.name
+                                ? isTerminalMigration(migrationJob) ? '👁 View result' : '👁 View migration'
+                                : '📦 Migrate'}
                             </button>
                             {selectedEnv === 'prod' ? (
                               <button
@@ -2093,20 +2292,32 @@ function Environments() {
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             <button
                               onClick={() => handleMigrateContainer(container.name)}
-                              disabled={loading[`migrate_${container.name}`]}
+                              disabled={Boolean(
+                                (migrationStartingContainer && migrationStartingContainer !== container.name) ||
+                                (loading[`migrate_${container.name}`] &&
+                                  migrationStartingContainer !== container.name &&
+                                  !(migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name))
+                              )}
                               style={{
                                 padding: '0.5rem 1rem',
-                                backgroundColor: loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
+                                backgroundColor: migrationStartingContainer === container.name ||
+                                  (migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name)
+                                  ? '#17a2b8'
+                                  : loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: loading[`migrate_${container.name}`] ? 'not-allowed' : 'pointer',
+                                cursor: migrationStartingContainer && migrationStartingContainer !== container.name ? 'not-allowed' : 'pointer',
                                 fontWeight: '600',
                                 fontSize: '0.85rem'
                               }}
                               title="Migrate container to another server"
                             >
-                              {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
+                              {migrationStartingContainer === container.name
+                                ? 'Starting…'
+                                : migrationJob && migratingContainer === container.name
+                                ? isTerminalMigration(migrationJob) ? '👁 View result' : '👁 View migration'
+                                : '📦 Migrate'}
                             </button>
                             <button
                               onClick={() => handlePrepareConfig(container.name)}
@@ -2200,20 +2411,32 @@ function Environments() {
                               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                 <button
                                   onClick={() => handleMigrateContainer(container.name)}
-                                  disabled={loading[`migrate_${container.name}`]}
+                                  disabled={Boolean(
+                                    (migrationStartingContainer && migrationStartingContainer !== container.name) ||
+                                    (loading[`migrate_${container.name}`] &&
+                                      migrationStartingContainer !== container.name &&
+                                      !(migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name))
+                                  )}
                                   style={{
                                     padding: '0.5rem 1rem',
-                                    backgroundColor: loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
+                                    backgroundColor: migrationStartingContainer === container.name ||
+                                      (migrationJob && !isTerminalMigration(migrationJob) && migratingContainer === container.name)
+                                      ? '#17a2b8'
+                                      : loading[`migrate_${container.name}`] ? '#6c757d' : '#17a2b8',
                                     color: 'white',
                                     border: 'none',
                                     borderRadius: '4px',
-                                    cursor: loading[`migrate_${container.name}`] ? 'not-allowed' : 'pointer',
+                                    cursor: migrationStartingContainer && migrationStartingContainer !== container.name ? 'not-allowed' : 'pointer',
                                     fontWeight: '600',
                                     fontSize: '0.85rem'
                                   }}
                                   title="Migrate container to another server"
                                 >
-                                  {loading[`migrate_${container.name}`] ? '⏳ Migrating...' : '📦 Migrate'}
+                                  {migrationStartingContainer === container.name
+                                    ? 'Starting…'
+                                    : migrationJob && migratingContainer === container.name
+                                    ? isTerminalMigration(migrationJob) ? '👁 View result' : '👁 View migration'
+                                    : '📦 Migrate'}
                                 </button>
                                 <button
                                   onClick={() => handleSelectContainerForFile(container.name)}
@@ -2438,63 +2661,18 @@ function Environments() {
         </div>
       )}
 
-      {/* Server Add/Edit Modal */}
-      {showServerModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={() => {
-          setShowServerModal(false)
-          resetServerForm()
-        }}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '2rem',
-            maxWidth: '600px',
-            maxHeight: '90vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>
-                {editingServer ? 'Edit Server' : 'Add New Server'}
-              </h3>
-              <button
-                onClick={() => {
-                  setShowServerModal(false)
-                  resetServerForm()
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '1.5rem',
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <Modal
+        open={showServerModal}
+        onClose={closeServerModal}
+        title={editingServer ? 'Edit Server' : 'Add New Server'}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-name" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Server name *
                 </label>
                 <input
+                  id="server-name"
                   type="text"
                   value={serverForm.name}
                   onChange={(e) => setServerForm({ ...serverForm, name: e.target.value })}
@@ -2513,10 +2691,11 @@ function Environments() {
 
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <div style={{ flex: 2 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-hostname" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Hostname/IP *
                   </label>
                   <input
+                    id="server-hostname"
                     type="text"
                     value={serverForm.hostname}
                     onChange={(e) => setServerForm({ ...serverForm, hostname: e.target.value })}
@@ -2533,10 +2712,11 @@ function Environments() {
                   />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-port" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Port
                   </label>
                   <input
+                    id="server-port"
                     type="number"
                     value={serverForm.port}
                     onChange={(e) => setServerForm({ ...serverForm, port: parseInt(e.target.value) || 22 })}
@@ -2555,10 +2735,11 @@ function Environments() {
               </div>
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-username" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   User *
                 </label>
                 <input
+                  id="server-username"
                   type="text"
                   value={serverForm.username}
                   onChange={(e) => setServerForm({ ...serverForm, username: e.target.value })}
@@ -2576,12 +2757,13 @@ function Environments() {
               </div>
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-auth-type" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Metoda autentykacji *
                 </label>
                 <select
+                  id="server-auth-type"
                   value={serverForm.auth_type}
-                  onChange={(e) => setServerForm({ ...serverForm, auth_type: e.target.value })}
+                  onChange={handleServerAuthTypeChange}
                   style={{
                     width: '100%',
                     padding: '0.5rem',
@@ -2601,10 +2783,11 @@ function Environments() {
 
               {serverForm.auth_type === 'password' && (
                 <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  <label htmlFor="server-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                     Password *
                   </label>
                   <input
+                    id="server-password"
                     type="password"
                     value={serverForm.password}
                     onChange={(e) => setServerForm({ ...serverForm, password: e.target.value })}
@@ -2625,10 +2808,11 @@ function Environments() {
               {serverForm.auth_type === 'key' && (
                 <>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-key-file" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Klucz prywatny SSH *
                     </label>
                     <input
+                      id="server-key-file"
                       type="file"
                       accept=".key,.pem,.ppk"
                       onChange={handleKeyFileUpload}
@@ -2643,8 +2827,9 @@ function Environments() {
                       }}
                     />
                     <textarea
+                      aria-label="Private key contents"
                       value={serverForm.private_key}
-                      onChange={(e) => setServerForm({ ...serverForm, private_key: e.target.value })}
+                      onChange={handlePrivateKeyChange}
                       placeholder="Paste the private key contents (OpenSSH format) or choose a file"
                       rows={6}
                       style={{
@@ -2665,10 +2850,11 @@ function Environments() {
                     </div>
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-key-passphrase" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Key password (optional)
                     </label>
                     <input
+                      id="server-key-passphrase"
                       type="password"
                       value={serverForm.key_passphrase}
                       onChange={(e) => setServerForm({ ...serverForm, key_passphrase: e.target.value })}
@@ -2690,10 +2876,11 @@ function Environments() {
               {serverForm.auth_type === '2fa' && (
                 <>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Password *
                     </label>
                     <input
+                      id="server-password"
                       type="password"
                       value={serverForm.password}
                       onChange={(e) => setServerForm({ ...serverForm, password: e.target.value })}
@@ -2710,10 +2897,11 @@ function Environments() {
                     />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                    <label htmlFor="server-totp-code" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                       Kod 2FA
                     </label>
                     <input
+                      id="server-totp-code"
                       type="text"
                       value={serverForm.totp_code || ''}
                       onChange={(e) => setServerForm({ ...serverForm, totp_code: e.target.value })}
@@ -2736,10 +2924,11 @@ function Environments() {
               )}
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                <label htmlFor="server-description" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Opis (opcjonalnie)
                 </label>
                 <input
+                  id="server-description"
                   type="text"
                   value={serverForm.description}
                   onChange={(e) => setServerForm({ ...serverForm, description: e.target.value })}
@@ -2787,10 +2976,7 @@ function Environments() {
                   {testingServer ? 'Testing...' : 'Test Connection'}
                 </button>
                 <button
-                  onClick={() => {
-                    setShowServerModal(false)
-                    resetServerForm()
-                  }}
+                  onClick={closeServerModal}
                   style={{
                     padding: '0.5rem 1rem',
                     backgroundColor: '#6c757d',
@@ -2820,9 +3006,7 @@ function Environments() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </Modal>
       
       {/* Sudo Password Modal */}
       {showSudoModal ? (
@@ -3034,10 +3218,7 @@ function Environments() {
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 2000
-        }} onClick={() => {
-          setShowMigrateModal(false)
-          setMigratingContainer(null)
-        }}>
+        }} onClick={closeMigrationModal}>
           <div style={{
             backgroundColor: 'var(--card-bg)',
             borderRadius: '8px',
@@ -3053,10 +3234,7 @@ function Environments() {
                 📦 Container Migration
               </h3>
               <button
-                onClick={() => {
-                  setShowMigrateModal(false)
-                  setMigratingContainer(null)
-                }}
+                onClick={closeMigrationModal}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -3148,8 +3326,32 @@ function Environments() {
                 <strong>ℹ️ Information:</strong> Migration exports Docker image from container and its configuration (ports, environment variables, volumes), then imports and starts container on target server.
               </div>
 
-              {/* Migration Progress Bar */}
-              {migrationProgress && (
+              {migrationTrackingError && (
+                <div style={{ marginBottom: '1rem', color: '#dc3545' }}>
+                  <div>{migrationTrackingError}</div>
+                  {migrationTrackingStopped && migrationJob && !isTerminalMigration(migrationJob) && (
+                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={retryMigrationTracking}
+                      >
+                        Retry tracking
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={stopMigrationTracking}
+                      >
+                        Stop tracking
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Migration Job Progress */}
+              {migrationJob && (
                 <div style={{ 
                   marginBottom: '1rem',
                   padding: '1rem',
@@ -3164,10 +3366,10 @@ function Environments() {
                     marginBottom: '8px'
                   }}>
                     <span style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                      {migrationProgress.message}
+                      {migrationJob.message}
                     </span>
                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                      {migrationProgress.progress}%
+                      {migrationJob.progress}%
                     </span>
                   </div>
                   <div style={{
@@ -3179,11 +3381,11 @@ function Environments() {
                     position: 'relative'
                   }}>
                     <div style={{
-                      width: `${migrationProgress.progress}%`,
+                      width: `${migrationJob.progress}%`,
                       height: '100%',
-                      backgroundColor: migrationProgress.stage === 'completed' ? '#28a745' :
-                                      migrationProgress.stage === 'failed' || migrationProgress.stage === 'error' ? '#dc3545' :
-                                      migrationProgress.stage === 'cancelled' ? '#ffc107' :
+                      backgroundColor: migrationJob.status === 'completed' ? '#28a745' :
+                                      migrationJob.status === 'failed' ? '#dc3545' :
+                                      migrationJob.status === 'cancelled' ? '#ffc107' :
                                       '#17a2b8',
                       transition: 'width 0.3s ease',
                       display: 'flex',
@@ -3193,7 +3395,7 @@ function Environments() {
                       fontWeight: 'bold',
                       fontSize: '11px'
                     }}>
-                      {migrationProgress.progress}%
+                      {migrationJob.progress}%
                     </div>
                   </div>
                   <div style={{ 
@@ -3202,37 +3404,54 @@ function Environments() {
                     color: 'var(--text-secondary)',
                     fontStyle: 'italic'
                   }}>
-                    Stage: {migrationProgress.stage}
+                    Status: {migrationJob.status} · Stage: {migrationJob.stage} · ID: {migrationJob.id}
                   </div>
+                  {Array.isArray(migrationJob.events) && migrationJob.events.length > 0 && (
+                    <details style={{ marginTop: '0.75rem' }}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                        Activity ({migrationJob.events.length})
+                      </summary>
+                      {migrationJob.dropped_event_count > 0 && (
+                        <div style={{ marginTop: '0.5rem', color: 'var(--text-secondary)' }}>
+                          {migrationJob.dropped_event_count} older event(s) omitted by the backend.
+                        </div>
+                      )}
+                      <div style={{ marginTop: '0.5rem', maxHeight: '180px', overflowY: 'auto' }}>
+                        {[...migrationJob.events]
+                          .sort((left, right) => left.seq - right.seq)
+                          .map(event => (
+                            <div key={event.seq} style={{ marginBottom: '0.35rem', fontSize: '0.8rem' }}>
+                              <strong>#{event.seq} {event.stage}</strong>
+                              {' · '}{event.progress}%
+                              {event.message ? ` · ${event.message}` : ''}
+                            </div>
+                          ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
               )}
 
               <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                {migrationProgress && migrationProgress.stage !== 'completed' && migrationProgress.stage !== 'failed' && migrationProgress.stage !== 'cancelled' && (
+                {canCancelMigration(migrationJob) && (
                   <button
                     onClick={handleCancelMigration}
+                    disabled={cancellingMigrationId === migrationJob.id}
                     style={{
                       padding: '0.5rem 1rem',
                       backgroundColor: '#dc3545',
                       color: 'white',
                       border: 'none',
                       borderRadius: '4px',
-                      cursor: 'pointer',
+                      cursor: cancellingMigrationId === migrationJob.id ? 'wait' : 'pointer',
                       fontWeight: '600'
                     }}
                   >
-                    🛑 Cancel migration
+                    {cancellingMigrationId === migrationJob.id ? 'Cancelling…' : '🛑 Cancel migration'}
                   </button>
                 )}
                 <button
-                  onClick={() => {
-                    if (migrationProgress && migrationProgress.stage !== 'completed' && migrationProgress.stage !== 'failed' && migrationProgress.stage !== 'cancelled') {
-                      handleCancelMigration()
-                    }
-                    setShowMigrateModal(false)
-                    setMigratingContainer(null)
-                    setMigrationProgress(null)
-                  }}
+                  onClick={closeMigrationModal}
                   style={{
                     padding: '0.5rem 1rem',
                     backgroundColor: '#6c757d',
@@ -3243,9 +3462,9 @@ function Environments() {
                     fontWeight: '600'
                   }}
                 >
-                  {migrationProgress && migrationProgress.stage !== 'completed' && migrationProgress.stage !== 'failed' && migrationProgress.stage !== 'cancelled' ? 'Close' : 'Close'}
+                  {migrationStartingContainer || (migrationJob && !isTerminalMigration(migrationJob)) ? 'Hide' : 'Close'}
                 </button>
-                {!migrationProgress && (
+                {!migrationJob && (
                   <button
                     onClick={executeMigration}
                     disabled={!migrationTargetServer || loading[`migrate_${migratingContainer}`]}

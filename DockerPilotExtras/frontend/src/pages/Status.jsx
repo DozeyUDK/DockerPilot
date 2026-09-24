@@ -1,16 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { statusAPI, fileBrowserAPI } from '../services/api'
+import Modal from '../components/Modal'
 import { useTheme } from '../contexts/ThemeContext'
 import { useServer } from '../contexts/ServerContext'
+import {
+  createScopedRequestGuard,
+  runScopedRequest,
+  scopeMatchesKey,
+} from '../utils/scopedRequests.mjs'
 import '../App.css'
+
+const emptyStatusForServer = (serverId) => ({
+  docker: { available: false, version: null, error: null },
+  dockerpilot: { available: false, version: null, error: null },
+  context: serverId === 'local'
+    ? { mode: 'local', server_name: 'Local', hostname: 'localhost' }
+    : { mode: 'remote', server_name: serverId, hostname: null },
+})
 
 function Status() {
   const { theme } = useTheme()
-  const [status, setStatus] = useState({
-    docker: { available: false, version: null, error: null },
-    dockerpilot: { available: false, version: null, error: null },
-    context: { mode: 'local', server_name: 'Local', hostname: 'localhost' }
-  })
+  const [status, setStatus] = useState(() => emptyStatusForServer('local'))
   const [containerSummary, setContainerSummary] = useState(null)
   const [preflight, setPreflight] = useState(null)
   const [preflightLoading, setPreflightLoading] = useState(false)
@@ -30,154 +40,225 @@ function Status() {
   const [browserItems, setBrowserItems] = useState([])
   const [loadingBrowser, setLoadingBrowser] = useState(false)
   const cliOutputRef = useRef(null)
+  const requestGuardRef = useRef(null)
+  const activeStatusScopeRef = useRef(null)
 
-  const { selectedServer } = useServer()
+  if (!requestGuardRef.current) {
+    requestGuardRef.current = createScopedRequestGuard()
+  }
+
+  const { selectedServer, selectedServerReady } = useServer()
+  const browserScopeIsCurrent = scopeMatchesKey(activeStatusScopeRef.current, selectedServer)
 
   useEffect(() => {
-    checkStatus()
-    loadContainers()
-    loadPreflight()
-  }, [selectedServer]) // Reload when server changes
+    if (!selectedServerReady) return undefined
+    const guard = requestGuardRef.current
+    const scope = guard.beginScope(selectedServer)
+    activeStatusScopeRef.current = scope
+    setStatus(emptyStatusForServer(selectedServer))
+    setContainerSummary(null)
+    setPreflight(null)
+    setCliOutput([])
+    setCliLoading(false)
+    setCliCommand('')
+    setCliHistory([])
+    setHistoryIndex(-1)
+    setWorkingDirectory('')
+    setShowFileBrowser(false)
+    setBrowserPath('')
+    setBrowserItems([])
+    setLoadingBrowser(false)
+    checkStatus(scope)
+    loadContainers(scope)
+    loadPreflight(scope)
+    return () => guard.invalidateScope(scope)
+  }, [selectedServer, selectedServerReady]) // Reload when server changes
 
-  const checkStatus = async () => {
+  const checkStatus = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('status', scope)
+    if (!guard.isCurrent(request)) return
     setLoading(true)
     try {
       const response = await statusAPI.check()
-      setStatus(response.data)
+      if (guard.isCurrent(request)) setStatus(response.data)
     } catch (error) {
-      console.error('Error checking status:', error)
+      if (guard.isCurrent(request)) console.error('Error checking status:', error)
     } finally {
-      setLoading(false)
+      if (guard.isCurrent(request)) setLoading(false)
     }
   }
 
-  const loadContainers = async () => {
+  const loadContainers = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('containers', scope)
+    if (!guard.isCurrent(request)) return
     try {
       const response = await statusAPI.containers()
+      if (!guard.isCurrent(request)) return
       if (response.data.success) {
         setContainerSummary(response.data)
       } else {
         setContainerSummary({ error: response.data.error || 'Error loading status' })
       }
     } catch (error) {
-      console.error('Error loading containers:', error)
-      setContainerSummary({ error: 'Error loading container status' })
+      if (guard.isCurrent(request)) {
+        console.error('Error loading containers:', error)
+        setContainerSummary({ error: 'Error loading container status' })
+      }
     }
   }
 
-  const loadPreflight = async () => {
+  const loadPreflight = async (scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    const request = guard.beginRequest('preflight', scope)
+    if (!guard.isCurrent(request)) return
     setPreflightLoading(true)
     try {
       const response = await statusAPI.preflight()
-      setPreflight(response.data)
+      if (guard.isCurrent(request)) setPreflight(response.data)
     } catch (error) {
-      setPreflight({
-        success: false,
-        checks: {},
-        required_failed: [],
-        warnings: [],
-        error: error.response?.data?.error || error.message || 'Preflight check failed'
-      })
+      if (guard.isCurrent(request)) {
+        setPreflight({
+          success: false,
+          checks: {},
+          required_failed: [],
+          warnings: [],
+          error: error.response?.data?.error || error.message || 'Preflight check failed'
+        })
+      }
     } finally {
-      setPreflightLoading(false)
+      if (guard.isCurrent(request)) setPreflightLoading(false)
     }
   }
 
-  const loadFileBrowser = async (path = '') => {
-    setLoadingBrowser(true)
-    try {
-      const response = await fileBrowserAPI.browse(path)
-      if (response.data.success) {
-        setBrowserPath(response.data.current_path)
-        setBrowserItems(response.data.items || [])
-      }
-    } catch (error) {
-      console.error('Error loading file browser:', error)
-    } finally {
-      setLoadingBrowser(false)
-    }
+  const loadFileBrowser = async (path = '', scope = activeStatusScopeRef.current) => {
+    const guard = requestGuardRef.current
+    if (!scopeMatchesKey(scope, selectedServer)) return
+
+    await runScopedRequest({
+      guard,
+      channel: 'file-browser',
+      scope,
+      onStart: () => setLoadingBrowser(true),
+      execute: () => fileBrowserAPI.browse(path),
+      onSuccess: response => {
+        if (response.data.success) {
+          setBrowserPath(response.data.current_path)
+          setBrowserItems(response.data.items || [])
+        }
+      },
+      onError: error => console.error('Error loading file browser:', error),
+      onFinally: () => setLoadingBrowser(false),
+    })
   }
 
   const openFileBrowser = () => {
+    const scope = activeStatusScopeRef.current
+    if (!selectedServerReady || !scopeMatchesKey(scope, selectedServer)) return
     setShowFileBrowser(true)
-    loadFileBrowser(workingDirectory || '')
+    loadFileBrowser(workingDirectory || '', scope)
+  }
+
+  const closeFileBrowser = () => {
+    requestGuardRef.current.invalidateChannel('file-browser', activeStatusScopeRef.current)
+    setShowFileBrowser(false)
+    setBrowserPath('')
+    setBrowserItems([])
+    setLoadingBrowser(false)
   }
 
   const selectDirectoryFromBrowser = (dirPath) => {
+    const scope = activeStatusScopeRef.current
+    if (!selectedServerReady || !scopeMatchesKey(scope, selectedServer)) return
     setWorkingDirectory(dirPath)
-    setShowFileBrowser(false)
+    closeFileBrowser()
   }
 
   const executeCommand = async () => {
     if (!cliCommand.trim()) return
-    
-    setCliLoading(true)
+
+    const guard = requestGuardRef.current
+    const scope = activeStatusScopeRef.current
+    if (!scope || scope.key !== String(selectedServer ?? '')) return
     const commandToExecute = cliCommand.trim()
-    
-    // Add to history
-    const newHistory = [...cliHistory, commandToExecute]
-    setCliHistory(newHistory.slice(-50)) // Keep last 50 commands
-    setHistoryIndex(-1)
-    
-    // Add command to output (with working directory info if set)
-    const prompt = workingDirectory 
-      ? `${cliProgram} $ [${workingDirectory}] ${commandToExecute}`
-      : `${cliProgram} $ ${commandToExecute}`
-    setCliOutput(prev => [...prev, { type: 'command', text: prompt }])
-    
-    try {
-      const response = await statusAPI.executeCommand(
-        cliProgram, 
+    const programToExecute = cliProgram
+    const directoryToUse = workingDirectory || undefined
+    const prompt = directoryToUse
+      ? `${programToExecute} $ [${directoryToUse}] ${commandToExecute}`
+      : `${programToExecute} $ ${commandToExecute}`
+
+    await runScopedRequest({
+      guard,
+      channel: 'cli',
+      scope,
+      onStart: () => {
+        setCliLoading(true)
+        setCliHistory(prev => [...prev, commandToExecute].slice(-50))
+        setHistoryIndex(-1)
+        setCliOutput(prev => [...prev, { type: 'command', text: prompt }])
+      },
+      execute: () => statusAPI.executeCommand(
+        programToExecute,
         commandToExecute,
-        workingDirectory || undefined
-      )
-      
-      // Add output (even if return_code != 0, it may be useful)
-      if (response.data.output) {
-        setCliOutput(prev => [...prev, { type: 'output', text: response.data.output }])
-      }
-      if (response.data.error) {
-        setCliOutput(prev => [...prev, { type: 'error', text: response.data.error }])
-      }
-      
-      // Add suggestions if available
-      if (response.data.suggestions) {
-        const suggestions = response.data.suggestions
-        let suggestionText = `\n💡 ${suggestions.message}\n`
-        if (suggestions.commands) {
-          suggestionText += suggestions.commands.map(cmd => `   • ${cmd}`).join('\n')
+        directoryToUse
+      ),
+      onSuccess: response => {
+        const newOutput = []
+
+        // Add output (even if return_code != 0, it may be useful)
+        if (response.data.output) {
+          newOutput.push({ type: 'output', text: response.data.output })
         }
-        setCliOutput(prev => [...prev, { type: 'info', text: suggestionText }])
-      }
-      
-      if (response.data.return_code !== 0) {
-        setCliOutput(prev => [...prev, { 
-          type: 'info', 
-          text: `[Exit code: ${response.data.return_code}]` 
-        }])
-      }
-      
-      if (!response.data.success && !response.data.output && !response.data.error) {
-        setCliOutput(prev => [...prev, { 
-          type: 'error', 
-          text: 'Command execution error' 
-        }])
-      }
-    } catch (error) {
-      setCliOutput(prev => [...prev, { 
-        type: 'error', 
-        text: error.response?.data?.error || error.message || 'Connection error' 
-      }])
-    } finally {
-      setCliLoading(false)
-      setCliCommand('')
-      // Scroll to bottom
-      setTimeout(() => {
-        if (cliOutputRef.current) {
-          cliOutputRef.current.scrollTop = cliOutputRef.current.scrollHeight
+        if (response.data.error) {
+          newOutput.push({ type: 'error', text: response.data.error })
         }
-      }, 100)
-    }
+
+        // Add suggestions if available
+        if (response.data.suggestions) {
+          const suggestions = response.data.suggestions
+          let suggestionText = `\n💡 ${suggestions.message}\n`
+          if (suggestions.commands) {
+            suggestionText += suggestions.commands.map(cmd => `   • ${cmd}`).join('\n')
+          }
+          newOutput.push({ type: 'info', text: suggestionText })
+        }
+
+        if (response.data.return_code !== 0) {
+          newOutput.push({
+            type: 'info',
+            text: `[Exit code: ${response.data.return_code}]`
+          })
+        }
+
+        if (!response.data.success && !response.data.output && !response.data.error) {
+          newOutput.push({
+            type: 'error',
+            text: 'Command execution error'
+          })
+        }
+
+        if (newOutput.length > 0) {
+          setCliOutput(prev => [...prev, ...newOutput])
+        }
+      },
+      onError: error => {
+        setCliOutput(prev => [...prev, {
+          type: 'error',
+          text: error.response?.data?.error || error.message || 'Connection error'
+        }])
+      },
+      onFinally: request => {
+        setCliLoading(false)
+        setCliCommand('')
+        // Scroll to bottom only while this execution still owns the CLI channel.
+        setTimeout(() => {
+          if (guard.isCurrent(request) && cliOutputRef.current) {
+            cliOutputRef.current.scrollTop = cliOutputRef.current.scrollHeight
+          }
+        }, 100)
+      },
+    })
   }
 
   const handleCliKeyPress = (e) => {
@@ -255,7 +336,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Connection Status</h3>
-          <button className="btn btn-secondary" onClick={checkStatus} disabled={loading}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => checkStatus()}
+            disabled={loading || !selectedServerReady}
+          >
             {loading ? 'Checking...' : 'Refresh'}
           </button>
         </div>
@@ -409,7 +494,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Setup Preflight</h3>
-          <button className="btn btn-secondary" onClick={loadPreflight} disabled={preflightLoading}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => loadPreflight()}
+            disabled={preflightLoading || !selectedServerReady}
+          >
             {preflightLoading ? 'Checking...' : 'Refresh'}
           </button>
         </div>
@@ -491,7 +580,11 @@ function Status() {
       <div className="card">
         <div className="status-header-row" style={{ marginBottom: '1rem' }}>
           <h3 className="card-title">Pipeline Status and Containers</h3>
-          <button className="btn btn-secondary" onClick={loadContainers}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => loadContainers()}
+            disabled={!selectedServerReady}
+          >
             Refresh
           </button>
         </div>
@@ -639,17 +732,19 @@ function Status() {
               value={workingDirectory}
               onChange={(e) => setWorkingDirectory(e.target.value)}
               placeholder="Empty = default directory"
+              disabled={!selectedServerReady || !browserScopeIsCurrent}
               className="status-cli-input"
             />
             <button
               onClick={openFileBrowser}
+              disabled={!selectedServerReady || !browserScopeIsCurrent}
               style={{
                 padding: '0.5rem 1rem',
                 backgroundColor: '#28a745',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
-                cursor: 'pointer',
+                cursor: selectedServerReady && browserScopeIsCurrent ? 'pointer' : 'not-allowed',
                 fontSize: '0.9rem'
               }}
               title="Browse directories"
@@ -825,7 +920,7 @@ function Status() {
             onChange={(e) => setCliCommand(e.target.value)}
             onKeyDown={handleCliKeyPress}
             placeholder="Type command..."
-            disabled={cliLoading}
+            disabled={cliLoading || !selectedServerReady}
             className="status-cli-input"
             style={{
               fontFamily: 'Consolas, Monaco, "Courier New", monospace',
@@ -836,7 +931,7 @@ function Status() {
           <button
             className="btn btn-primary"
             onClick={executeCommand}
-            disabled={cliLoading || !cliCommand.trim()}
+            disabled={cliLoading || !selectedServerReady || !cliCommand.trim()}
             style={{ flexShrink: 0 }}
           >
             {cliLoading ? '⏳' : '▶'}
@@ -847,183 +942,90 @@ function Status() {
         </small>
       </div>
 
-      {/* File Browser Modal for Working Directory */}
-      {showFileBrowser && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2000
-        }} onClick={() => setShowFileBrowser(false)}>
-          <div style={{
-            backgroundColor: 'var(--card-bg)',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '600px',
-            maxHeight: '80vh',
-            width: '90%',
-            overflow: 'auto',
-            boxShadow: '0 4px 20px var(--shadow-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--text-primary)' }}>Select working directory</h3>
-              <button 
-                onClick={() => setShowFileBrowser(false)}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  fontSize: '1.5rem', 
-                  cursor: 'pointer',
-                  padding: '0 0.5rem',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                ×
-              </button>
-            </div>
-            
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ 
-                display: 'flex', 
-                gap: '0.5rem', 
-                alignItems: 'center',
-                marginBottom: '0.5rem'
-              }}>
-                <button 
-                  onClick={() => {
-                    const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
-                    loadFileBrowser(parentPath)
-                  }}
-                  disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
-                  style={{ padding: '0.25rem 0.5rem' }}
-                >
-                  ↑ Back
-                </button>
-                <input
-                  type="text"
-                  value={browserPath}
-                  onChange={(e) => setBrowserPath(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      loadFileBrowser(browserPath)
-                    }
-                  }}
-                  style={{ 
-                    flex: 1, 
-                    padding: '0.5rem',
-                    backgroundColor: 'var(--input-bg)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--input-border)',
-                    borderRadius: '4px'
-                  }}
-                  placeholder="Enter path..."
-                />
-                <button 
-                  onClick={() => loadFileBrowser(browserPath)}
-                  style={{ padding: '0.5rem 1rem' }}
-                >
-                  Go
-                </button>
-              </div>
-            </div>
+      <Modal
+        open={showFileBrowser && browserScopeIsCurrent}
+        onClose={closeFileBrowser}
+        title="Select working directory"
+      >
+        <div className="browser-toolbar">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              const parentPath = browserPath.split('/').slice(0, -1).join('/') || '/'
+              loadFileBrowser(parentPath)
+            }}
+            disabled={!browserPath || browserPath === '/' || browserPath.split('/').length <= 1}
+          >
+            ↑ Back
+          </button>
+          <input
+            type="text"
+            className="form-control"
+            value={browserPath}
+            onChange={event => setBrowserPath(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') loadFileBrowser(browserPath)
+            }}
+            aria-label="Working directory path"
+            placeholder="Enter path..."
+          />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => loadFileBrowser(browserPath)}
+          >
+            Go
+          </button>
+        </div>
 
-            {loadingBrowser ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
+        {loadingBrowser ? (
+          <div className="browser-status" role="status">Loading...</div>
+        ) : (
+          <div className="browser-list">
+            {browserItems.length === 0 ? (
+              <div className="browser-status">Empty directory</div>
             ) : (
-              <div style={{ 
-                border: '1px solid var(--border-color)', 
-                borderRadius: '4px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                backgroundColor: 'var(--bg-tertiary)'
-              }}>
-                {browserItems.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    Empty directory
-                  </div>
-                ) : (
-                  browserItems.map((item, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => {
-                        if (item.is_dir) {
-                          loadFileBrowser(item.path)
-                        }
-                      }}
-                      style={{
-                        padding: '0.75rem',
-                        cursor: item.is_dir ? 'pointer' : 'default',
-                        borderBottom: '1px solid var(--border-color)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        backgroundColor: item.is_dir 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)',
-                        opacity: item.is_dir ? 1 : 0.6,
-                        color: 'var(--text-primary)'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (item.is_dir) {
-                          e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = item.is_dir 
-                          ? (theme === 'dark' ? 'rgba(40, 167, 69, 0.2)' : '#e8f5e9')
-                          : 'var(--card-bg)'
-                      }}
-                    >
-                      <span style={{ fontSize: '1.2rem' }}>
-                        {item.is_dir ? '📁' : '📄'}
-                      </span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: item.is_dir ? 'bold' : 'normal' }}>
-                          {item.name}
-                        </div>
-                        {item.is_file && (
-                          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {(item.size / 1024).toFixed(2)} KB
-                          </div>
-                        )}
-                      </div>
-                      {item.is_dir && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            selectDirectoryFromBrowser(item.path)
-                          }}
-                          style={{
-                            padding: '0.25rem 0.5rem',
-                            backgroundColor: '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Select
-                        </button>
+              browserItems.map(item => (
+                <div
+                  key={item.path}
+                  className={`browser-directory-row${item.is_dir ? ' browser-item-highlighted' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="browser-directory-open"
+                    disabled={!item.is_dir}
+                    onClick={() => loadFileBrowser(item.path)}
+                    aria-label={item.is_dir ? `Open directory ${item.name}` : `File ${item.name}`}
+                  >
+                    <span className="browser-item-icon" aria-hidden="true">
+                      {item.is_dir ? '📁' : '📄'}
+                    </span>
+                    <span className="browser-item-content">
+                      <span className="browser-item-name">{item.name}</span>
+                      {item.is_file && (
+                        <span className="browser-item-meta">{(item.size / 1024).toFixed(2)} KB</span>
                       )}
-                    </div>
-                  ))
-                )}
-              </div>
+                    </span>
+                  </button>
+                  {item.is_dir && (
+                    <button
+                      type="button"
+                      className="btn btn-success browser-directory-select"
+                      onClick={() => selectDirectoryFromBrowser(item.path)}
+                      aria-label={`Select directory ${item.name}`}
+                    >
+                      Select
+                    </button>
+                  )}
+                </div>
+              ))
             )}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   )
 }
 
 export default Status
-

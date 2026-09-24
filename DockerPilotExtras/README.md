@@ -103,6 +103,7 @@ This will automatically:
 - **CI/CD Pipeline Generator** - Create pipelines for GitLab CI and Jenkins
 - **Pipeline Workbench** - Start from Node.js CI, Python CI or delivery profiles, inspect the ordered stages, and resolve configuration errors before generation
 - **Preview Freshness** - Editing the configuration marks the previous output as outdated; regenerate before saving or downloading it
+- **Saved Pipeline Library** - List, open and download allowlisted pipeline artifacts without executing or publishing them
 - **Container CI/CD Flow** - Build, test, scan, deploy, smoke and rollback-ready templates
 - **Environment Promotion** - Workflow dev → staging → prod
 - **Status and Monitoring** - Check Docker and DockerPilot status
@@ -243,7 +244,7 @@ curl -X POST http://localhost:5000/api/storage/bootstrap-local-postgres \
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - Node.js 18+ and npm
 - Docker 20.10+
 - DockerPilot installed and available in PATH
@@ -256,9 +257,9 @@ curl -X POST http://localhost:5000/api/storage/bootstrap-local-postgres \
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Configure environment variables (optional)
-cp .env.example .env
-# Edit .env if you need to change configuration
+# Optionally export configuration before starting the app
+export PORT=5000
+export CORS_ORIGINS="http://localhost:3000,http://localhost:5000"
 ```
 
 ### 2. Frontend (React)
@@ -295,6 +296,7 @@ dockerpilot --version
    - Stages (build, test, scan, deploy, smoke)
 4. Click **"Generate Pipeline"**
 5. View preview and save/download
+6. Use **"Saved Pipelines"** to refresh, open, or download artifacts previously saved on the Extras server
 
 ### Environment Promotion
 
@@ -379,6 +381,12 @@ DockerPilotExtras/
 ### Pipeline
 - `POST /api/pipeline/generate` - Generate pipeline
 - `POST /api/pipeline/save` - Save pipeline
+- `GET /api/pipeline/saved` - List saved pipeline artifacts and metadata
+- `GET /api/pipeline/saved/<filename>` - Read one saved pipeline artifact
+
+Saved artifacts are limited to `.gitlab-ci.yml`, `Jenkinsfile`, and `pipeline.yml`.
+The maximum UTF-8 encoded size is 1 MiB. Save responses expose only the artifact
+name in `path`, never the host's absolute filesystem path.
 
 ### Deployment
 - `GET /api/deployment/config` - Get configuration
@@ -396,6 +404,19 @@ DockerPilotExtras/
 - `GET /api/preflight` - Setup preflight checks (Python deps, Node/npm, Docker, DockerPilot)
 - `GET /api/containers` - Container list
 - `GET /api/health` - Health check
+
+### Container migrations
+
+- `POST /api/containers/migrate` - Legacy synchronous migration endpoint
+- `POST /api/containers/migrations` - Queue an asynchronous migration (`202`)
+- `GET /api/containers/migrations` - List active asynchronous migrations
+- `GET /api/containers/migrations/<migration_id>` - Read one migration job
+- `DELETE /api/containers/migrations/<migration_id>` - Request cooperative cancellation
+
+Asynchronous migration state and the bounded queue are process-local and kept
+in memory. Jobs do not survive a backend restart and are not shared between
+multiple WSGI workers. Run a single Extras backend process when using these
+endpoints; a multi-process deployment requires a shared durable queue/store.
 
 ### Storage
 - `GET /api/storage/status` - Active storage backend and health/schema info
@@ -435,7 +456,8 @@ dockerpilot --version
 
 ### CORS Errors
 
-Backend has CORS enabled by default for all sources. In production, configure `CORS_ORIGINS` in `.env`.
+Backend allows the local development origins on ports 3000 and 5000 by default. In production,
+set `CORS_ORIGINS` in the process environment to the exact HTTPS origins that host the web panel.
 
 ## Security
 
@@ -447,34 +469,39 @@ Backend has CORS enabled by default for all sources. In production, configure `C
 
 ### Environment Variables
 
-Create `.env` file (optional):
+Set configuration in the shell or service environment before starting Extras. The application does
+not load a `.env` file automatically. For Linux/macOS, for example:
 ```bash
-PORT=5000
-FLASK_ENV=development
-SECRET_KEY=your-secret-key-here
-CORS_ORIGINS=http://localhost:3000,http://localhost:5000
-SESSION_COOKIE_SECURE=false
+export PORT=5000
+export FLASK_ENV=development
+export SECRET_KEY=your-secret-key-here
+export CORS_ORIGINS=http://localhost:3000,http://localhost:5000
+export SESSION_COOKIE_SECURE=false
 
 # Web auth (optional, disabled by default)
-WEB_AUTH_ENABLED=false
-WEB_AUTH_USERNAME=admin
-WEB_AUTH_PASSWORD=change-me
+export WEB_AUTH_ENABLED=false
+export WEB_AUTH_USERNAME=admin
+export WEB_AUTH_PASSWORD=change-me
 # Prefer PBKDF2 hash in production:
-# WEB_AUTH_PASSWORD_HASH=pbkdf2_sha256$600000$your-salt$your-hex-digest
+# export WEB_AUTH_PASSWORD_HASH='pbkdf2_sha256$600000$your-salt$your-hex-digest'
 
 # MFA TOTP (optional)
-WEB_AUTH_TOTP_SECRET=
+export WEB_AUTH_TOTP_SECRET=
 
 # Session inactivity timeout in minutes
-APP_SESSION_IDLE_MINUTES=45
+export APP_SESSION_IDLE_MINUTES=45
 
 # Elevation token TTL in seconds (for privileged operations)
-ELEVATION_TOKEN_TTL_SECONDS=120
+export ELEVATION_TOKEN_TTL_SECONDS=120
 ```
+
+In PowerShell, set the same values with `$env:NAME = "value"`. For persistent deployments, define
+them in the systemd unit, container configuration, or process manager that launches Extras.
 
 ## API Documentation
 
-API documentation is available via `/api/health` endpoint and source code in `backend/app.py`.
+The endpoint reference is maintained above. `/api/health` is a health check, while request and
+response implementations live in `backend/api.py` and `backend/resources/`.
 
 ## Support
 

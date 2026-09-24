@@ -469,6 +469,7 @@ def test_dozeyguard_stderr_sentinel(tmp_path):
 def test_frontend_source_has_preview_only_guards():
     page = ROOT / "DockerPilotExtras" / "frontend" / "src" / "pages" / "SecureDeploy.jsx"
     app = ROOT / "DockerPilotExtras" / "frontend" / "src" / "App.jsx"
+    navigation = ROOT / "DockerPilotExtras" / "frontend" / "src" / "utils" / "navigation.mjs"
     api = ROOT / "DockerPilotExtras" / "frontend" / "src" / "services" / "api.js"
     assert page.exists()
     text = page.read_text(encoding="utf-8")
@@ -488,7 +489,8 @@ def test_frontend_source_has_preview_only_guards():
     assert "Save draft" in text
     assert "Generate preview" in text
     assert "Approve plan" in text or "PREVIEW ONLY" in text
-    assert "Secure Deploy" in app.read_text(encoding="utf-8")
+    assert navigation.exists()
+    assert "Secure Deploy" in navigation.read_text(encoding="utf-8")
     assert "/secure-deploy" in app.read_text(encoding="utf-8")
     api_text = api.read_text(encoding="utf-8")
     assert "localStorage" not in api_text or "secureDeploy" not in api_text.lower()

@@ -2,9 +2,103 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
+import stat
 import subprocess
+import tempfile
+from datetime import timezone
 import yaml
+
+
+MAX_PIPELINE_BYTES = 1024 * 1024
+PIPELINE_TYPES = {
+    ".gitlab-ci.yml": "gitlab",
+    "Jenkinsfile": "jenkins",
+    "pipeline.yml": "generic",
+}
+
+
+class PipelineTooLargeError(ValueError):
+    """Raised when a stored pipeline exceeds the read/write limit."""
+
+
+def _pipeline_root(app) -> Path:
+    root = Path(app.config["PIPELINES_DIR"])
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def _pipeline_path(app, filename: str) -> Path:
+    if not isinstance(filename, str) or filename not in PIPELINE_TYPES:
+        raise ValueError("Unsupported pipeline filename")
+    path = _pipeline_root(app) / filename
+    if path.is_symlink():
+        raise ValueError("Pipeline symlinks are not supported")
+    return path
+
+
+def _read_pipeline_bytes(path: Path) -> tuple[bytes, os.stat_result]:
+    if path.is_symlink():
+        raise FileNotFoundError(path.name)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    fd = os.open(path, flags)
+    try:
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise FileNotFoundError(path.name)
+        if file_stat.st_size > MAX_PIPELINE_BYTES:
+            raise PipelineTooLargeError(path.name)
+        chunks = []
+        remaining = MAX_PIPELINE_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > MAX_PIPELINE_BYTES:
+            raise PipelineTooLargeError(path.name)
+        return content, file_stat
+    finally:
+        os.close(fd)
+
+
+def _pipeline_metadata(filename: str, content: bytes, file_stat, datetime_cls) -> dict:
+    modified_at = datetime_cls.fromtimestamp(file_stat.st_mtime, tz=timezone.utc)
+    return {
+        "filename": filename,
+        "type": PIPELINE_TYPES[filename],
+        "size_bytes": len(content),
+        "modified_at": modified_at.isoformat().replace("+00:00", "Z"),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _write_pipeline(path: Path, content: str) -> None:
+    encoded = content.encode("utf-8")
+    if len(encoded) > MAX_PIPELINE_BYTES:
+        raise PipelineTooLargeError(path.name)
+    temporary_path = None
+    try:
+        fd, temporary_name = tempfile.mkstemp(prefix=".pipeline-", dir=path.parent)
+        temporary_path = Path(temporary_name)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def create_pipeline_resources(
@@ -130,24 +224,65 @@ def create_pipeline_resources(
 
         def post(self):
             try:
-                data = request.get_json()
+                data = request.get_json(silent=True)
+                if not isinstance(data, dict):
+                    return {"error": "Provide a JSON object."}, 400
                 content = data.get("content")
                 filename = data.get("filename", "pipeline.yml")
 
-                if not content:
+                if not isinstance(content, str) or not content:
                     return {"error": "No content provided"}, 400
 
-                filepath = app.config["PIPELINES_DIR"] / filename
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(content)
+                try:
+                    filepath = _pipeline_path(app, filename)
+                    _write_pipeline(filepath, content)
+                except PipelineTooLargeError:
+                    return {"error": "Pipeline content exceeds the 1 MiB limit."}, 413
+                except ValueError as exc:
+                    return {"error": str(exc)}, 400
 
                 return {
                     "success": True,
-                    "message": f"Pipeline saved to {filepath}",
-                    "path": str(filepath),
+                    "message": f"Pipeline saved as {filename}",
+                    "filename": filename,
+                    "path": filename,
                 }
             except Exception as exc:
                 return {"error": str(exc)}, 500
+
+    class PipelineLibrary(Resource):
+        """List and read saved pipeline artifacts without executing them."""
+
+        def get(self, filename=None):
+            if filename is None:
+                pipelines = []
+                for candidate_name in sorted(PIPELINE_TYPES):
+                    try:
+                        path = _pipeline_path(app, candidate_name)
+                        content, file_stat = _read_pipeline_bytes(path)
+                    except (FileNotFoundError, OSError, PipelineTooLargeError, ValueError):
+                        continue
+                    pipelines.append(
+                        _pipeline_metadata(candidate_name, content, file_stat, datetime_cls)
+                    )
+                return {"success": True, "pipelines": pipelines}
+
+            try:
+                path = _pipeline_path(app, filename)
+                content, file_stat = _read_pipeline_bytes(path)
+            except PipelineTooLargeError:
+                return {"error": "Pipeline content exceeds the 1 MiB limit."}, 413
+            except (FileNotFoundError, OSError, ValueError):
+                return {"error": "Pipeline not found."}, 404
+
+            try:
+                decoded = content.decode("utf-8")
+            except UnicodeDecodeError:
+                return {"error": "Pipeline is not valid UTF-8."}, 422
+
+            pipeline = _pipeline_metadata(filename, content, file_stat, datetime_cls)
+            pipeline["content"] = decoded
+            return {"success": True, "pipeline": pipeline}
 
     class PipelineDeploymentConfig(Resource):
         """Generate deployment config for environments from pipeline config."""
@@ -271,6 +406,15 @@ def create_pipeline_resources(
                 else:
                     return {"error": "Invalid pipeline type"}, 400
 
+                try:
+                    pipeline_path = _pipeline_path(app, filename)
+                    if len(pipeline_content.encode("utf-8")) > MAX_PIPELINE_BYTES:
+                        raise PipelineTooLargeError(filename)
+                except PipelineTooLargeError:
+                    return {"error": "Pipeline content exceeds the 1 MiB limit."}, 413
+                except ValueError as exc:
+                    return {"error": str(exc)}, 400
+
                 base_config = data.get(
                     "base_deployment_config",
                     {
@@ -301,16 +445,14 @@ def create_pipeline_resources(
                 default_deployment = deployment_configs.get("dev", deployment_configs.get("prod", {}))
                 save_deployment_config(project_name, default_deployment, image_tag=docker_image)
 
-                pipeline_path = app.config["PIPELINES_DIR"] / filename
-                with open(pipeline_path, "w", encoding="utf-8") as f:
-                    f.write(pipeline_content)
+                _write_pipeline(pipeline_path, pipeline_content)
 
                 return {
                     "success": True,
                     "pipeline": {
                         "content": pipeline_content,
                         "filename": filename,
-                        "path": str(pipeline_path),
+                        "path": filename,
                     },
                     "deployment_configs": deployment_configs,
                     "environments": environments,
@@ -498,4 +640,5 @@ def create_pipeline_resources(
         DeploymentConfig,
         DeploymentExecute,
         DeploymentHistory,
+        PipelineLibrary,
     )

@@ -38,7 +38,7 @@ cd DockerPilot && install.bat extras
 - leaves DockerPilotExtras frontend install as a clear warning if Node.js/npm are missing
 
 **Requirements for full stack install:**
-- Python 3.9+
+- Python 3.10+
 - Docker 20.10+
 - Node.js 18+ and npm for the DockerPilotExtras frontend
 
@@ -64,7 +64,7 @@ cd DockerPilot && install.bat
 ```
 
 **What the installer does:**
-- Checks Python 3.9+ and Docker
+- Checks Python 3.10+ and Docker
 - Installs Docker Pilot in a **virtual environment** (default), so it works on Ubuntu/Debian 24.04+ and other distros with [PEP 668](https://peps.python.org/pep-0668/) (no "externally-managed-environment" error)
 - Installs the TUI dependency set too, so `dockerpilot tui` is available after script-based install
 - Puts `dockerpilot` in `~/.local/bin` (ensure it's in your `PATH`)
@@ -77,7 +77,7 @@ cd DockerPilot && install.bat
 - `./install_everything.sh` — wrapper for `./install.sh --extras`
 
 **Prerequisites:**
-- Python 3.9+
+- Python 3.10+
 - Docker 20.10+ (with daemon running)
 - On Debian/Ubuntu: `sudo apt install python3-venv` if the venv step fails
 
@@ -114,7 +114,7 @@ pip install -e .[mcp]   # MCP server (AI assistants / stdio tools)
 
 DockerPilot can run as an MCP server so AI assistants can safely inspect DockerPilot/Docker state and perform controlled container actions.
 
-See `docs/mcp.md`.
+See the [MCP integration guide](docs/mcp.md).
 
 **Verify installation:**
 ```bash
@@ -133,7 +133,7 @@ chmod +x setup_extras.sh && ./setup_extras.sh
 ## Repository Layout
 
 - `src/dockerpilot/` - core CLI package
-- `DockerPilotExtras/` - optional web panel built on top of the CLI
+- [`DockerPilotExtras/`](DockerPilotExtras/README.md) - optional CI/CD and operations web panel built on top of the CLI
 - `docs/` - user-facing guides and reference material
 - `scripts/` - maintainer and release helpers
 - `tools/` - optional standalone tools
@@ -171,6 +171,7 @@ chmod +x setup_extras.sh && ./setup_extras.sh
 
 ### DevOps Integration
 - GitHub Actions, GitLab CI, and Jenkins pipeline generation
+- Optional DockerPilotExtras workbench with editable CI profiles, validated previews, and a read-only saved pipeline library
 - Environment promotion (dev -> staging -> prod)
 - Integration testing framework
 - Monitoring and alerting system
@@ -207,6 +208,8 @@ Use the mouse to:
 - click through command groups and subcommands
 - fill arguments in a form instead of retyping flags
 - pick existing containers and images from live Docker-backed lists for target-based commands
+- keep per-command form drafts and cached target choices while navigating
+- serialize refresh and run actions so rapid input cannot mix command state
 - run the generated command directly from the TUI
 
 ### Usage
@@ -222,7 +225,7 @@ dockerpilot tui
 
 # CLI commands
 dockerpilot container list --all
-dockerpilot monitor myapp --duration 300
+dockerpilot monitor dashboard myapp --duration 300
 dockerpilot deploy config deployment.yml --type rolling
 
 # Get help
@@ -333,12 +336,12 @@ dockerpilot container remove-image myapp:latest --force
 
 Monitor all running containers:
 ```bash
-dockerpilot monitor --duration 300
+dockerpilot monitor dashboard --duration 300
 ```
 
 Monitor specific containers:
 ```bash
-dockerpilot monitor webapp database cache --duration 600
+dockerpilot monitor dashboard webapp database cache --duration 600
 ```
 
 The dashboard displays:
@@ -402,6 +405,16 @@ dockerpilot pipeline create --type gitlab
 ```bash
 dockerpilot pipeline create --type jenkins
 ```
+
+### DockerPilotExtras Pipeline Workbench
+
+The optional [DockerPilotExtras web panel](DockerPilotExtras/README.md) provides editable Node.js CI,
+Python CI, and delivery profiles for GitLab CI and Jenkins. It validates the configuration before
+generation and marks an older preview as stale when the form changes.
+
+The **Saved Pipelines** panel lists, opens, and downloads the allowlisted artifacts
+`.gitlab-ci.yml`, `Jenkinsfile`, and `pipeline.yml`. Saving stores the artifact in the configured
+Extras pipeline directory; it does not execute a pipeline or push anything to a source repository.
 
 ### Environment Promotion
 
@@ -592,7 +605,7 @@ dockerpilot validate
 ```
 
 Checks:
-- Python version (3.9+)
+- Python version (3.10+)
 - Docker connectivity
 - Required Python modules
 - Disk space
@@ -618,6 +631,9 @@ Detailed documentation for specific features:
 - **[Sudo Setup](docs/guides/SUDO_SETUP.md)** - Configuring permissions for backups
 - **[Sudo Passwordless Setup](docs/guides/SUDO_PASSWORDLESS_SETUP.md)** - Running backup flows without interactive sudo
 - **[Health Checks Configuration](docs/guides/HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
+- **[DockerPilotExtras Web Panel](DockerPilotExtras/README.md)** - CI/CD workbench, environments, status, storage, and API reference
+- **[MCP Integration](docs/mcp.md)** - Connecting DockerPilot to AI assistants and stdio tools
+- **[Secure Deploy Threat Model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md)** - Security boundaries for privileged deployment operations
 - **[Network Searcher Tool](tools/searcher/README.md)** - Optional packet sniffer helper
 
 ## Best Practices
@@ -648,7 +664,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
 
 ---
 
-**Version**: Enhanced v3  
-**Python**: 3.9+  
-**Docker**: 20.10+  
-**Components**: CLI package and optional `DockerPilotExtras` web panel
+- **Version**: 0.9.0-pre.2
+- **Python**: 3.10+
+- **Docker**: 20.10+
+- **Components**: CLI package and optional `DockerPilotExtras` web panel

@@ -2,9 +2,36 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+
+from backend.security import redact_sensitive_text as _redact_sensitive_text
+from backend.security import safe_error_message as _safe_error_message
+from backend.services.migration_runner import MigrationRunner, MigrationSpec
+
+
+_MAX_SAFE_ERROR_LENGTH = 500
+
+
+def _classify_container_start_error(value, source_arch=None, target_arch=None):
+    """Keep actionable Docker errors without returning raw command output."""
+    safe_text = _redact_sensitive_text(value)
+    lowered = safe_text.lower()
+    if 'platform' in lowered and (
+        'does not match' in lowered or 'no specific platform' in lowered or 'exec format error' in lowered
+    ):
+        return (
+            "Architecture mismatch detected. "
+            f"The image platform ({source_arch or 'unknown'}) does not match "
+            f"the target server ({target_arch or 'unknown'})."
+        )
+    if 'port is already allocated' in lowered or (
+        'bind' in lowered and ('failed' in lowered or 'address already in use' in lowered)
+    ):
+        return "Port conflict detected. One or more target ports are already in use."
+    return "Docker run command failed"
 
 
 def create_migration_resource(
@@ -32,8 +59,12 @@ def create_migration_resource(
     class ContainerMigrate(Resource):
         """Migrate container from one server to another"""
         def post(self):
+            spec = MigrationSpec.from_payload(request.get_json())
+            return self.migration_runner.run_inline(spec).to_response()
+
+        def execute_migration(self, data, *, operation_context=None):
+            """Run the legacy migration without reading Flask request state."""
             try:
-                data = request.get_json()
                 container_name = data.get('container_name')
                 source_server_id = data.get('source_server_id', 'local')
                 target_server_id = data.get('target_server_id')
@@ -47,23 +78,31 @@ def create_migration_resource(
                     return {'error': 'Source and target servers must be different'}, 400
                 
                 # Initialize progress tracking
-                _migration_progress[container_name] = {
-                    'stage': 'initializing',
-                    'progress': 0,
-                    'message': f'Inicjalizacja migracji {container_name}...',
-                    'timestamp': datetime.now().isoformat(),
-                    'logs': [f"[{datetime.now().strftime('%H:%M:%S')}] Initializing migration for {container_name}"],
-                }
-                _migration_cancel_flags[container_name] = False
+                if operation_context is None:
+                    _migration_progress[container_name] = {
+                        'stage': 'initializing',
+                        'progress': 0,
+                        'message': f'Inicjalizacja migracji {container_name}...',
+                        'timestamp': datetime.now().isoformat(),
+                        'logs': [f"[{datetime.now().strftime('%H:%M:%S')}] Initializing migration for {container_name}"],
+                    }
+                    _migration_cancel_flags[container_name] = False
+
+                def cancellation_requested():
+                    if operation_context is not None:
+                        return operation_context.cancelled()
+                    return _migration_cancel_flags.get(container_name, False)
                 
                 def check_cancel():
                     """Check if migration was cancelled"""
-                    if _migration_cancel_flags.get(container_name, False):
+                    if cancellation_requested():
                         raise Exception('Migration was cancelled by user')
                 
                 def update_progress(stage, progress, message):
                     """Update migration progress"""
-                    if not _migration_cancel_flags.get(container_name, False):
+                    if operation_context is not None:
+                        operation_context.update_progress(stage, progress, message)
+                    elif not _migration_cancel_flags.get(container_name, False):
                         prev = _migration_progress.get(container_name, {})
                         logs = list(prev.get('logs', []))
                         line = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
@@ -134,9 +173,14 @@ def create_migration_resource(
                         # Extract full configuration
                         container_config = self._extract_container_config(container)
                     except Exception as e:
-                        app.logger.error(f"Error extracting container config for {container_name}: {e}", exc_info=True)
-                        update_progress('failed', 0, f'Error extracting container configuration: {str(e)}')
-                        return {'error': f'Failed to get container from source: {str(e)}'}, 500
+                        safe_error = _redact_sensitive_text(e)
+                        app.logger.error(
+                            "Error extracting container config for %s: %s",
+                            container_name,
+                            _safe_error_message(e),
+                        )
+                        update_progress('failed', 0, f'Error extracting container configuration: {safe_error}')
+                        return {'error': f'Failed to get container from source: {safe_error}'}, 500
                 else:
                     # Get from remote server via SSH
                     try:
@@ -145,17 +189,19 @@ def create_migration_resource(
                             source_server,
                             f"inspect {container_name} --format '{{{{json .}}}}'"
                         )
-                        import json
                         # Clean up inspect output - remove any trailing whitespace/newlines
                         inspect_output = inspect_output.strip()
                         # Try to parse JSON
                         try:
                             attrs = json.loads(inspect_output)
                         except json.JSONDecodeError as e:
-                            app.logger.error(f"Failed to parse docker inspect JSON for {container_name}")
-                            app.logger.error(f"Inspect output (first 1000 chars): {inspect_output[:1000]}")
-                            update_progress('failed', 0, f'Error parsing container configuration: {str(e)}')
-                            raise Exception(f"Failed to parse container inspect output as JSON: {str(e)}")
+                            app.logger.error(
+                                "Failed to parse docker inspect JSON for %s (output_length=%d)",
+                                container_name,
+                                len(inspect_output),
+                            )
+                            update_progress('failed', 0, f'Error parsing container configuration: {_redact_sensitive_text(e)}')
+                            raise Exception(f"Failed to parse container inspect output as JSON: {_redact_sensitive_text(e)}")
                         
                         # Extract image tag
                         image_tag = attrs.get('Config', {}).get('Image', '')
@@ -167,14 +213,18 @@ def create_migration_resource(
                         # Extract configuration from inspect output
                         container_config = self._extract_container_config_from_inspect(attrs)
                     except json.JSONDecodeError as e:
-                        app.logger.error(f"JSON decode error for container {container_name}: {e}")
-                        app.logger.error(f"Inspect output: {inspect_output[:500]}")  # Log first 500 chars
-                        update_progress('failed', 0, f'Błąd podczas parsowania konfiguracji kontenera: {str(e)}')
-                        return {'error': f'Failed to parse container inspect output: {str(e)}'}, 500
+                        app.logger.error("JSON decode error for container %s: %s", container_name, _safe_error_message(e))
+                        update_progress('failed', 0, f'Błąd podczas parsowania konfiguracji kontenera: {_redact_sensitive_text(e)}')
+                        return {'error': f'Failed to parse container inspect output: {_redact_sensitive_text(e)}'}, 500
                     except Exception as e:
-                        app.logger.error(f"Error extracting container config from remote for {container_name}: {e}", exc_info=True)
-                        update_progress('failed', 0, f'Error extracting container configuration: {str(e)}')
-                        return {'error': f'Failed to get container from source server: {str(e)}'}, 500
+                        safe_error = _redact_sensitive_text(e)
+                        app.logger.error(
+                            "Error extracting container config from remote for %s: %s",
+                            container_name,
+                            _safe_error_message(e),
+                        )
+                        update_progress('failed', 0, f'Error extracting container configuration: {safe_error}')
+                        return {'error': f'Failed to get container from source server: {safe_error}'}, 500
     
                 if container_config and container_config.get('skipped_bind_mounts'):
                     skipped = container_config['skipped_bind_mounts']
@@ -219,7 +269,10 @@ def create_migration_resource(
                     )
                     app.logger.info(f"Saved deployment config to: {config_path}")
                 except Exception as e:
-                    app.logger.warning(f"Failed to save deployment config: {e}. Continuing with migration...")
+                    app.logger.warning(
+                        "Failed to save deployment config: %s. Continuing with migration...",
+                        _safe_error_message(e),
+                    )
                     # Don't fail migration if config save fails
                 
                 # Step 2: Export image from source
@@ -272,7 +325,7 @@ def create_migration_resource(
                                 tagged_image = pilot.client.images.get(export_image_tag)
                                 app.logger.info(f"Tagged via docker command. Tags: {tagged_image.tags}")
                         except Exception as e:
-                            app.logger.error(f"Failed to verify tagged image: {e}")
+                            app.logger.error("Failed to verify tagged image: %s", _safe_error_message(e))
                             # Try docker tag command as fallback
                             app.logger.info(f"Trying docker tag command as fallback...")
                             result = subprocess.run(
@@ -295,7 +348,12 @@ def create_migration_resource(
                             timeout=300
                         )
                         if result.returncode != 0:
-                            app.logger.error(f"docker save failed: stdout={result.stdout}, stderr={result.stderr}")
+                            app.logger.error(
+                                "docker save failed (exit=%d, stdout_length=%d, stderr_length=%d)",
+                                result.returncode,
+                                len(result.stdout or ''),
+                                len(result.stderr or ''),
+                            )
                             # Try with image ID as fallback
                             app.logger.info(f"Trying docker save with image ID as fallback...")
                             result = subprocess.run(
@@ -310,8 +368,8 @@ def create_migration_resource(
                         
                         app.logger.info(f"Image saved successfully. File size: {os.path.getsize(image_export_path.name)} bytes")
                     except Exception as e:
-                        error_msg = f'Failed to export image: {str(e)}'
-                        app.logger.error(f"Migration error during image export (local): {error_msg}", exc_info=True)
+                        error_msg = f'Failed to export image: {_redact_sensitive_text(e)}'
+                        app.logger.error("Migration error during local image export: %s", _safe_error_message(e))
                         if image_export_path and os.path.exists(image_export_path.name):
                             os.unlink(image_export_path.name)
                         update_progress('failed', 0, error_msg)
@@ -382,7 +440,7 @@ def create_migration_resource(
                         # Add callback to check for cancellation during download
                         def download_progress(transferred, total):
                             # Check if migration was cancelled during download
-                            if _migration_cancel_flags.get(container_name, False):
+                            if cancellation_requested():
                                 app.logger.info(f"Migration cancelled during download at {transferred / (1024*1024):.2f} MB")
                                 raise Exception('Migration was cancelled by user')
                             if total > 0:
@@ -407,8 +465,8 @@ def create_migration_resource(
                         # Clean up remote tar
                         execute_command_via_ssh(source_server, f"rm -f {remote_tar_path}", check_exit_status=False)
                     except Exception as e:
-                        error_msg = f'Failed to export image from remote: {str(e)}'
-                        app.logger.error(f"Migration error during image export (remote): {error_msg}", exc_info=True)
+                        error_msg = f'Failed to export image from remote: {_redact_sensitive_text(e)}'
+                        app.logger.error("Migration error during remote image export: %s", _safe_error_message(e))
                         if image_export_path and os.path.exists(image_export_path.name):
                             os.unlink(image_export_path.name)
                         update_progress('failed', 0, error_msg)
@@ -436,9 +494,11 @@ def create_migration_resource(
                                 
                                 # docker load outputs to stderr, so combine both
                                 load_output = (result.stdout or '') + (result.stderr or '')
-                                app.logger.info(f"Image load stdout: {result.stdout}")
-                                app.logger.info(f"Image load stderr: {result.stderr}")
-                                app.logger.info(f"Image load combined output: {load_output}")
+                                app.logger.debug(
+                                    "Local image load completed (stdout_length=%d, stderr_length=%d)",
+                                    len(result.stdout or ''),
+                                    len(result.stderr or ''),
+                                )
                                 
                                 # Verify image was loaded with correct tag
                                 if 'Loaded image:' in load_output:
@@ -465,8 +525,8 @@ def create_migration_resource(
                             else:
                                 raise Exception(f"Image tar file not found: {image_export_path.name if image_export_path else 'None'}")
                         except Exception as e:
-                            error_msg = f'Failed to load image on local server: {str(e)}'
-                            app.logger.error(f"Migration error during image loading: {error_msg}", exc_info=True)
+                            error_msg = f'Failed to load image on local server: {_redact_sensitive_text(e)}'
+                            app.logger.error("Migration error during local image loading: %s", _safe_error_message(e))
                             update_progress('failed', 0, error_msg)
                             return {'error': error_msg}, 500
                     else:
@@ -489,7 +549,10 @@ def create_migration_resource(
                                 raise Exception(f"Failed to load image: {result.stderr}")
                             
                             load_output = result.stdout
-                            app.logger.info(f"Image load output: {load_output}")
+                            app.logger.debug(
+                                "Local image load completed (stdout_length=%d)",
+                                len(load_output or ''),
+                            )
                             
                             # Verify image was loaded
                             if 'Loaded image:' in load_output:
@@ -502,8 +565,8 @@ def create_migration_resource(
                                                 export_image_tag = loaded_tag
                                             break
                         except Exception as e:
-                            error_msg = f'Failed to load image from remote export: {str(e)}'
-                            app.logger.error(f"Migration error during image load: {error_msg}", exc_info=True)
+                            error_msg = f'Failed to load image from remote export: {_redact_sensitive_text(e)}'
+                            app.logger.error("Migration error during remote image loading: %s", _safe_error_message(e))
                             update_progress('failed', 0, error_msg)
                             return {'error': error_msg}, 500
                 else:
@@ -550,9 +613,14 @@ def create_migration_resource(
                             else:
                                 raise Exception(f"Unsupported auth_type: {target_server.get('auth_type')}")
                         except Exception as e:
-                            app.logger.error(f"Failed to connect to target server {target_server.get('hostname')}: {e}", exc_info=True)
-                            update_progress('failed', 0, f'Error connecting to target server: {str(e)}')
-                            raise Exception(f"Failed to connect to target server: {str(e)}")
+                            app.logger.error(
+                                "Failed to connect to target server %s: %s",
+                                target_server.get('hostname'),
+                                _safe_error_message(e),
+                            )
+                            safe_error = _redact_sensitive_text(e)
+                            update_progress('failed', 0, f'Error connecting to target server: {safe_error}')
+                            raise Exception(f"Failed to connect to target server: {safe_error}")
                         
                         # Upload image tar via SFTP
                         remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
@@ -578,7 +646,10 @@ def create_migration_resource(
                         except ValueError:
                             app.logger.warning("Could not parse available disk space, continuing anyway...")
                         except Exception as e:
-                            app.logger.warning(f"Could not check disk space: {e}, continuing anyway...")
+                            app.logger.warning(
+                                "Could not check disk space: %s; continuing anyway",
+                                _safe_error_message(e),
+                            )
                         
                         # Check write permissions in /tmp
                         try:
@@ -587,9 +658,13 @@ def create_migration_resource(
                                 raise Exception("Cannot write to /tmp directory on target server")
                             app.logger.info("Write permissions verified in /tmp")
                         except Exception as e:
-                            app.logger.error(f"Cannot write to /tmp on target server: {e}")
-                            update_progress('failed', 0, f'No write permissions to /tmp on target server: {str(e)}')
-                            raise Exception(f"Cannot write to /tmp directory on target server: {str(e)}")
+                            app.logger.error(
+                                "Cannot write to /tmp on target server: %s",
+                                _safe_error_message(e),
+                            )
+                            safe_error = _redact_sensitive_text(e)
+                            update_progress('failed', 0, f'No write permissions to /tmp on target server: {safe_error}')
+                            raise Exception(f"Cannot write to /tmp directory on target server: {safe_error}")
                         
                         try:
                             sftp = ssh.open_sftp()
@@ -599,7 +674,7 @@ def create_migration_resource(
                             def upload_progress(transferred, total):
                                 nonlocal last_logged_percent
                                 # Check if migration was cancelled during upload
-                                if _migration_cancel_flags.get(container_name, False):
+                                if cancellation_requested():
                                     app.logger.info(f"Migration cancelled during upload at {transferred / (1024*1024):.2f} MB")
                                     raise Exception('Migration was cancelled by user')
                                 
@@ -635,12 +710,17 @@ def create_migration_resource(
                                         raise Exception(f"File size mismatch. Local: {file_size} bytes, Remote: {remote_stat.st_size} bytes")
                                     app.logger.info(f"File verification successful. Size: {remote_stat.st_size} bytes")
                                 except Exception as verify_error:
-                                    app.logger.error(f"File verification failed: {verify_error}")
-                                    raise Exception(f"Uploaded file verification failed: {str(verify_error)}")
+                                    app.logger.error(
+                                        "File verification failed: %s",
+                                        _safe_error_message(verify_error),
+                                    )
+                                    raise Exception(
+                                        f"Uploaded file verification failed: {_redact_sensitive_text(verify_error)}"
+                                    )
                             except IOError as sftp_error:
                                 # SFTP specific error - try to get more details
-                                error_msg = str(sftp_error)
-                                app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
+                                error_msg = _redact_sensitive_text(sftp_error)
+                                app.logger.error("SFTP put failed: %s", _safe_error_message(sftp_error))
                                 
                                 # Check if it's a disk space issue
                                 if 'No space left' in error_msg or 'disk full' in error_msg.lower():
@@ -653,14 +733,20 @@ def create_migration_resource(
                                 # Generic SFTP error
                                 raise Exception(f"SFTP upload failed: {error_msg}. This may be due to insufficient disk space, permission issues, or network problems.")
                             except Exception as sftp_error:
-                                app.logger.error(f"SFTP put failed: {sftp_error}", exc_info=True)
-                                raise Exception(f"SFTP upload failed: {str(sftp_error)}")
+                                app.logger.error("SFTP put failed: %s", _safe_error_message(sftp_error))
+                                raise Exception(
+                                    f"SFTP upload failed: {_redact_sensitive_text(sftp_error)}"
+                                )
                             finally:
                                 sftp.close()
                         except Exception as e:
-                            app.logger.error(f"Failed to upload image file via SFTP: {e}", exc_info=True)
-                            update_progress('failed', 0, f'Error transferring image: {str(e)}')
-                            raise Exception(f"Failed to upload image file: {str(e)}")
+                            app.logger.error(
+                                "Failed to upload image file via SFTP: %s",
+                                _safe_error_message(e),
+                            )
+                            safe_error = _redact_sensitive_text(e)
+                            update_progress('failed', 0, f'Error transferring image: {safe_error}')
+                            raise Exception(f"Failed to upload image file: {safe_error}")
                         finally:
                             ssh.close()
                         
@@ -678,9 +764,11 @@ def create_migration_resource(
                         )
                         # docker load outputs to stderr, so combine both
                         combined_output = (load_output or '') + (load_stderr or '')
-                        app.logger.info(f"Image load stdout: {load_output}")
-                        app.logger.info(f"Image load stderr: {load_stderr}")
-                        app.logger.info(f"Image load combined output: {combined_output}")
+                        app.logger.debug(
+                            "Remote image load completed (stdout_length=%d, stderr_length=%d)",
+                            len(load_output or ''),
+                            len(load_stderr or ''),
+                        )
                         
                         # Use combined output for parsing
                         load_output = combined_output
@@ -693,7 +781,10 @@ def create_migration_resource(
                                 target_server,
                                 "images --format '{{.Repository}}:{{.Tag}}' --filter 'dangling=false'"
                             )
-                            app.logger.info(f"Images on target server after load: {images_after_load}")
+                            app.logger.debug(
+                                "Checked target image inventory after load (output_length=%d)",
+                                len(images_after_load or ''),
+                            )
                         
                         # After load, verify the image tag exists
                         # docker load preserves tags, so export_image_tag should be available
@@ -730,7 +821,11 @@ def create_migration_resource(
                                             app.logger.warning(f"No matching tag found, using first loaded tag: {loaded_tags[0]}")
                                             export_image_tag = loaded_tags[0]
                             else:
-                                app.logger.warning(f"No 'Loaded image:' found in docker load output: {load_output}")
+                                app.logger.warning(
+                                    "No 'Loaded image:' marker found in docker load output "
+                                    "(output_length=%d)",
+                                    len(load_output or ''),
+                                )
                             
                             # Verify image exists on target with exact tag match
                             app.logger.info(f"Verifying image {export_image_tag} exists on target server...")
@@ -801,7 +896,10 @@ def create_migration_resource(
                                                             image_found = True
                                                             break
                                                     except Exception as retag_error:
-                                                        app.logger.warning(f"Failed to retag image: {retag_error}")
+                                                        app.logger.warning(
+                                                            "Failed to retag image: %s",
+                                                            _safe_error_message(retag_error),
+                                                        )
                                                         continue
                                         
                                         if image_found:
@@ -820,7 +918,7 @@ def create_migration_resource(
                                         raise Exception(error_msg)
                                 
                         except Exception as e:
-                            error_msg = f"Failed to verify loaded image tag: {str(e)}"
+                            error_msg = f"Failed to verify loaded image tag: {_redact_sensitive_text(e)}"
                             app.logger.error(error_msg)
                             raise Exception(error_msg)
                         
@@ -828,8 +926,8 @@ def create_migration_resource(
                         execute_command_via_ssh(target_server, f"rm -f {remote_tar_path}", check_exit_status=False)
                         
                     except Exception as e:
-                        error_msg = f'Failed to transfer image to target: {str(e)}'
-                        app.logger.error(f"Migration error during image transfer: {error_msg}", exc_info=True)
+                        error_msg = f'Failed to transfer image to target: {_redact_sensitive_text(e)}'
+                        app.logger.error("Migration error during image transfer: %s", _safe_error_message(e))
                         if image_export_path and os.path.exists(image_export_path.name):
                             os.unlink(image_export_path.name)
                         update_progress('failed', 0, error_msg)
@@ -842,6 +940,14 @@ def create_migration_resource(
                 # Step 4: Check if container exists on target and remove it if needed
                 update_progress('preparing', 80, 'Preparing target server...')
                 check_cancel()
+
+                # Replacing an existing target container and copying mount data
+                # are irreversible target-side changes.  Cross the atomic
+                # cancellation boundary before the first such change so a
+                # completed DELETE can never be reported after target state
+                # has already been committed.
+                if operation_context is not None:
+                    operation_context.begin_finalization()
                 
                 app.logger.info(f"Checking if container exists on target server...")
                 try:
@@ -864,7 +970,10 @@ def create_migration_resource(
                         check_exit_status=False
                     )
                 except Exception as e:
-                    app.logger.warning(f"Failed to check/remove existing container: {e}")
+                    app.logger.warning(
+                        "Failed to check/remove existing container: %s",
+                        _safe_error_message(e),
+                    )
     
                 # Step 4.5: Migrate mounted data (bind mounts + named volumes) when requested
                 migration_summary = {
@@ -965,8 +1074,8 @@ def create_migration_resource(
                                 f"Skipped {len(skipped_mounts)} non-critical mount(s); continuing migration."
                             )
                     except Exception as e:
-                        error_msg = f"Data migration failed: {str(e)}"
-                        app.logger.error(error_msg, exc_info=True)
+                        error_msg = f"Data migration failed: {_redact_sensitive_text(e)}"
+                        app.logger.error("Data migration failed: %s", _safe_error_message(e))
                         update_progress('failed', 0, error_msg)
                         return {'error': error_msg}, 500
                 
@@ -995,7 +1104,10 @@ def create_migration_resource(
                         return {'error': error_msg}, 400
                     
                 except Exception as e:
-                    app.logger.warning(f"Pre-flight checks failed (continuing anyway): {e}")
+                    app.logger.warning(
+                        "Pre-flight checks failed (continuing anyway): %s",
+                        _safe_error_message(e),
+                    )
                     # Don't fail migration on pre-flight check errors, but log them
                 
                 # Step 6: Create and run container on target server
@@ -1024,7 +1136,9 @@ def create_migration_resource(
                                 app.logger.warning(f"Image {target_image_tag} not found, but found {found_tag}. Using it instead.")
                                 target_image_tag = found_tag
                             else:
-                                raise Exception(f"Image {target_image_tag} not found on local server: {str(e)}")
+                                raise Exception(
+                                    f"Image {target_image_tag} not found on local server: {_redact_sensitive_text(e)}"
+                                )
                     else:
                         # Remote server - use docker images command
                         images_output = execute_docker_command_via_ssh(
@@ -1053,7 +1167,7 @@ def create_migration_resource(
                             if not image_found:
                                 raise Exception(f"Image {target_image_tag} not found on target server. Available images: {images_output[:500]}")
                 except Exception as e:
-                    error_msg = f"Image verification failed before container creation: {str(e)}"
+                    error_msg = f"Image verification failed before container creation: {_redact_sensitive_text(e)}"
                     app.logger.error(error_msg)
                     update_progress('failed', 0, error_msg)
                     return {'error': error_msg}, 500
@@ -1105,7 +1219,6 @@ def create_migration_resource(
                             try:
                                 if target_server_id != 'local':
                                     # Try to get ImageManifestDescriptor.platform from docker inspect JSON
-                                    import json
                                     inspect_output = execute_docker_command_via_ssh(
                                         target_server,
                                         f"inspect {target_image_tag}",
@@ -1129,7 +1242,7 @@ def create_migration_resource(
                                                     
                                                     app.logger.info(f"Detected platform from ImageManifestDescriptor on remote: {target_arch_for_run}")
                             except Exception as e:
-                                app.logger.warning(f"Failed to get platform from remote docker inspect: {e}")
+                                app.logger.warning("Failed to get platform from remote docker inspect: %s", _safe_error_message(e))
                             
                             # Final fallback: use target server architecture (but this is wrong for cross-arch!)
                             if not target_arch_for_run:
@@ -1252,7 +1365,6 @@ def create_migration_resource(
                                         app.logger.info(f"Emergency detection: {target_arch_for_run}")
                             else:
                                 # Remote server - use docker inspect
-                                import json
                                 inspect_output = execute_docker_command_via_ssh(
                                     target_server,
                                     f"inspect {target_image_tag}",
@@ -1270,7 +1382,7 @@ def create_migration_resource(
                                                 target_arch_for_run = f'{os_type}/{arch}'
                                                 app.logger.info(f"Emergency detection (remote): {target_arch_for_run}")
                         except Exception as e:
-                            app.logger.error(f"Emergency platform detection failed: {e}")
+                            app.logger.error("Emergency platform detection failed: %s", _safe_error_message(e))
                     
                     # Build docker run command from config
                     # Use platform_flag (image platform) for target_arch parameter
@@ -1286,8 +1398,7 @@ def create_migration_resource(
                     if target_arch_for_run and f'--platform {target_arch_for_run}' not in docker_run_cmd:
                         app.logger.error(
                             f"❌ CRITICAL: --platform flag is missing from docker run command! "
-                            f"target_arch_for_run={target_arch_for_run}, "
-                            f"command={docker_run_cmd[:200]}..."
+                            f"target_arch_for_run={target_arch_for_run}"
                         )
                         # Force add the platform flag
                         # Find where 'run' is and add --platform after it
@@ -1297,10 +1408,18 @@ def create_migration_resource(
                             parts.insert(run_idx + 1, '--platform')
                             parts.insert(run_idx + 2, target_arch_for_run)
                             docker_run_cmd = ' '.join(parts)
-                            app.logger.info(f"Fixed command: docker {docker_run_cmd[:200]}...")
+                            app.logger.info("Added missing platform flag to docker run command")
                     
-                    app.logger.info(f"Final docker run command: docker {docker_run_cmd}")
-                    
+                    app.logger.info(
+                        "Prepared docker run command for %s "
+                        "(image=%s, env_count=%d, port_count=%d, volume_count=%d)",
+                        container_name,
+                        target_image_tag,
+                        len(container_config.get('environment', {})),
+                        len(container_config.get('port_mapping', {})),
+                        len(container_config.get('volumes', {})),
+                    )
+
                     # Final check: Verify image exists right before creating container
                     app.logger.info(f"Final check: Verifying image {target_image_tag} exists on target server before docker run...")
                     try:
@@ -1322,14 +1441,21 @@ def create_migration_resource(
                                     target_server,
                                     f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
                                 )
-                                app.logger.warning(f"Image {target_image_tag} not found in final check. Available images: {all_images[:500]}")
+                                app.logger.warning(
+                                    "Image %s not found in final check (inventory_length=%d)",
+                                    target_image_tag,
+                                    len(all_images or ''),
+                                )
                                 
                                 # Also get images with IDs to find untagged images
                                 images_with_ids = execute_docker_command_via_ssh(
                                     target_server,
                                     "images --format '{{.ID}} {{.Repository}}:{{.Tag}}' --no-trunc"
                                 )
-                                app.logger.info(f"All images with IDs: {images_with_ids[:1000]}")
+                                app.logger.debug(
+                                    "Checked target images with IDs (output_length=%d)",
+                                    len(images_with_ids or ''),
+                                )
                                 
                                 # Try to retag if we can find the repository
                                 repo_name = target_image_tag.split(':')[0]
@@ -1375,22 +1501,27 @@ def create_migration_resource(
                                                         image_found_for_retag = True
                                                         break
                                                 except Exception as retag_error:
-                                                    app.logger.warning(f"Failed to retag image {img_id[:12]}: {retag_error}")
+                                                    app.logger.warning("Failed to retag image %s: %s", img_id[:12], _safe_error_message(retag_error))
                                                     continue
                                 
                                 if not image_found_for_retag:
-                                    raise Exception(f"Could not find or retag image {target_image_tag} on target server. Available images: {all_images[:500]}")
+                                    raise Exception(
+                                        f"Could not find or retag image {target_image_tag} on target server"
+                                    )
                             else:
                                 app.logger.info(f"Image {target_image_tag} confirmed on remote server")
                     except Exception as verify_error:
-                        app.logger.error(f"Final image verification failed: {verify_error}")
+                        app.logger.error(
+                            "Final image verification failed: %s",
+                            _safe_error_message(verify_error),
+                        )
                         # Don't fail here - try to create container anyway, but log the error
                     
                     # Execute on target server
                     if target_server_id == 'local':
                         # Local server - use subprocess directly (subprocess is already imported at top)
                         full_command = f"docker {docker_run_cmd}"
-                        app.logger.info(f"🔧 EXECUTING LOCAL COMMAND: {full_command}")
+                        app.logger.info("Executing prepared docker run command locally for %s", container_name)
                         result = subprocess.run(
                             full_command,
                             shell=True,
@@ -1399,28 +1530,55 @@ def create_migration_resource(
                             timeout=300
                         )
                         app.logger.info(f"Command exit code: {result.returncode}")
-                        if result.stdout:
-                            app.logger.info(f"Command stdout: {result.stdout}")
-                        if result.stderr:
-                            app.logger.warning(f"Command stderr: {result.stderr}")
+                        app.logger.debug(
+                            "docker run output captured (stdout_length=%d, stderr_length=%d)",
+                            len(result.stdout or ''),
+                            len(result.stderr or ''),
+                        )
                         if result.returncode != 0:
-                            raise Exception(f"Command failed (exit {result.returncode}): {result.stderr}")
+                            app.logger.error(
+                                "docker run failed (exit=%d, stderr=%s)",
+                                result.returncode,
+                                _redact_sensitive_text(result.stderr or '')[:_MAX_SAFE_ERROR_LENGTH],
+                            )
+                            raise Exception(
+                                _classify_container_start_error(
+                                    result.stderr or '',
+                                    source_arch=source_arch,
+                                    target_arch=target_arch,
+                                )
+                            )
                     else:
                         # Remote server - use SSH
-                        full_command = f"docker {docker_run_cmd}"
-                        app.logger.info(f"🔧 EXECUTING REMOTE COMMAND on {target_server.get('hostname')}: {full_command}")
+                        app.logger.info(
+                            "Executing prepared docker run command remotely for %s on %s",
+                            container_name,
+                            target_server.get('hostname'),
+                        )
                         try:
                             output = execute_docker_command_via_ssh(target_server, docker_run_cmd)
-                            app.logger.info(f"Remote command output: {output}")
+                            app.logger.debug(
+                                "Remote docker run completed (output_length=%d)",
+                                len(output or ''),
+                            )
                         except Exception as ssh_error:
-                            app.logger.error(f"Remote command failed: {ssh_error}", exc_info=True)
-                            raise
+                            app.logger.error(
+                                "Remote docker run failed: %s",
+                                _safe_error_message(ssh_error),
+                            )
+                            raise Exception(
+                                _classify_container_start_error(
+                                    ssh_error,
+                                    source_arch=source_arch,
+                                    target_arch=target_arch,
+                                )
+                            ) from ssh_error
                     
                     update_progress('completed', 100, f'Migration completed successfully! Container {container_name} is running on target server.')
                     
                 except Exception as e:
                     check_cancel()  # Check if it was cancelled
-                    error_msg = str(e)
+                    error_msg = _redact_sensitive_text(e)
                     
                     # Provide helpful error messages for common issues
                     if 'platform' in error_msg.lower() and ('does not match' in error_msg.lower() or 'no specific platform' in error_msg.lower()):
@@ -1443,10 +1601,10 @@ def create_migration_resource(
                         else:
                             execute_docker_command_via_ssh(source_server, f"stop {container_name}")
                     except Exception as e:
-                        app.logger.warning(f"Failed to stop source container: {e}")
+                        app.logger.warning("Failed to stop source container: %s", _safe_error_message(e))
                 
                 # Clean up progress after success
-                if container_name in _migration_progress:
+                if operation_context is None and container_name in _migration_progress:
                     # Keep progress for a short time to show success message
                     import threading
                     def cleanup_progress():
@@ -1468,11 +1626,11 @@ def create_migration_resource(
                 }
                 
             except Exception as e:
-                error_msg = str(e)
-                app.logger.error(f"Migration failed: {error_msg}", exc_info=True)
+                error_msg = _redact_sensitive_text(e)
+                app.logger.error("Migration failed: %s", _safe_error_message(e))
                 
                 # Update progress with error (only if container_name is defined)
-                if container_name and container_name in _migration_progress:
+                if operation_context is None and container_name and container_name in _migration_progress:
                     if 'cancelled' in error_msg.lower():
                         _migration_progress[container_name] = {
                             'stage': 'cancelled',
@@ -2188,7 +2346,7 @@ def create_migration_resource(
                             return 'linux/arm/v7'
                         return f'linux/{arch}'
             except Exception as e:
-                app.logger.warning(f"Could not determine server architecture: {e}")
+                app.logger.warning("Could not determine server architecture: %s", _safe_error_message(e))
                 return None
         
         def _get_image_platform(self, server_config, image_tag):
@@ -2333,7 +2491,7 @@ def create_migration_resource(
                         app.logger.debug(f"Could not get image platform via docker inspect: {e}")
                         return None
             except Exception as e:
-                app.logger.warning(f"Could not determine image platform: {e}")
+                app.logger.warning("Could not determine image platform: %s", _safe_error_message(e))
                 return None
         
         def _check_emulation_support(self, server_config):
@@ -2390,7 +2548,7 @@ def create_migration_resource(
                         else:
                             app.logger.info("✗ binfmt_misc with QEMU NOT found on remote server")
                     except Exception as e:
-                        app.logger.warning(f"Could not check binfmt_misc on remote server: {e}")
+                        app.logger.warning("Could not check binfmt_misc on remote server: %s", _safe_error_message(e))
                     
                     # Check for qemu-x86_64-static
                     try:
@@ -2406,7 +2564,7 @@ def create_migration_resource(
                         else:
                             app.logger.info("✗ qemu-x86_64-static NOT found on remote server")
                     except Exception as e:
-                        app.logger.warning(f"Could not check qemu-x86_64-static on remote server: {e}")
+                        app.logger.warning("Could not check qemu-x86_64-static on remote server: %s", _safe_error_message(e))
                 
                 supported = qemu_available or binfmt_misc_available
                 
@@ -2428,12 +2586,12 @@ def create_migration_resource(
                     'message': message
                 }
             except Exception as e:
-                app.logger.warning(f"Could not check emulation support: {e}")
+                app.logger.warning("Could not check emulation support: %s", _safe_error_message(e))
                 return {
                     'supported': False,
                     'qemu_available': False,
                     'binfmt_misc_available': False,
-                    'message': f"Could not check emulation support: {str(e)}"
+                    'message': f"Could not check emulation support: {_redact_sensitive_text(e)}"
                 }
         
         def _validate_architecture_compatibility(self, server_config, image_tag, image_platform=None):
@@ -2570,7 +2728,7 @@ def create_migration_resource(
                 return result
                 
             except Exception as e:
-                app.logger.error(f"Error validating architecture compatibility: {e}", exc_info=True)
+                app.logger.error("Error validating architecture compatibility: %s", _safe_error_message(e))
                 # Return safe defaults
                 return {
                     'target_arch': 'linux/amd64',
@@ -2642,7 +2800,7 @@ def create_migration_resource(
                     else:
                         # Remote server - check via SSH
                         # Try ss first (more modern), fallback to netstat
-                        port_check_cmd = "ss -tln | grep -E ':[0-9]+' | sed 's/.*:\([0-9]*\).*/\\1/' || netstat -tln | grep -E ':[0-9]+' | sed 's/.*:\([0-9]*\).*/\\1/'"
+                        port_check_cmd = "ss -tln | grep -E ':[0-9]+' | sed 's/.*:\\([0-9]*\\).*/\\1/' || netstat -tln | grep -E ':[0-9]+' | sed 's/.*:\\([0-9]*\\).*/\\1/'"
                         port_output = execute_command_via_ssh(server_config, port_check_cmd, check_exit_status=False)
                         if port_output:
                             for line in port_output.strip().split('\n'):
@@ -2658,7 +2816,7 @@ def create_migration_resource(
                     app.logger.debug(f"Could not check ports via netstat/ss: {e}")
                         
             except Exception as e:
-                app.logger.warning(f"Could not check port availability: {e}")
+                app.logger.warning("Could not check port availability: %s", _safe_error_message(e))
                 # Don't fail on port check errors - let Docker handle it
             
             return conflicts
@@ -2829,4 +2987,10 @@ def create_migration_resource(
             return ' '.join(shlex.quote(str(part)) for part in cmd_parts)
     
 
+    ContainerMigrate.migration_runner = MigrationRunner(
+        lambda payload, **kwargs: ContainerMigrate().execute_migration(
+            payload,
+            **kwargs,
+        )
+    )
     return ContainerMigrate
