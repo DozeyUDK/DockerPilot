@@ -128,6 +128,10 @@ async def run_finished(app, pilot):
     for _ in range(30):
         await pilot.pause()
         if not app._command_running:
+            # RichLog.write schedules rendering work. Give Textual one extra
+            # event-loop turn after command completion so cross-platform runners
+            # observe the committed output instead of racing the render queue.
+            await pilot.pause()
             return
     pytest.fail('TUI command did not finish')
 
