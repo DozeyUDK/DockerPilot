@@ -1,5 +1,5 @@
 """Container management operations."""
-from typing import List, Any, Optional
+from typing import List, Any
 
 from .container_creation import (
     normalize_volumes as _normalize_volumes_impl,
@@ -31,8 +31,6 @@ from .container_listing import (
     container_image_label as _container_image_label,
     list_containers as _list_containers_impl,
 )
-
-
 
 
 class ContainerManager:
