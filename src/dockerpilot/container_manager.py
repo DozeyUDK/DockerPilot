@@ -1,14 +1,25 @@
 """Container management operations."""
 import docker
-import time
 from typing import List, Any, Optional
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.prompt import Confirm
 
 from .container_creation import (
     normalize_volumes as _normalize_volumes_impl,
     run_new_container as _run_new_container_impl,
+)
+from .container_lifecycle import (
+    container_operation as _container_operation_impl,
+    pause_container as _pause_container_impl,
+    remove_container as _remove_container_impl,
+    rename_container as _rename_container_public_impl,
+    rename_container_internal as _rename_container_internal_impl,
+    restart_container as _restart_container_impl,
+    start_container as _start_container_impl,
+    stop_and_remove_container as _stop_and_remove_container_impl,
+    stop_container as _stop_container_impl,
+    unpause_container as _unpause_container_impl,
+    update_restart_policy as _update_restart_policy_impl,
+    wait_for_container_status as _wait_for_container_status_impl,
 )
 from .container_listing import (
     container_image_label as _container_image_label,
@@ -34,78 +45,15 @@ class ContainerManager:
     
     def container_operation(self, operation: str, container_name: str, **kwargs) -> bool:
         """Unified container operation handler with progress tracking."""
-        operations = {
-            'start': self._start_container,
-            'stop': self._stop_container,
-            'restart': self._restart_container,
-            'remove': self._remove_container,
-            'pause': self._pause_container,
-            'unpause': self._unpause_container,
-            'rename': self._rename_container,
-        }
-        
-        if operation not in operations:
-            self.console.print(f"[bold red]❌ Unknown operation: {operation}[/bold red]")
-            return False
-
-        progress_verbs = {
-            "start": "Starting",
-            "stop": "Stopping",
-            "restart": "Restarting",
-            "remove": "Removing",
-            "pause": "Pausing",
-            "unpause": "Unpausing",
-            "rename": "Renaming",
-        }
-        success_verbs = {
-            "start": "started",
-            "stop": "stopped",
-            "restart": "restarted",
-            "remove": "removed",
-            "pause": "paused",
-            "unpause": "unpaused",
-            "rename": "renamed",
-        }
-        
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=self.console
-        ) as progress:
-            verb_ing = progress_verbs.get(operation, f"{operation.title()}ing")
-            verb_past = success_verbs.get(operation, f"{operation}ed")
-            task = progress.add_task(f"{verb_ing} container {container_name}...", total=None)
-            
-            try:
-                result = operations[operation](container_name, **kwargs)
-                if result:
-                    progress.update(task, description=f"✅ Container {container_name} {verb_past} successfully")
-                else:
-                    progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
-                return result
-            except Exception as e:
-                progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
-                self.logger.error(f"Container {operation} failed: {e}")
-                return False
+        return _container_operation_impl(self, operation, container_name, **kwargs)
     
     def update_restart_policy(self, container_name: str, policy: str = 'unless-stopped') -> bool:
         """Set restart policy on container."""
-        try:
-            container = self.client.containers.get(container_name)
-            self.console.print(f"[cyan]Updating restart policy for container {container.name} to '{policy}'...[/cyan]")
-            container.update(restart_policy={"Name": policy})
-            self.console.print(f"[green]Restart policy set to '{policy}'[/green]")
-            return True
-        except docker.errors.NotFound:
-            self.console.print(f"[bold red]Container not found: {container_name}[/bold red]")
-            return False
-        except docker.errors.APIError as e:
-            self.console.print(f"[bold red]Docker API error during update:[/bold red] {e}")
-            return False
+        return _update_restart_policy_impl(self, container_name, policy)
     
     def rename_container(self, container_name: str, new_name: str) -> bool:
         """Rename a container."""
-        return self.container_operation('rename', container_name, new_name=new_name)
+        return _rename_container_public_impl(self, container_name, new_name)
     
     def run_new_container(self, image_name: str, name: str, ports: dict = None, 
                          command: str = None, environment: dict = None, 
@@ -126,92 +74,35 @@ class ContainerManager:
     
     def _start_container(self, container_name: str, **kwargs) -> bool:
         """Start container with enhanced validation."""
-        with self._error_handler("start container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status == "running":
-                self.console.print(f"[yellow]⚠️ Container {container_name} is already running[/yellow]")
-                return True
-            
-            container.start()
-            self._wait_for_container_status(container_name, "running", timeout=30)
-            self.logger.info(f"Container {container_name} started successfully")
-            return True
+        return _start_container_impl(self, container_name, **kwargs)
     
     def _stop_container(self, container_name: str, timeout: int = 10, **kwargs) -> bool:
         """Stop container with graceful shutdown."""
-        with self._error_handler("stop container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status == "exited":
-                self.console.print(f"[yellow]⚠️ Container {container_name} is already stopped[/yellow]")
-                return True
-            
-            container.stop(timeout=timeout)
-            self.logger.info(f"Container {container_name} stopped successfully")
-            return True
+        return _stop_container_impl(self, container_name, timeout=timeout, **kwargs)
     
     def _restart_container(self, container_name: str, timeout: int = 10, **kwargs) -> bool:
         """Restart container with health check."""
-        with self._error_handler("restart container", container_name):
-            container = self.client.containers.get(container_name)
-            container.restart(timeout=timeout)
-            self._wait_for_container_status(container_name, "running", timeout=30)
-            self.logger.info(f"Container {container_name} restarted successfully")
-            return True
+        return _restart_container_impl(self, container_name, timeout=timeout, **kwargs)
     
     def _remove_container(self, container_name: str, force: bool = False, **kwargs) -> bool:
         """Remove container with safety checks."""
-        with self._error_handler("remove container", container_name):
-            container = self.client.containers.get(container_name)
-            
-            if container.status == "running" and not force:
-                if not Confirm.ask(f"Container {container_name} is running. Force removal?"):
-                    self.console.print("[yellow]❌ Removal cancelled[/yellow]")
-                    return False
-            
-            container.remove(force=force)
-            self.logger.info(f"Container {container_name} removed successfully")
-            return True
+        return _remove_container_impl(self, container_name, force=force, **kwargs)
     
     def _pause_container(self, container_name: str, **kwargs) -> bool:
         """Pause container."""
-        with self._error_handler("pause container", container_name):
-            container = self.client.containers.get(container_name)
-            container.pause()
-            self.logger.info(f"Container {container_name} paused successfully")
-            return True
+        return _pause_container_impl(self, container_name, **kwargs)
     
     def _unpause_container(self, container_name: str, **kwargs) -> bool:
         """Unpause container."""
-        with self._error_handler("unpause container", container_name):
-            container = self.client.containers.get(container_name)
-            container.unpause()
-            self.logger.info(f"Container {container_name} unpaused successfully")
-            return True
+        return _unpause_container_impl(self, container_name, **kwargs)
     
     def _rename_container(self, container_name: str, new_name: str, **kwargs) -> bool:
         """Rename container."""
-        with self._error_handler("rename container", container_name):
-            container = self.client.containers.get(container_name)
-            container.rename(new_name)
-            self.logger.info(f"Container {container_name} renamed to {new_name} successfully")
-            return True
+        return _rename_container_internal_impl(self, container_name, new_name, **kwargs)
     
     def _wait_for_container_status(self, container_name: str, expected_status: str, timeout: int = 30) -> bool:
         """Wait for container to reach expected status."""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                container = self.client.containers.get(container_name)
-                if container.status == expected_status:
-                    return True
-                time.sleep(1)
-            except Exception:
-                time.sleep(1)
-        
-        self.logger.warning(f"Container {container_name} did not reach status {expected_status} within {timeout}s")
-        return False
+        return _wait_for_container_status_impl(self, container_name, expected_status, timeout)
     
     def view_container_logs(self, container_names: str = None, tail: int = 50):
         """View container logs. Supports multiple containers separated by comma.
@@ -315,24 +206,7 @@ class ContainerManager:
 
     def stop_and_remove_container(self, container_name: str, timeout: int = 10) -> bool:
         """Stop and remove container in one operation (from dockerpilot-Lite)"""
-        with self._error_handler(f"stop and remove {container_name}", container_name):
-            container = self.client.containers.get(container_name)
-
-            self.console.print(f"[cyan]🛑 Stopping container {container_name}...[/cyan]")
-            if container.status == "running":
-                container.stop(timeout=timeout)
-                self.console.print(f"[green]✅ Container stopped[/green]")
-            else:
-                self.console.print(f"[yellow]ℹ️ Container was not running[/yellow]")
-
-            self.console.print(f"[cyan]🗑️ Removing container {container_name}...[/cyan]")
-            container.remove()
-            self.console.print(f"[green]✅ Container {container_name} removed[/green]")
-
-            self.logger.info(f"Container {container_name} stopped and removed")
-            return True
-
-        return False
+        return _stop_and_remove_container_impl(self, container_name, timeout)
 
     def exec_command_non_interactive(self, container_name: str, command: str) -> bool:
         """Execute command in container non-interactively (from dockerpilot-Lite)"""
