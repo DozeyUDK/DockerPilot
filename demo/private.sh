@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="${DOCKERPILOT_DEMO_STATE_DIR:-${HOME}/.dockerpilot_demo}"
+RUNTIME_ENV="$STATE_DIR/runtime.env"
+
+if [[ -f "$RUNTIME_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$RUNTIME_ENV"
+  set +a
+fi
+
 if [[ "${CODESPACES:-}" != "true" || -z "${CODESPACE_NAME:-}" ]]; then
   echo "[demo] private.sh is only for GitHub Codespaces" >&2
   exit 1

@@ -215,6 +215,14 @@ def test_request_limit_is_scoped_to_public_read_only_demo():
     assert "Demo login requires Content-Length" in guard
 
 
+def test_private_share_loads_persisted_runtime_port():
+    script = (DEMO / "private.sh").read_text(encoding="utf-8")
+    assert 'RUNTIME_ENV="$STATE_DIR/runtime.env"' in script
+    assert 'source "$RUNTIME_ENV"' in script
+    assert script.index('source "$RUNTIME_ENV"') < script.index('DEMO_PORT="${PORT:-5000}"')
+    assert 'gh codespace ports visibility "${DEMO_PORT}:private"' in script
+
+
 def test_public_and_private_visibility_use_configured_demo_port():
     public = (DEMO / "public.sh").read_text(encoding="utf-8")
     private = (DEMO / "private.sh").read_text(encoding="utf-8")
