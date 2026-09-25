@@ -157,10 +157,21 @@ def create_server_resources(
                     if data.get("password"):
                         server["password"] = data["password"]
                 elif auth_type == "key":
-                    if data.get("private_key"):
+                    replacement_key = bool(data.get("private_key"))
+                    if replacement_key:
                         server["private_key"] = data["private_key"]
-                    if data.get("key_passphrase"):
-                        server["key_passphrase"] = data.get("key_passphrase")
+                        # A replacement key has independent encryption state.
+                        # Never carry a passphrase from the old key forward.
+                        server.pop("key_passphrase", None)
+                        if data.get("key_passphrase"):
+                            server["key_passphrase"] = data["key_passphrase"]
+                    elif data.get("key_passphrase"):
+                        # Blank values on ordinary edits preserve the existing
+                        # secret because the edit form intentionally does not
+                        # round-trip stored credentials.
+                        server["key_passphrase"] = data["key_passphrase"]
+                    elif data.get("clear_key_passphrase") is True:
+                        server.pop("key_passphrase", None)
                 elif auth_type == "2fa":
                     if data.get("password"):
                         server["password"] = data["password"]

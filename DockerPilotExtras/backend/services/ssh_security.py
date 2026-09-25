@@ -134,14 +134,22 @@ def ensure_host_key_trusted(
 
 
 def create_verified_ssh_client(server_config: dict, *, known_hosts_path: str | Path, timeout: float = 10.0):
-    """Return an SSHClient configured to reject any key not verified above."""
+    """Return an SSHClient restricted to exactly the host key verified above."""
     import paramiko
 
-    ensure_host_key_trusted(server_config, known_hosts_path=known_hosts_path, timeout=timeout)
+    verified_key = ensure_host_key_trusted(
+        server_config,
+        known_hosts_path=known_hosts_path,
+        timeout=timeout,
+    )
+    hostname = str(server_config.get("hostname") or "").strip()
+    port = int(server_config.get("port", 22))
+    host_name = known_host_name(hostname, port)
+
     client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    path = Path(known_hosts_path)
-    if path.exists():
-        client.load_host_keys(str(path))
+    # Do not load system or managed known_hosts into the connection client.
+    # ensure_host_key_trusted() has already selected one exact key; loading any
+    # broader key set here could let negotiation accept a different stale key.
+    client.get_host_keys().add(host_name, verified_key.get_name(), verified_key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
     return client

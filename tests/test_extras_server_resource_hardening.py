@@ -28,6 +28,29 @@ class Session(dict):
     permanent = False
 
 
+def _server_update(config, payload):
+    saved = []
+    app = SimpleNamespace(
+        logger=SimpleNamespace(
+            error=lambda *_a, **_k: None,
+            info=lambda *_a, **_k: None,
+            debug=lambda *_a, **_k: None,
+        )
+    )
+    classes = create_server_resources(
+        Resource=Resource,
+        app=app,
+        request=Request(payload),
+        session=Session(),
+        ssh_available=True,
+        load_servers_config=lambda: config,
+        save_servers_config=lambda value: saved.append(value) or True,
+        test_ssh_connection=lambda _cfg: {"success": True},
+    )
+    response = classes[2]().put("srv-1")
+    return response, saved[-1]["servers"][0]
+
+
 def test_server_update_preserves_existing_secrets_when_form_sends_blanks():
     config = {
         "servers": [
@@ -45,8 +68,9 @@ def test_server_update_preserves_existing_secrets_when_form_sends_blanks():
         ],
         "default_server": "local",
     }
-    saved = []
-    request = Request(
+
+    response, server = _server_update(
+        config,
         {
             "name": "node-renamed",
             "private_key": "",
@@ -54,29 +78,105 @@ def test_server_update_preserves_existing_secrets_when_form_sends_blanks():
             "password": "",
             "totp_secret": "",
             "host_key_fingerprint": "SHA256:new",
-        }
+        },
     )
-    app = SimpleNamespace(logger=SimpleNamespace(error=lambda *_a, **_k: None, info=lambda *_a, **_k: None, debug=lambda *_a, **_k: None))
-    classes = create_server_resources(
-        Resource=Resource,
-        app=app,
-        request=request,
-        session=Session(),
-        ssh_available=True,
-        load_servers_config=lambda: config,
-        save_servers_config=lambda value: saved.append(value) or True,
-        test_ssh_connection=lambda _cfg: {"success": True},
-    )
-    ServerUpdate = classes[2]
-
-    response = ServerUpdate().put("srv-1")
 
     assert response["success"] is True
-    server = saved[-1]["servers"][0]
     assert server["name"] == "node-renamed"
     assert server["private_key"] == "PRIVATE"
     assert server["key_passphrase"] == "old-passphrase"
     assert server["host_key_fingerprint"] == "SHA256:new"
+
+
+def test_server_update_replacement_key_drops_stale_passphrase():
+    config = {
+        "servers": [
+            {
+                "id": "srv-1",
+                "name": "node",
+                "hostname": "node.example",
+                "port": 22,
+                "username": "dawid",
+                "auth_type": "key",
+                "private_key": "OLD PRIVATE KEY",
+                "key_passphrase": "old-passphrase",
+            }
+        ],
+        "default_server": "local",
+    }
+
+    response, server = _server_update(
+        config,
+        {
+            "private_key": "NEW UNENCRYPTED PRIVATE KEY",
+            "key_passphrase": "",
+        },
+    )
+
+    assert response["success"] is True
+    assert server["private_key"] == "NEW UNENCRYPTED PRIVATE KEY"
+    assert "key_passphrase" not in server
+
+
+def test_server_update_replacement_key_uses_new_passphrase():
+    config = {
+        "servers": [
+            {
+                "id": "srv-1",
+                "name": "node",
+                "hostname": "node.example",
+                "port": 22,
+                "username": "dawid",
+                "auth_type": "key",
+                "private_key": "OLD PRIVATE KEY",
+                "key_passphrase": "old-passphrase",
+            }
+        ],
+        "default_server": "local",
+    }
+
+    response, server = _server_update(
+        config,
+        {
+            "private_key": "NEW ENCRYPTED PRIVATE KEY",
+            "key_passphrase": "new-passphrase",
+        },
+    )
+
+    assert response["success"] is True
+    assert server["private_key"] == "NEW ENCRYPTED PRIVATE KEY"
+    assert server["key_passphrase"] == "new-passphrase"
+
+
+def test_server_update_can_explicitly_clear_key_passphrase_without_replacing_key():
+    config = {
+        "servers": [
+            {
+                "id": "srv-1",
+                "name": "node",
+                "hostname": "node.example",
+                "port": 22,
+                "username": "dawid",
+                "auth_type": "key",
+                "private_key": "PRIVATE",
+                "key_passphrase": "old-passphrase",
+            }
+        ],
+        "default_server": "local",
+    }
+
+    response, server = _server_update(
+        config,
+        {
+            "private_key": "",
+            "key_passphrase": "",
+            "clear_key_passphrase": True,
+        },
+    )
+
+    assert response["success"] is True
+    assert server["private_key"] == "PRIVATE"
+    assert "key_passphrase" not in server
 
 
 def test_server_list_exposes_fingerprint_but_never_secret_fields():
@@ -113,7 +213,6 @@ def test_server_list_exposes_fingerprint_but_never_secret_fields():
     assert server["host_key_fingerprint"] == "SHA256:key"
     assert "password" not in server
     assert "private_key" not in server
-
 
 
 def test_server_test_forwards_trusted_fingerprint_before_save():

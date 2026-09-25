@@ -150,3 +150,59 @@ def test_explicit_pin_overrides_stale_matching_known_hosts_entry(tmp_path: Path,
             },
             known_hosts_path=tmp_path / "known_hosts",
         )
+
+
+def test_verified_client_trusts_only_the_verified_key(tmp_path: Path, monkeypatch):
+    verified_key = FakeKey(b"verified", "ssh-ed25519")
+
+    class FakeClientHostKeys:
+        def __init__(self):
+            self.entries = {}
+
+        def add(self, host_name, key_type, key):
+            self.entries.setdefault(host_name, {})[key_type] = key
+
+        def lookup(self, host_name):
+            return self.entries.get(host_name)
+
+    class FakeRejectPolicy:
+        pass
+
+    class FakeSSHClient:
+        def __init__(self):
+            self.host_keys = FakeClientHostKeys()
+            self.policy = None
+
+        def get_host_keys(self):
+            return self.host_keys
+
+        def load_system_host_keys(self, *_args, **_kwargs):
+            raise AssertionError("system host keys must not be loaded into verified SSH client")
+
+        def load_host_keys(self, *_args, **_kwargs):
+            raise AssertionError("managed known_hosts must not broaden the verified trust set")
+
+        def set_missing_host_key_policy(self, policy):
+            self.policy = policy
+
+    class FakeParamiko:
+        SSHClient = FakeSSHClient
+        RejectPolicy = FakeRejectPolicy
+
+    monkeypatch.setitem(sys.modules, "paramiko", FakeParamiko)
+    monkeypatch.setattr(
+        ssh_security,
+        "ensure_host_key_trusted",
+        lambda *_a, **_kw: verified_key,
+    )
+
+    client = ssh_security.create_verified_ssh_client(
+        {"hostname": "host.example", "port": 22},
+        known_hosts_path=tmp_path / "known_hosts",
+    )
+
+    trusted = client.get_host_keys().lookup("host.example")
+    assert trusted is not None
+    assert set(trusted) == {verified_key.get_name()}
+    assert trusted[verified_key.get_name()].asbytes() == verified_key.asbytes()
+    assert isinstance(client.policy, FakeRejectPolicy)
