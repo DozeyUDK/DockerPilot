@@ -128,3 +128,27 @@ def test_public_generator_has_resource_bounds():
     assert "validate_demo_generator_payload" in app_source
     assert "DEMO_GENERATOR_MAX_TEST_COMMANDS = 32" in demo_mode_source
     assert "DEMO_GENERATOR_MAX_STRING_LENGTH = 4096" in demo_mode_source
+
+
+def test_backend_demo_import_is_real_multiline_python():
+    source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
+    assert "from backend.services.demo_mode import (\\\\n" not in source
+    compile(source, "backend/app.py", "exec")
+
+
+def test_public_generator_rejects_unknown_length_before_json_buffering():
+    source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
+    guard = source[source.index("def enforce_demo_read_only"):source.index("def require_auth_for_api")]
+    assert "request.content_length is None" in guard
+    assert "411" in guard
+    assert guard.index("request.content_length is None") < guard.index("request.get_json")
+
+
+def test_reset_rejects_root_home_repo_and_non_dedicated_state_paths():
+    script = (DEMO / "reset.sh").read_text(encoding="utf-8")
+    assert 'STATE_REAL="$(realpath -m "$STATE_DIR")"' in script
+    assert '"$STATE_REAL" == "/"' in script
+    assert '"$STATE_REAL" == "$HOME_REAL"' in script
+    assert '"$STATE_REAL" == "$ROOT_REAL"' in script
+    assert '$(basename "$STATE_REAL")" != ".dockerpilot_demo"' in script
+    assert 'rm -rf -- "$STATE_REAL/home"' in script

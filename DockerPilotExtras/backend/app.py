@@ -60,7 +60,11 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.auth_guard import SlidingWindowRateLimiter, csrf_token_matches
-from backend.services.demo_mode import (\n    DEMO_GENERATOR_MAX_REQUEST_BYTES,\n    demo_mutation_is_blocked,\n    validate_demo_generator_payload,\n)
+from backend.services.demo_mode import (
+    DEMO_GENERATOR_MAX_REQUEST_BYTES,
+    demo_mutation_is_blocked,
+    validate_demo_generator_payload,
+)
 from backend.services.deployment_files import (
     find_active_deployment_dir as _svc_find_active_deployment_dir,
     find_all_deployment_dirs as _svc_find_all_deployment_dirs,
@@ -433,7 +437,12 @@ PUBLIC_API_PATHS = {
 def enforce_demo_read_only():
     """Deny state-changing API calls in a shareable live demo."""
     if DEMO_MODE and not DEMO_ALLOW_MUTATIONS and request.path == '/api/pipeline/generate' and request.method == 'POST':
-        if request.content_length is not None and request.content_length > DEMO_GENERATOR_MAX_REQUEST_BYTES:
+        # The public demo accepts only bounded, non-streamed JSON. Requiring a
+        # declared length prevents chunked bodies from being buffered by
+        # get_json() before a size decision can be made.
+        if request.content_length is None:
+            return jsonify({'success': False, 'error': 'Demo generator requires Content-Length'}), 411
+        if request.content_length > DEMO_GENERATOR_MAX_REQUEST_BYTES:
             return jsonify({'success': False, 'error': 'Demo generator request is too large'}), 413
         payload = request.get_json(silent=True)
         error = validate_demo_generator_payload(payload)
