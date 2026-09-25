@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,6 @@ def _load_module(name: str, path: Path):
 
 def test_devcontainer_boots_real_checkout_with_docker_in_docker():
     config = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text(encoding="utf-8"))
-
     assert config["forwardPorts"] == [5000]
     assert set(config["portsAttributes"]) == {"5000"}
     assert "docker-in-docker" in " ".join(config["features"])
@@ -34,7 +34,6 @@ def test_demo_compose_has_no_host_docker_socket_or_privileged_services():
     compose = yaml.safe_load((DEMO / "compose.yml").read_text(encoding="utf-8"))
     services = compose["services"]
     assert {"web-dev", "web-staging", "web-prod", "cache"} <= set(services)
-
     for service in services.values():
         assert service.get("privileged") is not True
         assert not service.get("ports")
@@ -57,9 +56,9 @@ def test_demo_runtime_credentials_are_generated_outside_repo(tmp_path):
     runtime = _load_module("demo_prepare_runtime", DEMO / "prepare_runtime.py")
     state_dir = tmp_path / "state"
     values = runtime.create_runtime(state_dir, codespaces=False)
-
     env_path = state_dir / "runtime.env"
     assert env_path.exists()
+    assert (state_dir / runtime.OWNER_MARKER).exists()
     assert values["WEB_AUTH_USERNAME"] == "demo"
     assert values["WEB_AUTH_PASSWORD"]
     assert values["WEB_AUTH_PASSWORD"] not in (DEMO / "README.md").read_text(encoding="utf-8")
@@ -77,6 +76,17 @@ def test_demo_runtime_credentials_are_generated_outside_repo(tmp_path):
     assert codespaces_values["SECRET_KEY"] != values["SECRET_KEY"]
 
 
+def test_prepare_runtime_refuses_preexisting_unowned_state_directory(tmp_path):
+    runtime = _load_module("demo_prepare_runtime_unowned", DEMO / "prepare_runtime.py")
+    state_dir = tmp_path / ".dockerpilot_demo"
+    state_dir.mkdir()
+    (state_dir / "home").mkdir()
+    with pytest.raises(RuntimeError, match="not created by DockerPilot demo"):
+        runtime.create_runtime(state_dir, codespaces=False)
+    assert not (state_dir / runtime.MARKER).exists()
+    assert not (state_dir / runtime.OWNER_MARKER).exists()
+
+
 def test_public_share_script_refuses_interactive_demo():
     script = (DEMO / "public.sh").read_text(encoding="utf-8")
     assert "DOCKERPILOT_DEMO_ALLOW_MUTATIONS" in script
@@ -88,12 +98,10 @@ def test_public_share_script_refuses_interactive_demo():
 def test_demo_seed_uses_isolated_home_and_environment_bindings(tmp_path):
     seed = _load_module("demo_seed", DEMO / "seed_demo.py")
     config_dir = seed.seed_demo(tmp_path)
-
     assert config_dir == tmp_path.resolve() / ".dockerpilot_extras"
     environments = json.loads((config_dir / "environments.json").read_text(encoding="utf-8"))
     bindings = json.loads((config_dir / "env_container_bindings.json").read_text(encoding="utf-8"))
     servers = json.loads((config_dir / "servers" / "servers.json").read_text(encoding="utf-8"))
-
     assert environments["env_servers"] == {"dev": "local", "staging": "local", "prod": "local"}
     assert bindings["env_containers"] == seed.ENV_CONTAINERS
     assert servers == {"servers": [], "default_server": "local"}
@@ -144,14 +152,25 @@ def test_public_generator_rejects_unknown_length_before_json_buffering():
     assert guard.index("request.content_length is None") < guard.index("request.get_json")
 
 
-def test_reset_rejects_root_home_repo_and_non_dedicated_state_paths():
+def test_reset_requires_ownership_proof_and_safe_path():
     script = (DEMO / "reset.sh").read_text(encoding="utf-8")
     assert 'STATE_REAL="$(realpath -m "$STATE_DIR")"' in script
     assert '"$STATE_REAL" == "/"' in script
     assert '"$STATE_REAL" == "$HOME_REAL"' in script
     assert '"$STATE_REAL" == "$ROOT_REAL"' in script
     assert '$(basename "$STATE_REAL")" != ".dockerpilot_demo"' in script
+    assert '.dockerpilot-demo-owner' in script
+    assert '.dockerpilot-demo-state' in script
     assert 'rm -rf -- "$STATE_REAL/home"' in script
+
+
+def test_stop_verifies_pid_identity_before_signaling():
+    script = (DEMO / "stop.sh").read_text(encoding="utf-8")
+    assert '/proc/$PID/cmdline' in script
+    assert 'run_dev.py' in script
+    assert '$ROOT/.venv/bin/python' in script
+    assert 'refusing to signal unverified pid' in script
+    assert script.index('run_dev.py') < script.index('kill "$PID"')
 
 
 def test_start_readiness_requires_recorded_pid_and_demo_auth_status():
@@ -163,6 +182,7 @@ def test_start_readiness_requires_recorded_pid_and_demo_auth_status():
     assert 'if [[ "$LIVE_MODE" == "$MUTATIONS_FLAG" ]]' in ready
 
 
-def test_extras_has_global_request_body_limit():
+def test_extras_request_limit_preserves_normal_pipeline_allowance():
     source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
     assert "app.config['MAX_CONTENT_LENGTH']" in source
+    assert "64 * 1024 if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else 1024 * 1024" in source

@@ -9,11 +9,18 @@ import secrets
 from pathlib import Path
 
 MARKER = ".dockerpilot-demo-state"
+OWNER_MARKER = ".dockerpilot-demo-owner"
 
 
 def create_runtime(state_dir: Path, *, codespaces: bool | None = None, rotate: bool = False) -> dict[str, str]:
     state_dir = Path(state_dir).expanduser().resolve()
+    existed_before = state_dir.exists()
     state_dir.mkdir(parents=True, exist_ok=True)
+    owner_marker = state_dir / OWNER_MARKER
+    if not existed_before:
+        owner_marker.write_text("created-by-dockerpilot-demo\n", encoding="utf-8")
+    elif not owner_marker.exists():
+        raise RuntimeError("Demo state directory was not created by DockerPilot demo")
     try:
         state_dir.chmod(0o700)
     except OSError:
@@ -43,10 +50,6 @@ def create_runtime(state_dir: Path, *, codespaces: bool | None = None, rotate: b
         "SECRET_KEY": secrets.token_urlsafe(48),
         "SESSION_COOKIE_SECURE": "true" if codespaces else "false",
         "APP_SESSION_IDLE_MINUTES": "30",
-        # Codespaces terminates TLS behind infrastructure whose peer CIDRs are
-        # intentionally not trusted by Extras.  A generated high-entropy demo
-        # password does not need a tiny shared-IP lockout bucket, which would
-        # otherwise let one public viewer lock out the presenter.
         "AUTH_LOGIN_MAX_FAILURES": "1000",
         "AUTH_LOGIN_WINDOW_SECONDS": "60",
     }
