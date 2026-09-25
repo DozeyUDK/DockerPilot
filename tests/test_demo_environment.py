@@ -22,12 +22,26 @@ def _load_module(name: str, path: Path):
 
 def test_devcontainer_boots_real_checkout_with_docker_in_docker():
     config = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text(encoding="utf-8"))
+    assert config["build"] == {"dockerfile": "Dockerfile"}
+    assert "image" not in config
     assert config["forwardPorts"] == [5000]
     assert set(config["portsAttributes"]) == {"5000"}
     assert "docker-in-docker" in " ".join(config["features"])
     assert "node" in " ".join(config["features"])
     assert config["postCreateCommand"] == "bash demo/bootstrap.sh"
     assert config["postStartCommand"] == "bash demo/start.sh"
+
+
+def test_devcontainer_drops_stale_yarn_apt_source_before_features_install():
+    dockerfile = (ROOT / ".devcontainer" / "Dockerfile").read_text(encoding="utf-8")
+    assert "FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm" in dockerfile
+    assert "/etc/apt/sources.list.d/yarn.list" in dockerfile
+    assert "/etc/apt/sources.list.d/yarn.sources" in dockerfile
+    assert "rm -f" in dockerfile
+
+    config = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text(encoding="utf-8"))
+    node_feature = next(name for name in config["features"] if "features/node" in name)
+    assert config["features"][node_feature]["version"] == "22"
 
 
 def test_demo_compose_has_no_host_docker_socket_or_privileged_services():
