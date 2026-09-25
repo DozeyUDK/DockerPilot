@@ -1,0 +1,53 @@
+services:
+  web-dev:
+    image: nginx:1.27-alpine
+    container_name: dockerpilot-demo-web-dev
+    labels:
+      com.dockerpilot.demo: "true"
+      com.dockerpilot.environment: "dev"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  web-staging:
+    image: nginx:1.27-alpine
+    container_name: dockerpilot-demo-web-staging
+    labels:
+      com.dockerpilot.demo: "true"
+      com.dockerpilot.environment: "staging"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  web-prod:
+    image: nginx:1.27-alpine
+    container_name: dockerpilot-demo-web-prod
+    labels:
+      com.dockerpilot.demo: "true"
+      com.dockerpilot.environment: "prod"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  cache:
+    image: redis:7.4-alpine
+    container_name: dockerpilot-demo-cache
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    labels:
+      com.dockerpilot.demo: "true"
+      com.dockerpilot.role: "cache"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped

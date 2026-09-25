@@ -3,9 +3,20 @@
 [![License](https://img.shields.io/github/license/DozeyUDK/DockerPilot)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/DozeyUDK/DockerPilot?sort=semver)](https://github.com/DozeyUDK/DockerPilot/releases)
 [![Docs](https://img.shields.io/badge/docs-README%20%26%20guides-blue)](docs/)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/DozeyUDK/DockerPilot?quickstart=1)
 <img width="2667" height="465" alt="image" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
+
+## Live Demo (GitHub Codespaces)
+
+Launch an isolated DockerPilot demo directly from the current repository checkout:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/DozeyUDK/DockerPilot?quickstart=1)
+
+The Codespace runs the real `src/dockerpilot/` package and the real `DockerPilotExtras/` frontend/backend against Docker-in-Docker. `demo/` only supplies disposable sample containers, isolated state, generated credentials, and lifecycle helpers, so there is no second copy of the application to keep in sync. A new Codespace created from `main` therefore uses the current `main`; a Codespace created from a branch or PR demonstrates that ref instead.
+
+The shareable demo is **read-only by default**: Docker-admin mutations, command execution, migrations, server/storage changes and Secure Deploy mutations are blocked by the backend demo guard. After startup, run `bash demo/status.sh` to show the URL and generated demo credentials. Port `5000` remains private by default; use `bash demo/public.sh` only when you intentionally want to share the read-only demo, then `bash demo/private.sh` when finished. See [demo/README.md](demo/README.md) for the full workflow and isolation model.
 
 ## Full Stack Install (CLI + DockerPilotExtras)
 
@@ -134,6 +145,8 @@ chmod +x setup_extras.sh && ./setup_extras.sh
 
 - `src/dockerpilot/` - core CLI package
 - [`DockerPilotExtras/`](DockerPilotExtras/README.md) - optional CI/CD and operations web panel built on top of the CLI
+- `demo/` - isolated live-demo fixtures and lifecycle helpers; never a copy of application source
+- `.devcontainer/` - GitHub Codespaces environment for the live demo
 - `docs/` - user-facing guides and reference material
 - `scripts/` - maintainer and release helpers
 - `tools/` - optional standalone tools

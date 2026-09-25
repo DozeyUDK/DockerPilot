@@ -20,6 +20,8 @@ const defaultState = {
   sessionIdleMinutes: 45,
   sessionExpiresInSeconds: null,
   secureDeployCsrf: null,
+  demoMode: false,
+  demoReadOnly: false,
 }
 
 export const AuthProvider = ({ children }) => {
@@ -38,6 +40,8 @@ export const AuthProvider = ({ children }) => {
       sessionIdleMinutes: payload.session_idle_minutes || prev.sessionIdleMinutes,
       sessionExpiresInSeconds: payload.session_expires_in_seconds ?? null,
       secureDeployCsrf: csrf,
+      demoMode: Boolean(payload.demo_mode),
+      demoReadOnly: Boolean(payload.demo_read_only),
     }))
   }, [])
 

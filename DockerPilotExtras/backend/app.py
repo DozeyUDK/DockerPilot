@@ -60,6 +60,11 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.auth_guard import SlidingWindowRateLimiter, csrf_token_matches
+from backend.services.demo_mode import (
+    DEMO_GENERATOR_MAX_REQUEST_BYTES,
+    demo_mutation_is_blocked,
+    validate_demo_generator_payload,
+)
 from backend.services.deployment_files import (
     find_active_deployment_dir as _svc_find_active_deployment_dir,
     find_all_deployment_dirs as _svc_find_all_deployment_dirs,
@@ -238,11 +243,16 @@ WEB_AUTH_TOTP_SECRET = os.environ.get('WEB_AUTH_TOTP_SECRET', '').strip()
 WEB_AUTH_TOTP_WINDOW = int(os.environ.get('WEB_AUTH_TOTP_WINDOW', '1'))
 AUTH_LOGIN_MAX_FAILURES = int(os.environ.get('AUTH_LOGIN_MAX_FAILURES', '5'))
 AUTH_LOGIN_WINDOW_SECONDS = int(os.environ.get('AUTH_LOGIN_WINDOW_SECONDS', '60'))
+DEMO_MODE = os.environ.get('DOCKERPILOT_DEMO', 'false').lower() == 'true'
+DEMO_ALLOW_MUTATIONS = os.environ.get(
+    'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
+).lower() == 'true'
 _login_rate_limiter = SlidingWindowRateLimiter(
     max_failures=AUTH_LOGIN_MAX_FAILURES,
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
 )
 
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(64 * 1024))) if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else None
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MINUTES)
 
 # Short-lived elevation token settings (for privileged operations)
@@ -410,6 +420,8 @@ def _auth_status_payload():
         'mfa_verified': bool(session.get('auth_mfa_verified')) if authed else False,
         'session_idle_minutes': APP_SESSION_IDLE_MINUTES,
         'session_expires_in_seconds': expires_in,
+        'demo_mode': DEMO_MODE,
+        'demo_read_only': bool(DEMO_MODE and not DEMO_ALLOW_MUTATIONS),
         'csrf_token': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
         'secure_deploy_csrf': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
     }
@@ -420,6 +432,41 @@ PUBLIC_API_PATHS = {
     '/api/auth/login',
     '/api/auth/status',
 }
+
+
+@app.before_request
+def enforce_demo_read_only():
+    """Deny state-changing API calls in a shareable live demo."""
+    if DEMO_MODE and not DEMO_ALLOW_MUTATIONS and request.path == '/api/auth/login' and request.method == 'POST':
+        if request.content_length is None:
+            return jsonify({'success': False, 'error': 'Demo login requires Content-Length'}), 411
+        if request.content_length > DEMO_GENERATOR_MAX_REQUEST_BYTES:
+            return jsonify({'success': False, 'error': 'Demo login request is too large'}), 413
+    if DEMO_MODE and not DEMO_ALLOW_MUTATIONS and request.path == '/api/pipeline/generate' and request.method == 'POST':
+        # The public demo accepts only bounded, non-streamed JSON. Requiring a
+        # declared length prevents chunked bodies from being buffered by
+        # get_json() before a size decision can be made.
+        if request.content_length is None:
+            return jsonify({'success': False, 'error': 'Demo generator requires Content-Length'}), 411
+        if request.content_length > DEMO_GENERATOR_MAX_REQUEST_BYTES:
+            return jsonify({'success': False, 'error': 'Demo generator request is too large'}), 413
+        payload = request.get_json(silent=True)
+        error = validate_demo_generator_payload(payload)
+        if error:
+            return jsonify({'success': False, 'error': error}), 400
+    if demo_mutation_is_blocked(
+        enabled=DEMO_MODE,
+        allow_mutations=DEMO_ALLOW_MUTATIONS,
+        method=request.method,
+        path=request.path,
+    ):
+        return jsonify({
+            'success': False,
+            'error': 'DockerPilot live demo is read-only',
+            'demo_mode': True,
+            'demo_read_only': True,
+        }), 403
+    return None
 
 
 @app.before_request

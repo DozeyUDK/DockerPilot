@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOST_HOME="$HOME"
+STATE_DIR="${DOCKERPILOT_DEMO_STATE_DIR:-${HOST_HOME}/.dockerpilot_demo}"
+RUNTIME_ENV="$STATE_DIR/runtime.env"
+DEMO_HOME="$STATE_DIR/home"
+PID_FILE="$STATE_DIR/extras.pid"
+LOG_FILE="$STATE_DIR/extras.log"
+
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  echo "[demo] .venv is missing; running bootstrap"
+  bash "$ROOT/demo/bootstrap.sh"
+fi
+
+if [[ ! -f "$RUNTIME_ENV" ]]; then
+  "$ROOT/.venv/bin/python" "$ROOT/demo/prepare_runtime.py" --state-dir "$STATE_DIR"
+fi
+
+if [[ ! -f "$STATE_DIR/.dockerpilot-demo-owner" || ! -f "$STATE_DIR/.dockerpilot-demo-state" ]]; then
+  echo "[demo] refusing unowned or incomplete demo state directory: $STATE_DIR" >&2
+  exit 1
+fi
+
+set -a
+# Generated values contain only shell-safe URL-safe tokens and simple scalars.
+# shellcheck disable=SC1090
+source "$RUNTIME_ENV"
+set +a
+
+# Codespaces keeps forwarded-port visibility across backend restarts. Only the
+# fully guarded read-only demo may remain public; every other configuration is
+# treated as interactive and must be private before backend startup.
+DEMO_FLAG="${DOCKERPILOT_DEMO:-false}"
+DEMO_FLAG="${DEMO_FLAG,,}"
+MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"
+MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"
+PUBLIC_SAFE=false
+if [[ "$DEMO_FLAG" == "true" && "$MUTATIONS_FLAG" == "false" ]]; then
+  PUBLIC_SAFE=true
+fi
+if [[ "$PUBLIC_SAFE" != "true" && "${CODESPACES:-}" == "true" ]]; then
+  echo "[demo] non-public-safe mode requested; forcing port ${PORT:-5000} private before backend startup"
+  if ! CODESPACE_NAME="${CODESPACE_NAME:-}" bash "$ROOT/demo/private.sh"; then
+    echo "[demo] refusing interactive startup because private port visibility could not be enforced" >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "$DEMO_HOME"
+
+for _ in $(seq 1 30); do
+  if docker info >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if ! docker info >/dev/null 2>&1; then
+  echo "[demo] Docker daemon is not available" >&2
+  exit 1
+fi
+
+echo "[demo] starting isolated sample containers"
+docker compose -p dockerpilot-demo -f "$ROOT/demo/compose.yml" up -d --remove-orphans
+
+"$ROOT/.venv/bin/python" "$ROOT/demo/seed_demo.py" --home "$DEMO_HOME"
+
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  LIVE_MODE="$("$ROOT/.venv/bin/python" - "http://127.0.0.1:${PORT:-5000}/api/auth/status" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=3) as response:
+        payload = json.load(response)
+    print("true" if not payload.get("demo_read_only", False) else "false")
+except Exception:
+    pass
+PY
+)"
+  if [[ "$LIVE_MODE" != "$MUTATIONS_FLAG" ]]; then
+    echo "[demo] configured access mode changed; restarting DockerPilotExtras"
+    PID="$(cat "$PID_FILE")"
+    CMDLINE=""
+    if [[ -r "/proc/$PID/cmdline" ]]; then
+      CMDLINE="$(tr '\\0' ' ' < "/proc/$PID/cmdline")"
+    fi
+    if [[ "$CMDLINE" == *"$ROOT/.venv/bin/python"* && "$CMDLINE" == *"run_dev.py"* ]]; then
+      kill "$PID"
+      for _ in $(seq 1 20); do
+        kill -0 "$PID" 2>/dev/null || break
+        sleep 0.1
+      done
+    else
+      echo "[demo] refusing to signal unverified pid $PID; treating pid file as stale" >&2
+    fi
+    rm -f "$PID_FILE"
+  else
+    echo "[demo] DockerPilotExtras already running (pid $(cat "$PID_FILE"))"
+  fi
+fi
+
+if [[ ! -f "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  rm -f "$PID_FILE"
+  echo "[demo] starting DockerPilotExtras on port ${PORT:-5000}"
+  (
+    export HOME="$DEMO_HOME"
+    cd "$ROOT/DockerPilotExtras"
+    exec "$ROOT/.venv/bin/python" run_dev.py
+  ) >"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
+fi
+
+READY=false
+for _ in $(seq 1 30); do
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    LIVE_MODE="$("$ROOT/.venv/bin/python" - "http://127.0.0.1:${PORT:-5000}/api/auth/status" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+        payload = json.load(response)
+    if payload.get("demo_mode") is True:
+        print("true" if not payload.get("demo_read_only", False) else "false")
+except Exception:
+    pass
+PY
+)"
+    if [[ "$LIVE_MODE" == "$MUTATIONS_FLAG" ]]; then
+      READY=true
+      break
+    fi
+  fi
+  sleep 1
+done
+
+if [[ "$READY" != "true" ]]; then
+  echo "[demo] DockerPilotExtras did not become ready; last log lines:" >&2
+  tail -n 50 "$LOG_FILE" >&2 || true
+  # Do not leave a backend running after its safety/readiness contract failed.
+  bash "$ROOT/demo/stop.sh" || true
+  exit 1
+fi
+
+DOCKERPILOT_DEMO_STATE_DIR="$STATE_DIR" bash "$ROOT/demo/status.sh"
