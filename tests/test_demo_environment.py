@@ -152,3 +152,17 @@ def test_reset_rejects_root_home_repo_and_non_dedicated_state_paths():
     assert '"$STATE_REAL" == "$ROOT_REAL"' in script
     assert '$(basename "$STATE_REAL")" != ".dockerpilot_demo"' in script
     assert 'rm -rf -- "$STATE_REAL/home"' in script
+
+
+def test_start_readiness_requires_recorded_pid_and_demo_auth_status():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    ready = script[script.index("READY=false"):]
+    assert 'kill -0 "$(cat "$PID_FILE")"' in ready
+    assert "/api/auth/status" in ready
+    assert 'payload.get("demo_mode") is True' in ready
+    assert 'if [[ "$LIVE_MODE" == "$MUTATIONS_FLAG" ]]' in ready
+
+
+def test_extras_has_global_request_body_limit():
+    source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
+    assert "app.config['MAX_CONTENT_LENGTH']" in source

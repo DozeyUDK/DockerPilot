@@ -55,7 +55,9 @@ def test_non_api_routes_are_not_affected():
 def test_extras_app_wires_demo_guard_before_request_and_reports_mode():
     source = APP_PATH.read_text(encoding="utf-8")
     ast.parse(source)
-    assert "from backend.services.demo_mode import demo_mutation_is_blocked" in source
+    imports = [node for node in ast.parse(source).body if isinstance(node, ast.ImportFrom)]
+    demo_import = next(node for node in imports if node.module == "backend.services.demo_mode")
+    assert "demo_mutation_is_blocked" in {alias.name for alias in demo_import.names}
     assert "def enforce_demo_read_only():" in source
     assert "'demo_mode': DEMO_MODE" in source
     assert "'demo_read_only': bool(DEMO_MODE and not DEMO_ALLOW_MUTATIONS)" in source

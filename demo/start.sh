@@ -91,9 +91,22 @@ fi
 
 READY=false
 for _ in $(seq 1 30); do
-  if "$ROOT/.venv/bin/python" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-5000}/', timeout=1).read(1)" >/dev/null 2>&1; then
-    READY=true
-    break
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    LIVE_MODE="$("$ROOT/.venv/bin/python" - "http://127.0.0.1:${PORT:-5000}/api/auth/status" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+        payload = json.load(response)
+    if payload.get("demo_mode") is True:
+        print("true" if not payload.get("demo_read_only", False) else "false")
+except Exception:
+    pass
+PY
+)"
+    if [[ "$LIVE_MODE" == "$MUTATIONS_FLAG" ]]; then
+      READY=true
+      break
+    fi
   fi
   sleep 1
 done

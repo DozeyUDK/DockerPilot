@@ -252,6 +252,7 @@ _login_rate_limiter = SlidingWindowRateLimiter(
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
 )
 
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(64 * 1024)))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MINUTES)
 
 # Short-lived elevation token settings (for privileged operations)
