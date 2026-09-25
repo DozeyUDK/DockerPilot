@@ -63,6 +63,7 @@ function Environments() {
     key_passphrase: '',
     totp_secret: '',
     totp_code: '',
+    host_key_fingerprint: '',
     description: ''
   })
   const serverKeyReaderRef = useRef(null)
@@ -565,6 +566,8 @@ function Environments() {
         private_key: '', // Don't show existing key
         key_passphrase: '',
         totp_secret: '',
+        totp_code: '',
+        host_key_fingerprint: server.host_key_fingerprint || '',
         description: server.description || ''
       })
     } else {
@@ -2924,6 +2927,32 @@ function Environments() {
               )}
 
               <div>
+                <label htmlFor="server-host-key-fingerprint" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                  SSH host fingerprint
+                </label>
+                <input
+                  id="server-host-key-fingerprint"
+                  type="text"
+                  value={serverForm.host_key_fingerprint || ''}
+                  onChange={(e) => setServerForm({ ...serverForm, host_key_fingerprint: e.target.value })}
+                  placeholder="SHA256:... (use Test Connection to discover)"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    backgroundColor: 'var(--input-bg)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--input-border)',
+                    borderRadius: '4px',
+                    boxSizing: 'border-box',
+                    fontFamily: 'monospace'
+                  }}
+                />
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+                  Unknown hosts are rejected. Verify the SHA256 fingerprint out-of-band before trusting it.
+                </div>
+              </div>
+
+              <div>
                 <label htmlFor="server-description" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: '600' }}>
                   Opis (opcjonalnie)
                 </label>
@@ -2955,6 +2984,31 @@ function Environments() {
                 }}>
                   {testingServerResult.success ? '✓ ' : '✗ '}
                   {testingServerResult.message || testingServerResult.error || 'Test result'}
+                  {testingServerResult.host_key_required && testingServerResult.host_key_fingerprint && (
+                    <div style={{ marginTop: '0.75rem' }}>
+                      <div style={{ fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: '0.5rem' }}>
+                        {testingServerResult.host_key_fingerprint}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setServerForm({
+                          ...serverForm,
+                          host_key_fingerprint: testingServerResult.host_key_fingerprint
+                        })}
+                        style={{
+                          padding: '0.4rem 0.75rem',
+                          backgroundColor: '#ffc107',
+                          color: '#212529',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontWeight: '600'
+                        }}
+                      >
+                        Trust this fingerprint
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

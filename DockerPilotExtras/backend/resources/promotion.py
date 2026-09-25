@@ -206,15 +206,42 @@ def create_promotion_resources(
                             'to_env': to_env,
                         },
                     )
+                    # Compatibility: the deprecated /sudo-password endpoint
+                    # issues a session-bound, one-time legacy token. Strict
+                    # validation always runs first. If it fails, legacy action
+                    # validation may succeed; otherwise preserve the strict error.
+                    if not token_ok:
+                        strict_message = token_message
+                        legacy_ok, _legacy_message, legacy_password = _consume_elevation_token(
+                            elevation_token,
+                            expected_action='legacy.sudo_password',
+                        )
+                        if legacy_ok:
+                            token_ok = True
+                            token_password = legacy_password
+                        else:
+                            token_message = strict_message
                     if not token_ok:
                         return {'error': token_message}, 403
+                    if session.get('legacy_elevation_token') == elevation_token:
+                        session.pop('legacy_elevation_token', None)
                     sudo_password = token_password
                     app.logger.info("Using elevation token for privileged promotion flow")
                 else:
-                    # Legacy fallback for older clients
-                    sudo_password = session.get('sudo_password')
-                    if sudo_password:
-                        app.logger.info("Using legacy sudo password from session")
+                    # Older clients call /sudo-password and then promote without
+                    # forwarding the returned token. Consume only the opaque
+                    # compatibility token; the sudo password never lives in the
+                    # Flask session.
+                    legacy_token = session.pop('legacy_elevation_token', None)
+                    if legacy_token:
+                        token_ok, token_message, token_password = _consume_elevation_token(
+                            legacy_token,
+                            expected_action='legacy.sudo_password',
+                        )
+                        if not token_ok:
+                            return {'error': token_message}, 403
+                        sudo_password = token_password
+                        app.logger.info("Using legacy elevation token for privileged promotion flow")
     
                 execution_context = _execution_context_factory(
                     get_dockerpilot,

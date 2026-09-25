@@ -34,6 +34,7 @@ def create_server_resources(
                         "port": server.get("port", 22),
                         "username": server.get("username"),
                         "auth_type": server.get("auth_type", "password"),
+                        "host_key_fingerprint": server.get("host_key_fingerprint"),
                         "description": server.get("description", ""),
                     }
                     safe_servers.append(safe_server)
@@ -86,6 +87,7 @@ def create_server_resources(
                     "port": data.get("port", 22),
                     "username": username,
                     "auth_type": auth_type,
+                    "host_key_fingerprint": str(data.get("host_key_fingerprint") or "").strip() or None,
                     "description": data.get("description", ""),
                 }
 
@@ -145,22 +147,35 @@ def create_server_resources(
                     server["username"] = data["username"]
                 if "description" in data:
                     server["description"] = data.get("description", "")
+                if "host_key_fingerprint" in data:
+                    server["host_key_fingerprint"] = str(data.get("host_key_fingerprint") or "").strip() or None
                 if "auth_type" in data:
                     server["auth_type"] = data["auth_type"]
 
                 auth_type = server.get("auth_type", "password")
                 if auth_type == "password":
-                    if "password" in data:
+                    if data.get("password"):
                         server["password"] = data["password"]
                 elif auth_type == "key":
-                    if "private_key" in data:
+                    replacement_key = bool(data.get("private_key"))
+                    if replacement_key:
                         server["private_key"] = data["private_key"]
-                    if "key_passphrase" in data:
-                        server["key_passphrase"] = data.get("key_passphrase")
+                        # A replacement key has independent encryption state.
+                        # Never carry a passphrase from the old key forward.
+                        server.pop("key_passphrase", None)
+                        if data.get("key_passphrase"):
+                            server["key_passphrase"] = data["key_passphrase"]
+                    elif data.get("key_passphrase"):
+                        # Blank values on ordinary edits preserve the existing
+                        # secret because the edit form intentionally does not
+                        # round-trip stored credentials.
+                        server["key_passphrase"] = data["key_passphrase"]
+                    elif data.get("clear_key_passphrase") is True:
+                        server.pop("key_passphrase", None)
                 elif auth_type == "2fa":
-                    if "password" in data:
+                    if data.get("password"):
                         server["password"] = data["password"]
-                    if "totp_secret" in data:
+                    if data.get("totp_secret"):
                         server["totp_secret"] = data.get("totp_secret")
 
                 if save_servers_config(config):
@@ -220,6 +235,7 @@ def create_server_resources(
                         "private_key": data.get("private_key"),
                         "key_passphrase": data.get("key_passphrase"),
                         "totp_code": data.get("totp_code"),
+                        "host_key_fingerprint": str(data.get("host_key_fingerprint") or "").strip() or None,
                     }
 
                 return test_ssh_connection(server_config)
@@ -283,6 +299,7 @@ def create_server_resources(
                                     "port": server.get("port", 22),
                                     "username": server.get("username"),
                                     "auth_type": server.get("auth_type"),
+                                    "host_key_fingerprint": server.get("host_key_fingerprint"),
                                 },
                             }
 

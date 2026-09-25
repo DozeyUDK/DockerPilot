@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 
 from backend.security import redact_sensitive_text as _redact_sensitive_text
@@ -47,6 +48,8 @@ def create_migration_resource(
     execute_command_via_ssh,
     execute_docker_command_via_ssh,
     save_deployment_config,
+    execute_shell_script_via_ssh=None,
+    open_ssh_client_for_transfer=None,
     infer_port_mapping_for_host_network,
 ):
     """Return the container migration resource class with injected dependencies."""
@@ -55,6 +58,15 @@ def create_migration_resource(
     _migration_progress = migration_progress
     _migration_cancel_flags = migration_cancel_flags
     _infer_port_mapping_for_host_network = infer_port_mapping_for_host_network
+
+    # Backward-compatible defaults for callers that only construct the resource
+    # for validation/unit tests. Production app wiring injects the strict
+    # script executor and verified SFTP client explicitly.
+    if execute_shell_script_via_ssh is None:
+        execute_shell_script_via_ssh = execute_command_via_ssh
+    if open_ssh_client_for_transfer is None:
+        def open_ssh_client_for_transfer(_server_config):
+            raise RuntimeError("Verified SSH transfer client is required for remote migration")
 
     class ContainerMigrate(Resource):
         """Migrate container from one server to another"""
@@ -66,6 +78,7 @@ def create_migration_resource(
             """Run the legacy migration without reading Flask request state."""
             try:
                 container_name = data.get('container_name')
+                safe_container_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', str(container_name or 'container'))
                 source_server_id = data.get('source_server_id', 'local')
                 target_server_id = data.get('target_server_id')
                 include_data = data.get('include_data', False)  # Whether to migrate volumes/data
@@ -391,48 +404,15 @@ def create_migration_resource(
                         app.logger.info(f"Tagged image on remote source with tag: {export_image_tag}")
                         
                         # Save image to tar on remote
-                        remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                        remote_tar_path = f"/tmp/{safe_container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
                         execute_docker_command_via_ssh(
                             source_server,
                             f"save -o {remote_tar_path} {export_image_tag}"
                         )
                         
-                        # Download tar file via SCP
-                        import paramiko
-                        from io import BytesIO
-                        ssh = paramiko.SSHClient()
-                        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        
-                        # Connect and download
-                        if source_server.get('auth_type') == 'password':
-                            ssh.connect(
-                                source_server.get('hostname'),
-                                port=source_server.get('port', 22),
-                                username=source_server.get('username'),
-                                password=source_server.get('password'),
-                                timeout=10
-                            )
-                        elif source_server.get('auth_type') == 'key':
-                            from io import StringIO
-                            key_file = StringIO(source_server.get('private_key'))
-                            try:
-                                key = paramiko.RSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                            except:
-                                key_file.seek(0)
-                                try:
-                                    key = paramiko.DSSKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                                except:
-                                    key_file.seek(0)
-                                    key = paramiko.ECDSAKey.from_private_key(key_file, password=source_server.get('key_passphrase'))
-                            
-                            ssh.connect(
-                                source_server.get('hostname'),
-                                port=source_server.get('port', 22),
-                                username=source_server.get('username'),
-                                pkey=key,
-                                timeout=10
-                            )
-                        
+                        # Download tar file via SFTP over the same strictly verified SSH path.
+                        ssh = self._open_ssh_client_for_transfer(source_server)
+
                         # Use SFTP to download
                         sftp = ssh.open_sftp()
                         last_download_logged_percent = -1
@@ -463,7 +443,7 @@ def create_migration_resource(
                         ssh.close()
                         
                         # Clean up remote tar
-                        execute_command_via_ssh(source_server, f"rm -f {remote_tar_path}", check_exit_status=False)
+                        execute_command_via_ssh(source_server, f"rm -f {shlex.quote(remote_tar_path)}", check_exit_status=False)
                     except Exception as e:
                         error_msg = f'Failed to export image from remote: {_redact_sensitive_text(e)}'
                         app.logger.error("Migration error during remote image export: %s", _safe_error_message(e))
@@ -576,42 +556,8 @@ def create_migration_resource(
                     
                     app.logger.info(f"Transferring image to target server {target_server.get('hostname')}...")
                     try:
-                        import paramiko
-                        ssh = paramiko.SSHClient()
-                        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        
-                        # Connect to target server
                         try:
-                            if target_server.get('auth_type') == 'password':
-                                ssh.connect(
-                                    target_server.get('hostname'),
-                                    port=target_server.get('port', 22),
-                                    username=target_server.get('username'),
-                                    password=target_server.get('password'),
-                                    timeout=30  # Increased timeout for large file transfers
-                                )
-                            elif target_server.get('auth_type') == 'key':
-                                from io import StringIO
-                                key_file = StringIO(target_server.get('private_key'))
-                                try:
-                                    key = paramiko.RSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                                except:
-                                    key_file.seek(0)
-                                    try:
-                                        key = paramiko.DSSKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                                    except:
-                                        key_file.seek(0)
-                                        key = paramiko.ECDSAKey.from_private_key(key_file, password=target_server.get('key_passphrase'))
-                                
-                                ssh.connect(
-                                    target_server.get('hostname'),
-                                    port=target_server.get('port', 22),
-                                    username=target_server.get('username'),
-                                    pkey=key,
-                                    timeout=30  # Increased timeout for large file transfers
-                                )
-                            else:
-                                raise Exception(f"Unsupported auth_type: {target_server.get('auth_type')}")
+                            ssh = self._open_ssh_client_for_transfer(target_server)
                         except Exception as e:
                             app.logger.error(
                                 "Failed to connect to target server %s: %s",
@@ -620,10 +566,10 @@ def create_migration_resource(
                             )
                             safe_error = _redact_sensitive_text(e)
                             update_progress('failed', 0, f'Error connecting to target server: {safe_error}')
-                            raise Exception(f"Failed to connect to target server: {safe_error}")
-                        
+                            raise Exception(f"Failed to connect to target server: {safe_error}") from e
+
                         # Upload image tar via SFTP
-                        remote_tar_path = f"/tmp/{container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                        remote_tar_path = f"/tmp/{safe_container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
                         
                         # Check if local file exists
                         if not os.path.exists(image_export_path.name):
@@ -635,8 +581,12 @@ def create_migration_resource(
                         
                         # Check available disk space on target server before transfer
                         try:
-                            df_output = execute_command_via_ssh(target_server, "df -m /tmp | tail -1 | awk '{print $4}'")
-                            available_space_mb = int(df_output.strip())
+                            df_output = execute_command_via_ssh(target_server, "df -Pm /tmp")
+                            df_lines = [line for line in (df_output or '').splitlines() if line.strip()]
+                            df_fields = df_lines[-1].split() if df_lines else []
+                            if len(df_fields) < 4:
+                                raise ValueError("Unexpected df output")
+                            available_space_mb = int(df_fields[3])
                             app.logger.info(f"Available disk space on target server /tmp: {available_space_mb} MB")
                             
                             # Add 20% buffer for safety
@@ -653,9 +603,16 @@ def create_migration_resource(
                         
                         # Check write permissions in /tmp
                         try:
-                            test_output = execute_command_via_ssh(target_server, f"touch {remote_tar_path}.test && rm -f {remote_tar_path}.test && echo 'OK'")
-                            if 'OK' not in test_output:
-                                raise Exception("Cannot write to /tmp directory on target server")
+                            test_path = f"{remote_tar_path}.test"
+                            execute_command_via_ssh(
+                                target_server,
+                                f"touch {shlex.quote(test_path)}",
+                            )
+                            execute_command_via_ssh(
+                                target_server,
+                                f"rm -f {shlex.quote(test_path)}",
+                                check_exit_status=False,
+                            )
                             app.logger.info("Write permissions verified in /tmp")
                         except Exception as e:
                             app.logger.error(
@@ -923,7 +880,7 @@ def create_migration_resource(
                             raise Exception(error_msg)
                         
                         # Clean up remote tar
-                        execute_command_via_ssh(target_server, f"rm -f {remote_tar_path}", check_exit_status=False)
+                        execute_command_via_ssh(target_server, f"rm -f {shlex.quote(remote_tar_path)}", check_exit_status=False)
                         
                     except Exception as e:
                         error_msg = f'Failed to transfer image to target: {_redact_sensitive_text(e)}'
@@ -1430,17 +1387,17 @@ def create_migration_resource(
                         else:
                             # Quick check on remote server
                             repo_name = target_image_tag.split(':')[0]
-                            grep_pattern = f'^{target_image_tag}$|^{repo_name}:'
-                            images_check = execute_docker_command_via_ssh(
+                            all_images = execute_docker_command_via_ssh(
                                 target_server,
-                                f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep -E '{grep_pattern}'"
+                                f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
                             )
+                            image_lines = [line.strip() for line in (all_images or '').splitlines() if line.strip()]
+                            images_check = [
+                                line for line in image_lines
+                                if line == target_image_tag or line.startswith(repo_name + ':')
+                            ]
                             if target_image_tag not in images_check:
                                 # Try to find the image by repository
-                                all_images = execute_docker_command_via_ssh(
-                                    target_server,
-                                    f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
-                                )
                                 app.logger.warning(
                                     "Image %s not found in final check (inventory_length=%d)",
                                     target_image_tag,
@@ -1494,9 +1451,12 @@ def create_migration_resource(
                                                     # Verify the tag was created
                                                     verify_output = execute_docker_command_via_ssh(
                                                         target_server,
-                                                        f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep '^{target_image_tag}$'"
+                                                        f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
                                                     )
-                                                    if target_image_tag in verify_output:
+                                                    verify_lines = {
+                                                        line.strip() for line in (verify_output or '').splitlines() if line.strip()
+                                                    }
+                                                    if target_image_tag in verify_lines:
                                                         app.logger.info(f"Successfully retagged image as {target_image_tag}")
                                                         image_found_for_retag = True
                                                         break
@@ -1519,12 +1479,12 @@ def create_migration_resource(
                     
                     # Execute on target server
                     if target_server_id == 'local':
-                        # Local server - use subprocess directly (subprocess is already imported at top)
-                        full_command = f"docker {docker_run_cmd}"
+                        # Local server: execute Docker argv directly; never invoke a shell.
+                        docker_run_argv = ['docker', *shlex.split(docker_run_cmd)]
                         app.logger.info("Executing prepared docker run command locally for %s", container_name)
                         result = subprocess.run(
-                            full_command,
-                            shell=True,
+                            docker_run_argv,
+                            shell=False,
                             capture_output=True,
                             text=True,
                             timeout=300
@@ -1902,63 +1862,9 @@ def create_migration_resource(
             return config
     
         def _open_ssh_client_for_transfer(self, server_config):
-            """Open SSH client for SFTP transfers."""
-            import paramiko
-            from io import StringIO
-    
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    
-            hostname = server_config.get('hostname')
-            port = server_config.get('port', 22)
-            username = server_config.get('username')
-            auth_type = server_config.get('auth_type', 'password')
-    
-            if auth_type == 'password':
-                ssh.connect(
-                    hostname,
-                    port=port,
-                    username=username,
-                    password=server_config.get('password'),
-                    timeout=30,
-                )
-            elif auth_type == 'key':
-                key_content = server_config.get('private_key')
-                if not key_content:
-                    raise ValueError('Private key required for key authentication')
-                key_passphrase = server_config.get('key_passphrase')
-                key_file = StringIO(key_content)
-                try:
-                    key = paramiko.RSAKey.from_private_key(
-                        key_file, password=key_passphrase if key_passphrase else None
-                    )
-                except Exception:
-                    key_file.seek(0)
-                    try:
-                        key = paramiko.DSSKey.from_private_key(
-                            key_file, password=key_passphrase if key_passphrase else None
-                        )
-                    except Exception:
-                        key_file.seek(0)
-                        key = paramiko.ECDSAKey.from_private_key(
-                            key_file, password=key_passphrase if key_passphrase else None
-                        )
-                ssh.connect(hostname, port=port, username=username, pkey=key, timeout=30)
-            elif auth_type == '2fa':
-                password = server_config.get('password', '')
-                totp_code = server_config.get('totp_code', '')
-                ssh.connect(
-                    hostname,
-                    port=port,
-                    username=username,
-                    password=password + totp_code,
-                    timeout=30,
-                )
-            else:
-                raise ValueError(f"Unsupported auth_type: {auth_type}")
-    
-            return ssh
-    
+            """Open a strictly verified SSH client for SFTP transfers."""
+            return open_ssh_client_for_transfer(server_config)
+
         def _download_file_from_server(self, server_config, remote_path: str, local_path: str, progress_callback=None):
             """Download file from remote server via SFTP."""
             ssh = self._open_ssh_client_for_transfer(server_config)
@@ -2170,7 +2076,7 @@ def create_migration_resource(
                             "echo \"Bind source path not found: $src\" >&2; exit 1; "
                             "fi"
                         )
-                        create_output = execute_command_via_ssh(source_server, create_cmd)
+                        create_output = execute_shell_script_via_ssh(source_server, create_cmd)
                         bind_kind = 'file' if '__MOUNT_KIND__:file' in (create_output or '') else 'dir'
                     else:
                         if not effective_volume:
@@ -2183,7 +2089,7 @@ def create_migration_resource(
                             "-v \"$vol\":/from:ro "
                             "alpine sh -c 'cd /from && tar -cpf - .' > \"$archive\""
                         )
-                        execute_command_via_ssh(source_server, create_cmd)
+                        execute_shell_script_via_ssh(source_server, create_cmd)
     
                     # 2) Ensure archive is local (download from source if needed)
                     if source_server is not None:
@@ -2254,13 +2160,13 @@ def create_migration_resource(
                         # Restore bind mounts through docker to avoid direct host FS permission issues
                         # (docker daemon can create/access host path as needed).
                         restore_cmd = (
-                            "run --rm -i "
+                            f"cat {archive_q} | "
+                            "docker run --rm -i "
                             f"-v {restore_host_q}:/to "
-                            "alpine sh -c 'cd /to && tar -xpf -' "
-                            f"< {archive_q}"
+                            "alpine sh -c 'cd /to && tar -xpf -'"
                         )
                         try:
-                            execute_docker_command_via_ssh(target_server, restore_cmd)
+                            execute_shell_script_via_ssh(target_server, restore_cmd)
                         except Exception as docker_restore_err:
                             app.logger.warning(
                                 "Bind mount docker-restore failed, trying legacy restore path "
@@ -2271,7 +2177,7 @@ def create_migration_resource(
                                 f"mkdir -p {target_q} && "
                                 f"tar -xpf {archive_q} -C {target_q}"
                             )
-                            execute_command_via_ssh(target_server, legacy_restore_cmd)
+                            execute_shell_script_via_ssh(target_server, legacy_restore_cmd)
                     else:
                         vol_q = shlex.quote(effective_volume)
                         archive_q = shlex.quote(target_archive_path)
@@ -2282,7 +2188,7 @@ def create_migration_resource(
                             f"-v {vol_q}:/to "
                             "alpine sh -c 'cd /to && tar -xpf -'"
                         )
-                        execute_command_via_ssh(target_server, restore_cmd)
+                        execute_shell_script_via_ssh(target_server, restore_cmd)
     
                     app.logger.info(
                         f"Data migration succeeded for mount {idx}/{total}: "
@@ -2537,11 +2443,11 @@ def create_migration_resource(
                     try:
                         binfmt_check = execute_command_via_ssh(
                             server_config,
-                            "ls -la /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -q qemu && echo 'yes' || echo 'no'",
+                            "ls -1 /proc/sys/fs/binfmt_misc/",
                             check_exit_status=False
                         )
                         app.logger.debug(f"binfmt_misc check output: {binfmt_check}")
-                        if 'yes' in binfmt_check.lower().strip():
+                        if any('qemu' in line.lower() for line in (binfmt_check or '').splitlines()):
                             binfmt_misc_available = True
                             qemu_available = True
                             app.logger.info("✓ binfmt_misc with QEMU found on remote server")
@@ -2554,11 +2460,11 @@ def create_migration_resource(
                     try:
                         qemu_check = execute_command_via_ssh(
                             server_config,
-                            "which qemu-x86_64-static 2>/dev/null && echo 'yes' || echo 'no'",
+                            "which qemu-x86_64-static",
                             check_exit_status=False
                         )
                         app.logger.debug(f"qemu-x86_64-static check output: {qemu_check}")
-                        if 'yes' in qemu_check.lower().strip():
+                        if (qemu_check or '').strip():
                             qemu_available = True
                             app.logger.info("✓ qemu-x86_64-static found on remote server")
                         else:
@@ -2798,15 +2704,21 @@ def create_migration_resource(
                             if result == 0:
                                 conflicts.append(str(host_port))
                     else:
-                        # Remote server - check via SSH
-                        # Try ss first (more modern), fallback to netstat
-                        port_check_cmd = "ss -tln | grep -E ':[0-9]+' | sed 's/.*:\\([0-9]*\\).*/\\1/' || netstat -tln | grep -E ':[0-9]+' | sed 's/.*:\\([0-9]*\\).*/\\1/'"
-                        port_output = execute_command_via_ssh(server_config, port_check_cmd, check_exit_status=False)
-                        if port_output:
-                            for line in port_output.strip().split('\n'):
-                                port = line.strip()
-                                if port.isdigit():
-                                    used_ports.add(port)
+                        # Remote server - parse socket-listener output locally.
+                        port_output = execute_command_via_ssh(
+                            server_config,
+                            "ss -tln",
+                            check_exit_status=False,
+                        )
+                        if not (port_output or '').strip():
+                            port_output = execute_command_via_ssh(
+                                server_config,
+                                "netstat -tln",
+                                check_exit_status=False,
+                            )
+                        for line in (port_output or '').splitlines():
+                            for port in re.findall(r':(\d+)\b', line):
+                                used_ports.add(port)
                         
                         # Check if any of our ports are in use
                         for container_port, host_port in port_mapping.items():

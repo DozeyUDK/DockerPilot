@@ -10,18 +10,23 @@ const api = axios.create({
   }
 })
 
-let secureDeployCsrf = null
+let appCsrfToken = null
 
+// Compatibility name retained because Secure Deploy already consumes the same
+// session-bound CSRF token. The interceptor now protects every mutating API call.
 export const setSecureDeployCsrf = (token) => {
-  secureDeployCsrf = token || null
+  appCsrfToken = token || null
 }
 
 api.interceptors.request.use((config) => {
   const url = config.url || ''
-  if (url.includes('/secure-deploy/') && ['post', 'put', 'patch', 'delete'].includes((config.method || '').toLowerCase())) {
+  const method = (config.method || '').toLowerCase()
+  const mutating = ['post', 'put', 'patch', 'delete'].includes(method)
+  const publicLogin = url.includes('/auth/login')
+  if (mutating && !publicLogin) {
     config.headers = config.headers || {}
-    if (secureDeployCsrf) {
-      config.headers['X-CSRF-Token'] = secureDeployCsrf
+    if (appCsrfToken) {
+      config.headers['X-CSRF-Token'] = appCsrfToken
     }
   }
   return config
