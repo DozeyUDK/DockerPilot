@@ -171,8 +171,7 @@ def move_many_container_bindings(
     return saved
 
 
-def load_legacy_file_state_snapshot(*, file_store_factory) -> dict:
-    file_store = file_store_factory()
+def _load_legacy_snapshot_from_store(file_store) -> dict:
     return {
         "servers_config": file_store.load_servers_config(),
         "env_servers_config": file_store.load_env_servers_config(),
@@ -181,15 +180,46 @@ def load_legacy_file_state_snapshot(*, file_store_factory) -> dict:
     }
 
 
-def migrate_legacy_file_state_to_store(*, target_store, file_store_factory) -> dict:
-    snapshot = load_legacy_file_state_snapshot(file_store_factory=file_store_factory)
+def load_legacy_file_state_snapshot(*, file_store_factory) -> dict:
+    return _load_legacy_snapshot_from_store(file_store_factory())
+
+
+def migrate_legacy_file_state_to_store(
+    *,
+    target_store,
+    file_store_factory,
+    protect_servers_config=None,
+) -> dict:
+    """Copy legacy file state into a target store without persisting plaintext credentials.
+
+    Legacy files may contain credentials written before encrypted-at-rest storage
+    was introduced.  Migration bypasses the normal application save wrapper, so
+    server records are protected here before any target store sees them.
+
+    ``protect_servers_config`` is injectable for dependency-light tests.  The
+    runtime default lazily loads the encrypted secret store using the legacy file
+    store's config directory, preserving file-mode imports when ``cryptography``
+    is not installed while still failing closed if a real migration cannot
+    encrypt credentials.
+    """
+    file_store = file_store_factory()
+    snapshot = _load_legacy_snapshot_from_store(file_store)
     servers_cfg = snapshot.get("servers_config", {}) or {"servers": [], "default_server": "local"}
     env_cfg = snapshot.get("env_servers_config", {}) or {"env_servers": {}}
     history = list(snapshot.get("deployment_history", []) or [])
     bindings = snapshot.get("env_container_bindings", {}) or {"env_containers": {}}
     normalized_bindings = normalize_env_container_bindings(bindings)
 
-    target_store.save_servers_config(servers_cfg)
+    if protect_servers_config is None:
+        config_dir = getattr(file_store, "config_dir", None)
+        if config_dir is None:
+            raise RuntimeError("Legacy file store does not expose config_dir for credential protection")
+        from .secret_store import EncryptedSecretStore
+
+        protect_servers_config = EncryptedSecretStore.from_config_dir(config_dir).protect_config
+
+    protected_servers_cfg = protect_servers_config(servers_cfg)
+    target_store.save_servers_config(protected_servers_cfg)
     target_store.save_env_servers_config(env_cfg)
     target_store.replace_deployment_history(history, max_entries=50)
     target_store.save_env_container_bindings(normalized_bindings)
