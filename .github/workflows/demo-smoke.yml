@@ -1,0 +1,65 @@
+name: Demo smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "DockerPilotExtras/**"
+      - "demo/**"
+      - ".devcontainer/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/demo-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "DockerPilotExtras/**"
+      - "demo/**"
+      - ".devcontainer/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/demo-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  demo-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            DockerPilotExtras/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: DockerPilotExtras/frontend/package-lock.json
+
+      - name: Bootstrap live demo
+        run: bash demo/bootstrap.sh
+
+      - name: Start live demo
+        run: bash demo/start.sh
+
+      - name: Run end-to-end demo smoke
+        run: .venv/bin/python demo/smoke.py
+
+      - name: Show demo logs on failure
+        if: failure()
+        run: |
+          cat "$HOME/.dockerpilot_demo/extras.log" || true
+          docker compose -p dockerpilot-demo -f demo/compose.yml ps || true
+          docker compose -p dockerpilot-demo -f demo/compose.yml logs --tail=100 || true
+
+      - name: Stop live demo
+        if: always()
+        run: bash demo/stop.sh
