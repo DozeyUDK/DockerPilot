@@ -84,6 +84,11 @@ export APP_SESSION_IDLE_MINUTES=45
 export AUTH_LOGIN_MAX_FAILURES=5
 export AUTH_LOGIN_WINDOW_SECONDS=60
 
+# If Extras is behind a reverse proxy, explicitly trust only the direct proxy
+# IP/CIDR so X-Forwarded-For can be used for per-client login limiting.
+# Example for nginx proxy_pass to 127.0.0.1:5000:
+export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
+
 # Required for stable production sessions (do not use a generated-per-start value)
 export SECRET_KEY=replace-with-a-long-random-value
 
@@ -91,6 +96,9 @@ export SECRET_KEY=replace-with-a-long-random-value
 # If omitted, Extras creates ~/.dockerpilot_extras/.secrets.key with mode 0600.
 # export DOCKERPILOT_EXTRAS_SECRET_KEY='<fernet-key>'
 ```
+
+`X-Forwarded-For` is ignored unless the direct socket peer belongs to `AUTH_TRUSTED_PROXY_CIDRS`.
+Do not trust broad client networks; `0.0.0.0/0` and `::/0` are rejected.
 
 ### 4. Using Loader Script (Recommended)
 
@@ -336,6 +344,16 @@ python run_dev.py
 
 ### Configuration with Reverse Proxy (Nginx)
 
+If nginx connects to Extras over loopback, configure the backend to trust only loopback as the
+forwarding proxy. For Docker or another network topology, use the exact proxy IP/CIDR instead.
+
+```bash
+export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
+python run_dev.py
+```
+
+Then configure nginx to append the real client address:
+
 ```nginx
 # /etc/nginx/sites-available/dockerpilot-extras
 server {
@@ -351,6 +369,11 @@ server {
     }
 }
 ```
+
+Extras ignores `X-Forwarded-For` from peers outside `AUTH_TRUSTED_PROXY_CIDRS`. This prevents a
+direct client from rotating spoofed forwarding headers to bypass login throttling. Conversely, omitting
+the trusted proxy configuration behind nginx makes all proxied logins share nginx's socket IP and can
+allow one client to exhaust that shared rate-limit bucket.
 
 ### Configuration with DockerPilot
 
@@ -477,9 +500,9 @@ set `CORS_ORIGINS` in the process environment to the exact HTTPS origins that ho
 - **HTTPS**: Use HTTPS in production
 - **Authentication**: Optional web auth with session + MFA TOTP is available (`WEB_AUTH_ENABLED=true`)
 - **CSRF**: When web auth is enabled, all mutating `/api/*` requests require a session-bound `X-CSRF-Token`; the bundled frontend sends it automatically
-- **Login rate limiting**: Failed login attempts are bounded per client IP (`AUTH_LOGIN_MAX_FAILURES`, `AUTH_LOGIN_WINDOW_SECONDS`)
+- **Login rate limiting**: Failed login attempts are bounded per client IP (`AUTH_LOGIN_MAX_FAILURES`, `AUTH_LOGIN_WINDOW_SECONDS`). Behind a reverse proxy, set `AUTH_TRUSTED_PROXY_CIDRS` to only the direct trusted proxy IP/CIDR; forwarded headers from other peers are ignored
 - **Credentials at rest**: Server passwords, private keys, key passphrases and stored server TOTP secrets are encrypted before file/PostgreSQL persistence. The Fernet master key comes from `DOCKERPILOT_EXTRAS_SECRET_KEY` or `~/.dockerpilot_extras/.secrets.key` (mode `0600`)
-- **SSH host identity**: Remote SSH connections use a managed `~/.dockerpilot_extras/known_hosts`; unknown hosts must be explicitly trusted by SHA256 fingerprint and mismatches fail closed
+- **SSH host identity**: Remote SSH connections use a managed `~/.dockerpilot_extras/known_hosts`; unknown hosts must be explicitly trusted by SHA256 fingerprint and mismatches fail closed. Managed host-key updates are serialized and atomically replaced so readers never observe a partially written file
 - **Privilege elevation**: Sudo passwords are never stored in the Flask cookie session; privileged operations use short-lived, one-time server-side elevation tokens
 
 ### Environment Variables
@@ -509,6 +532,10 @@ export APP_SESSION_IDLE_MINUTES=45
 # Failed-login limiter
 export AUTH_LOGIN_MAX_FAILURES=5
 export AUTH_LOGIN_WINDOW_SECONDS=60
+
+# Only when running behind a trusted reverse proxy. Use exact proxy IP/CIDRs.
+# X-Forwarded-For is otherwise ignored.
+# export AUTH_TRUSTED_PROXY_CIDRS='127.0.0.1/32'
 
 # Optional secret-store master key. If omitted, a persistent mode-0600 key file is generated.
 # export DOCKERPILOT_EXTRAS_SECRET_KEY='<fernet-key>'

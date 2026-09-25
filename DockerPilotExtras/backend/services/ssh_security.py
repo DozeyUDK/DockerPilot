@@ -7,8 +7,14 @@ import hashlib
 import hmac
 import os
 import socket
+import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+
+_known_hosts_lock = threading.RLock()
 
 
 class SSHHostKeyError(RuntimeError):
@@ -72,15 +78,98 @@ def _load_known_hosts(path: Path):
     return host_keys
 
 
-def _save_known_host_key(host_keys, path: Path, host_name: str, key) -> None:
-    """Persist the verified key, replacing any stale key of the same type."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    host_keys.add(host_name, key.get_name(), key)
-    host_keys.save(str(path))
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory fsync so an atomic rename is durable on POSIX."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
-        os.chmod(path, 0o600)
+        fd = os.open(str(path), flags)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
     except OSError:
         pass
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _known_hosts_update_lock(path: Path):
+    """Serialize managed known_hosts read/modify/write across threads and workers."""
+    with _known_hosts_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f".{path.name}.lock")
+        with open(lock_path, "a+b") as lock_file:
+            try:
+                os.chmod(lock_path, 0o600)
+            except OSError:
+                pass
+
+            if os.name == "posix":
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                return
+
+            if os.name == "nt":  # pragma: no cover - exercised by Windows CI/runtime
+                import msvcrt
+
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                return
+
+            # Unknown platform: retain the in-process lock rather than silently
+            # dropping all serialization.
+            yield
+
+
+def _save_known_host_key(host_keys, path: Path, host_name: str, key) -> None:
+    """Persist a verified key via same-directory temp file + atomic replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    host_keys.add(host_name, key.get_name(), key)
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        host_keys.save(str(temp_path))
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError:
+            pass
+
+        # Ensure the completed temp file reaches disk before publication.
+        with open(temp_path, "rb") as handle:
+            os.fsync(handle.fileno())
+
+        os.replace(temp_path, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def ensure_host_key_trusted(
@@ -106,29 +195,34 @@ def ensure_host_key_trusted(
     fingerprint = key_fingerprint_sha256(key)
     host_name = known_host_name(hostname, port)
     path = Path(known_hosts_path)
-    host_keys = _load_known_hosts(path)
-    existing = host_keys.lookup(host_name) or {}
-    known_key = existing.get(key.get_name())
     pinned = normalize_fingerprint(server_config.get("host_key_fingerprint"))
 
-    # An explicit operator pin is the source of truth. This both prevents a
-    # stale known_hosts entry from overriding a new pin and provides a safe,
-    # deliberate path for host-key rotation.
-    if pinned:
-        if not hmac.compare_digest(pinned, fingerprint):
-            raise SSHHostKeyMismatch(
-                f"SSH host fingerprint mismatch for {hostname}:{port}: expected {pinned}, observed {fingerprint}"
-            )
-        if known_key is None or not hmac.compare_digest(known_key.asbytes(), key.asbytes()):
-            _save_known_host_key(host_keys, path, host_name, key)
-        return key
+    # Serialize the complete read/compare/update cycle. The file lock prevents
+    # separate WSGI workers from publishing stale snapshots over each other;
+    # the atomic writer below prevents readers from ever seeing a partial file.
+    with _known_hosts_update_lock(path):
+        host_keys = _load_known_hosts(path)
+        existing = host_keys.lookup(host_name) or {}
+        known_key = existing.get(key.get_name())
 
-    if known_key is not None:
-        if hmac.compare_digest(known_key.asbytes(), key.asbytes()):
+        # An explicit operator pin is the source of truth. This both prevents a
+        # stale known_hosts entry from overriding a new pin and provides a safe,
+        # deliberate path for host-key rotation.
+        if pinned:
+            if not hmac.compare_digest(pinned, fingerprint):
+                raise SSHHostKeyMismatch(
+                    f"SSH host fingerprint mismatch for {hostname}:{port}: expected {pinned}, observed {fingerprint}"
+                )
+            if known_key is None or not hmac.compare_digest(known_key.asbytes(), key.asbytes()):
+                _save_known_host_key(host_keys, path, host_name, key)
             return key
-        raise SSHHostKeyMismatch(
-            f"SSH host key changed for {hostname}:{port}; observed {fingerprint}"
-        )
+
+        if known_key is not None:
+            if hmac.compare_digest(known_key.asbytes(), key.asbytes()):
+                return key
+            raise SSHHostKeyMismatch(
+                f"SSH host key changed for {hostname}:{port}; observed {fingerprint}"
+            )
 
     raise SSHHostKeyRequired(hostname, port, fingerprint, key.get_name())
 

@@ -15,7 +15,7 @@ assert spec and spec.loader
 spec.loader.exec_module(auth_module)
 create_auth_resources = auth_module.create_auth_resources
 
-from backend.services.auth_guard import SlidingWindowRateLimiter
+from backend.services.auth_guard import SlidingWindowRateLimiter, parse_trusted_proxy_networks
 
 
 class Resource:
@@ -29,12 +29,21 @@ class Session(dict):
 class Request:
     def __init__(self):
         self.payload = {}
+        self.remote_addr = "127.0.0.1"
+        self.headers = {}
 
     def get_json(self):
         return dict(self.payload)
 
 
-def _resources(request, session, *, limiter=None, password_ok=True):
+def _resources(
+    request,
+    session,
+    *,
+    limiter=None,
+    password_ok=True,
+    trusted_proxy_networks=(),
+):
     issued = []
     logger = SimpleNamespace(info=lambda *_a, **_k: None, error=lambda *_a, **_k: None)
     classes = create_auth_resources(
@@ -62,6 +71,7 @@ def _resources(request, session, *, limiter=None, password_ok=True):
         datetime_cls=None,
         login_rate_limiter=limiter,
         login_rate_key=lambda username: f"ip:{username}",
+        trusted_proxy_networks=trusted_proxy_networks,
     )
     return classes, issued
 
@@ -100,3 +110,56 @@ def test_login_rate_limiter_returns_429_after_failed_attempts():
     assert second[1] == 401
     assert third[1] == 429
     assert third[0]["retry_after_seconds"] > 0
+
+
+def test_trusted_proxy_rate_limit_separates_forwarded_clients():
+    request = Request()
+    request.remote_addr = "10.0.0.10"
+    request.payload = {"username": "admin", "password": "wrong"}
+    session = Session()
+    limiter = SlidingWindowRateLimiter(max_failures=1, window_seconds=60, clock=lambda: 100.0)
+    trusted = parse_trusted_proxy_networks("10.0.0.10/32")
+    classes, _issued = _resources(
+        request,
+        session,
+        limiter=limiter,
+        password_ok=False,
+        trusted_proxy_networks=trusted,
+    )
+    AuthLogin = classes[1]
+
+    request.headers = {"X-Forwarded-For": "198.51.100.10"}
+    first_client = AuthLogin().post()
+    request.headers = {"X-Forwarded-For": "198.51.100.11"}
+    second_client = AuthLogin().post()
+    request.headers = {"X-Forwarded-For": "198.51.100.10"}
+    first_client_limited = AuthLogin().post()
+
+    assert first_client[1] == 401
+    assert second_client[1] == 401
+    assert first_client_limited[1] == 429
+
+
+def test_untrusted_peer_forwarded_header_cannot_evade_rate_limit():
+    request = Request()
+    request.remote_addr = "203.0.113.50"
+    request.payload = {"username": "admin", "password": "wrong"}
+    session = Session()
+    limiter = SlidingWindowRateLimiter(max_failures=1, window_seconds=60, clock=lambda: 100.0)
+    trusted = parse_trusted_proxy_networks("10.0.0.0/8")
+    classes, _issued = _resources(
+        request,
+        session,
+        limiter=limiter,
+        password_ok=False,
+        trusted_proxy_networks=trusted,
+    )
+    AuthLogin = classes[1]
+
+    request.headers = {"X-Forwarded-For": "198.51.100.10"}
+    first = AuthLogin().post()
+    request.headers = {"X-Forwarded-For": "198.51.100.11"}
+    second = AuthLogin().post()
+
+    assert first[1] == 401
+    assert second[1] == 429

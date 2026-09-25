@@ -1,5 +1,7 @@
 from pathlib import Path
 import sys
+import threading
+import time
 
 import pytest
 
@@ -46,7 +48,7 @@ class RecordingHostKeys:
 
     def save(self, path):
         self.saved_to = path
-        Path(path).touch()
+        Path(path).write_text("complete-known-hosts\n", encoding="utf-8")
 
 
 def test_unknown_host_requires_explicit_fingerprint(tmp_path: Path, monkeypatch):
@@ -115,8 +117,88 @@ def test_explicit_new_pin_replaces_stale_known_host_key(tmp_path: Path, monkeypa
 
     assert returned.asbytes() == new_key.asbytes()
     assert host_keys.lookup("host.example")[new_key.get_name()].asbytes() == new_key.asbytes()
-    assert host_keys.saved_to == str(path)
+    assert host_keys.saved_to != str(path)
+    assert Path(host_keys.saved_to).parent == tmp_path
+    assert path.read_text(encoding="utf-8") == "complete-known-hosts\n"
     assert path.stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.glob(".known_hosts.*.tmp")) == []
+
+
+def test_atomic_known_hosts_write_preserves_old_file_on_save_failure(tmp_path: Path):
+    path = tmp_path / "known_hosts"
+    path.write_text("previous-complete-state\n", encoding="utf-8")
+
+    class FailingHostKeys:
+        def add(self, *_args):
+            pass
+
+        def save(self, temp_path):
+            Path(temp_path).write_text("partial", encoding="utf-8")
+            raise RuntimeError("simulated interrupted save")
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        ssh_security._save_known_host_key(
+            FailingHostKeys(),
+            path,
+            "host.example",
+            FakeKey(),
+        )
+
+    assert path.read_text(encoding="utf-8") == "previous-complete-state\n"
+    assert list(tmp_path.glob(".known_hosts.*.tmp")) == []
+
+
+def test_known_hosts_read_modify_write_is_serialized(tmp_path: Path, monkeypatch):
+    barrier = threading.Barrier(2)
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
+
+    def probe(hostname, *_args, **_kwargs):
+        barrier.wait(timeout=2)
+        return FakeKey(hostname.encode("utf-8"))
+
+    def load(_path):
+        nonlocal active, max_active
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.03)
+        with active_lock:
+            active -= 1
+        return EmptyHostKeys()
+
+    monkeypatch.setattr(ssh_security, "probe_host_key", probe)
+    monkeypatch.setattr(ssh_security, "_load_known_hosts", load)
+    monkeypatch.setattr(ssh_security, "_save_known_host_key", lambda *_a, **_kw: None)
+
+    errors = []
+
+    def trust(hostname):
+        try:
+            key = FakeKey(hostname.encode("utf-8"))
+            ssh_security.ensure_host_key_trusted(
+                {
+                    "hostname": hostname,
+                    "host_key_fingerprint": ssh_security.key_fingerprint_sha256(key),
+                },
+                known_hosts_path=tmp_path / "known_hosts",
+            )
+        except Exception as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=trust, args=("one.example",)),
+        threading.Thread(target=trust, args=("two.example",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert max_active == 1
 
 
 def test_stale_known_host_key_without_new_pin_still_fails_closed(tmp_path: Path, monkeypatch):

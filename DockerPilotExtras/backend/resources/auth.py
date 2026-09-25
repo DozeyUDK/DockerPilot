@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
+from backend.services.auth_guard import (
+    parse_trusted_proxy_networks,
+    resolve_client_ip_for_rate_limit,
+)
+
 
 def create_auth_resources(
     *,
@@ -24,13 +31,31 @@ def create_auth_resources(
     datetime_cls,
     login_rate_limiter=None,
     login_rate_key=None,
+    trusted_proxy_networks=None,
 ):
     """Return auth/elevation resource classes with injected dependencies."""
 
+    if trusted_proxy_networks is None:
+        try:
+            trusted_proxy_networks = parse_trusted_proxy_networks(
+                os.environ.get("AUTH_TRUSTED_PROXY_CIDRS", "")
+            )
+        except ValueError as exc:
+            raise RuntimeError("Invalid AUTH_TRUSTED_PROXY_CIDRS configuration") from exc
+    else:
+        trusted_proxy_networks = tuple(trusted_proxy_networks)
+
     def _rate_key(username: str) -> str:
+        if trusted_proxy_networks:
+            return resolve_client_ip_for_rate_limit(
+                remote_addr=getattr(request, "remote_addr", None),
+                forwarded_for=(request.headers.get("X-Forwarded-For") if getattr(request, "headers", None) else None),
+                trusted_proxy_networks=trusted_proxy_networks,
+            )
         if callable(login_rate_key):
             return str(login_rate_key(username))
-        return username or "<anonymous>"
+        remote_addr = str(getattr(request, "remote_addr", "") or "").strip()
+        return remote_addr or username or "<anonymous>"
 
     def _record_login_failure(key: str) -> None:
         if login_rate_limiter is not None:
