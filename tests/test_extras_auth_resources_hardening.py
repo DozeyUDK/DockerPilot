@@ -79,7 +79,9 @@ def test_legacy_sudo_endpoint_never_stores_password_in_session():
     assert response["elevation_token"] == "elev-token"
     assert "sudo_password" not in session
     assert "sudo_password_timestamp" not in session
+    assert session["legacy_elevation_token"] == "elev-token"
     assert issued[0]["sudo_password"] == "super-secret"
+    assert issued[0]["scope"] == {"action": "legacy.sudo_password"}
 
 
 def test_login_rate_limiter_returns_429_after_failed_attempts():

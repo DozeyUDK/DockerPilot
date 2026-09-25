@@ -204,6 +204,7 @@ def create_auth_resources(
                 # Clean legacy cookie-session fields if an old session still contains them.
                 session.pop("sudo_password", None)
                 session.pop("sudo_password_timestamp", None)
+                session.pop("legacy_elevation_token", None)
                 app.logger.info(f"Revoked {revoked} elevation token(s) for current session")
                 return {"success": True, "revoked": revoked}
             except Exception as exc:
@@ -227,6 +228,11 @@ def create_auth_resources(
                     sudo_password=sudo_password,
                     scope={"action": "legacy.sudo_password"},
                 )
+                # Preserve old two-step clients without putting privileged
+                # material back into Flask's client-side session. The cookie
+                # stores only the short-lived opaque token; the sudo password
+                # remains exclusively in the server-side token manager.
+                session["legacy_elevation_token"] = issued.get("token")
                 return {
                     "success": True,
                     "message": "Elevation token issued; sudo password was not stored in session",
@@ -244,6 +250,7 @@ def create_auth_resources(
                 revoked = revoke_elevation_tokens_for_current_session()
                 session.pop("sudo_password", None)
                 session.pop("sudo_password_timestamp", None)
+                session.pop("legacy_elevation_token", None)
                 return {"success": True, "message": "Elevation credentials cleared", "revoked": revoked}
             except Exception as exc:
                 return {"error": str(exc)}, 500
