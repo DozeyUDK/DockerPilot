@@ -37,3 +37,24 @@ def demo_mutation_is_blocked(
     if not request_path.startswith("/api/"):
         return False
     return request_path not in allowed_paths
+
+
+DEMO_GENERATOR_MAX_REQUEST_BYTES = 64 * 1024
+DEMO_GENERATOR_MAX_TEST_COMMANDS = 32
+DEMO_GENERATOR_MAX_STRING_LENGTH = 4096
+
+
+def validate_demo_generator_payload(data) -> str | None:
+    """Bound the computation-only generator exposed by the public demo."""
+    if not isinstance(data, dict):
+        return "Provide a JSON object."
+    for key, value in data.items():
+        if isinstance(value, str) and len(value) > DEMO_GENERATOR_MAX_STRING_LENGTH:
+            return f"{key} exceeds the demo string-length limit."
+    commands = data.get("test_commands")
+    if isinstance(commands, list):
+        if len(commands) > DEMO_GENERATOR_MAX_TEST_COMMANDS:
+            return "test_commands exceeds the demo item limit."
+        if any(len(str(command)) > DEMO_GENERATOR_MAX_STRING_LENGTH for command in commands):
+            return "A test command exceeds the demo string-length limit."
+    return None

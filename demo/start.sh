@@ -55,8 +55,30 @@ docker compose -p dockerpilot-demo -f "$ROOT/demo/compose.yml" up -d --remove-or
 "$ROOT/.venv/bin/python" "$ROOT/demo/seed_demo.py" --home "$DEMO_HOME"
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "[demo] DockerPilotExtras already running (pid $(cat "$PID_FILE"))"
-else
+  LIVE_MODE="$("$ROOT/.venv/bin/python" - "http://127.0.0.1:${PORT:-5000}/api/auth/status" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=3) as response:
+        payload = json.load(response)
+    print("true" if not payload.get("demo_read_only", False) else "false")
+except Exception:
+    pass
+PY
+)"
+  if [[ "$LIVE_MODE" != "$MUTATIONS_FLAG" ]]; then
+    echo "[demo] configured access mode changed; restarting DockerPilotExtras"
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break
+      sleep 0.1
+    done
+    rm -f "$PID_FILE"
+  else
+    echo "[demo] DockerPilotExtras already running (pid $(cat "$PID_FILE"))"
+  fi
+fi
+
+if [[ ! -f "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   rm -f "$PID_FILE"
   echo "[demo] starting DockerPilotExtras on port ${PORT:-5000}"
   (

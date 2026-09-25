@@ -112,3 +112,19 @@ def test_interactive_start_normalizes_mutation_flag_like_backend():
     assert 'MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"' in script
     assert 'MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"' in script
     assert 'if [[ "$MUTATIONS_FLAG" == "true"' in script
+
+
+def test_start_restarts_backend_when_live_access_mode_differs():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    assert "/api/auth/status" in script
+    assert 'if [[ "$LIVE_MODE" != "$MUTATIONS_FLAG" ]]' in script
+    assert "configured access mode changed; restarting DockerPilotExtras" in script
+
+
+def test_public_generator_has_resource_bounds():
+    app_source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
+    demo_mode_source = (ROOT / "DockerPilotExtras" / "backend" / "services" / "demo_mode.py").read_text(encoding="utf-8")
+    assert "DEMO_GENERATOR_MAX_REQUEST_BYTES" in app_source
+    assert "validate_demo_generator_payload" in app_source
+    assert "DEMO_GENERATOR_MAX_TEST_COMMANDS = 32" in demo_mode_source
+    assert "DEMO_GENERATOR_MAX_STRING_LENGTH = 4096" in demo_mode_source
