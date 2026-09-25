@@ -29,12 +29,19 @@ set -a
 source "$RUNTIME_ENV"
 set +a
 
-# Codespaces keeps forwarded-port visibility across backend restarts. Never
-# start a mutation-enabled backend while the port may still be public.
+# Codespaces keeps forwarded-port visibility across backend restarts. Only the
+# fully guarded read-only demo may remain public; every other configuration is
+# treated as interactive and must be private before backend startup.
+DEMO_FLAG="${DOCKERPILOT_DEMO:-false}"
+DEMO_FLAG="${DEMO_FLAG,,}"
 MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"
 MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"
-if [[ "$MUTATIONS_FLAG" == "true" && "${CODESPACES:-}" == "true" ]]; then
-  echo "[demo] interactive mode requested; forcing port 5000 private before backend startup"
+PUBLIC_SAFE=false
+if [[ "$DEMO_FLAG" == "true" && "$MUTATIONS_FLAG" == "false" ]]; then
+  PUBLIC_SAFE=true
+fi
+if [[ "$PUBLIC_SAFE" != "true" && "${CODESPACES:-}" == "true" ]]; then
+  echo "[demo] non-public-safe mode requested; forcing port ${PORT:-5000} private before backend startup"
   if ! CODESPACE_NAME="${CODESPACE_NAME:-}" bash "$ROOT/demo/private.sh"; then
     echo "[demo] refusing interactive startup because private port visibility could not be enforced" >&2
     exit 1
@@ -128,6 +135,8 @@ done
 if [[ "$READY" != "true" ]]; then
   echo "[demo] DockerPilotExtras did not become ready; last log lines:" >&2
   tail -n 50 "$LOG_FILE" >&2 || true
+  # Do not leave a backend running after its safety/readiness contract failed.
+  bash "$ROOT/demo/stop.sh" || true
   exit 1
 fi
 

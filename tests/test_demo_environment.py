@@ -114,11 +114,27 @@ def test_interactive_start_forces_codespaces_port_private_before_backend():
     assert script.index('bash "$ROOT/demo/private.sh"') < script.index('docker compose -p dockerpilot-demo')
 
 
+def test_start_treats_disabled_demo_guard_as_private_mode():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    assert 'DEMO_FLAG="${DOCKERPILOT_DEMO:-false}"' in script
+    assert 'DEMO_FLAG="${DEMO_FLAG,,}"' in script
+    assert 'if [[ "$DEMO_FLAG" == "true" && "$MUTATIONS_FLAG" == "false" ]]' in script
+    assert 'if [[ "$PUBLIC_SAFE" != "true" && "${CODESPACES:-}" == "true" ]]' in script
+    assert script.index('bash "$ROOT/demo/private.sh"') < script.index('docker compose -p dockerpilot-demo')
+
+
+def test_start_stops_backend_when_readiness_contract_fails():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    failure = script[script.index('if [[ "$READY" != "true" ]]'):]
+    assert 'bash "$ROOT/demo/stop.sh" || true' in failure
+    assert failure.index('bash "$ROOT/demo/stop.sh" || true') < failure.index('exit 1')
+
+
 def test_interactive_start_normalizes_mutation_flag_like_backend():
     script = (DEMO / "start.sh").read_text(encoding="utf-8")
     assert 'MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"' in script
     assert 'MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"' in script
-    assert 'if [[ "$MUTATIONS_FLAG" == "true"' in script
+    assert 'if [[ "$DEMO_FLAG" == "true" && "$MUTATIONS_FLAG" == "false" ]]' in script
 
 
 def test_start_restarts_backend_when_live_access_mode_differs():
