@@ -14,5 +14,6 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-gh codespace ports visibility 5000:private -c "$CODESPACE_NAME"
-echo "[demo] port 5000 is private"
+DEMO_PORT="${PORT:-5000}"
+gh codespace ports visibility "${DEMO_PORT}:private" -c "$CODESPACE_NAME"
+echo "[demo] port ${DEMO_PORT} is private"

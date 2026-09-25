@@ -92,7 +92,6 @@ def test_public_share_script_refuses_interactive_demo():
     assert "DOCKERPILOT_DEMO_ALLOW_MUTATIONS" in script
     assert "refusing to expose an interactive demo publicly" in script
     assert "gh auth status" in script
-    assert "gh codespace ports visibility 5000:public" in script
 
 
 def test_demo_seed_uses_isolated_home_and_environment_bindings(tmp_path):
@@ -214,3 +213,13 @@ def test_request_limit_is_scoped_to_public_read_only_demo():
     assert "else None" in line
     guard = source[source.index("def enforce_demo_read_only"):source.index("def require_auth_for_api")]
     assert "Demo login requires Content-Length" in guard
+
+
+def test_public_and_private_visibility_use_configured_demo_port():
+    public = (DEMO / "public.sh").read_text(encoding="utf-8")
+    private = (DEMO / "private.sh").read_text(encoding="utf-8")
+    assert 'DEMO_PORT="${PORT:-5000}"' in public
+    assert 'AUTH_STATUS_URL="http://127.0.0.1:${DEMO_PORT}/api/auth/status"' in public
+    assert 'gh codespace ports visibility "${DEMO_PORT}:public"' in public
+    assert 'DEMO_PORT="${PORT:-5000}"' in private
+    assert 'gh codespace ports visibility "${DEMO_PORT}:private"' in private

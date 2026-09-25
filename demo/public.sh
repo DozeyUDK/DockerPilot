@@ -26,6 +26,7 @@ set -a
 # shellcheck disable=SC1090
 source "$RUNTIME_ENV"
 set +a
+DEMO_PORT="${PORT:-5000}"
 PUBLIC_MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"
 PUBLIC_MUTATIONS_FLAG="${PUBLIC_MUTATIONS_FLAG,,}"
 if [[ "$PUBLIC_MUTATIONS_FLAG" == "true" ]]; then
@@ -34,9 +35,9 @@ if [[ "$PUBLIC_MUTATIONS_FLAG" == "true" ]]; then
 fi
 
 # runtime.env is configuration for the next process start; it is not proof of
-# what the already-running Flask process imported. Query the live backend before
-# changing Codespaces visibility so stale interactive processes cannot be shared.
-AUTH_STATUS_URL="http://127.0.0.1:${PORT:-5000}/api/auth/status"
+# what the already-running Flask process imported. Query the exact port that will
+# be published so an unrelated forwarded service can never be exposed by mistake.
+AUTH_STATUS_URL="http://127.0.0.1:${DEMO_PORT}/api/auth/status"
 if ! LIVE_STATUS="$("$ROOT/.venv/bin/python" - "$AUTH_STATUS_URL" <<'PY'
 import json
 import sys
@@ -70,6 +71,6 @@ if [[ "$LIVE_STATUS" != "verified" ]]; then
   exit 1
 fi
 
-gh codespace ports visibility 5000:public -c "$CODESPACE_NAME"
-echo "[demo] verified running backend is read-only; port 5000 is now public until Codespaces resets its visibility"
+gh codespace ports visibility "${DEMO_PORT}:public" -c "$CODESPACE_NAME"
+echo "[demo] verified running backend is read-only; port ${DEMO_PORT} is now public until Codespaces resets its visibility"
 bash "$ROOT/demo/status.sh"
