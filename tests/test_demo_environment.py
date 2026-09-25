@@ -97,3 +97,11 @@ def test_demo_seed_uses_isolated_home_and_environment_bindings(tmp_path):
     assert environments["env_servers"] == {"dev": "local", "staging": "local", "prod": "local"}
     assert bindings["env_containers"] == seed.ENV_CONTAINERS
     assert servers == {"servers": [], "default_server": "local"}
+
+
+def test_interactive_start_forces_codespaces_port_private_before_backend():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    assert "DOCKERPILOT_DEMO_ALLOW_MUTATIONS" in script
+    assert 'bash "$ROOT/demo/private.sh"' in script
+    assert "refusing interactive startup" in script
+    assert script.index('bash "$ROOT/demo/private.sh"') < script.index('docker compose -p dockerpilot-demo')
