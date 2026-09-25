@@ -185,4 +185,32 @@ def test_start_readiness_requires_recorded_pid_and_demo_auth_status():
 def test_extras_request_limit_preserves_normal_pipeline_allowance():
     source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
     assert "app.config['MAX_CONTENT_LENGTH']" in source
-    assert "64 * 1024 if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else 1024 * 1024" in source
+    assert "64 * 1024" in source
+    assert "if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else None" in source
+
+
+def test_start_requires_state_ownership_before_sourcing_runtime():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    owner_check = script.index(".dockerpilot-demo-owner")
+    source_runtime = script.index('source "$RUNTIME_ENV"')
+    assert owner_check < source_runtime
+
+
+def test_public_share_normalizes_mutation_flag():
+    script = (DEMO / "public.sh").read_text(encoding="utf-8")
+    assert 'PUBLIC_MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"' in script
+    assert 'PUBLIC_MUTATIONS_FLAG="${PUBLIC_MUTATIONS_FLAG,,}"' in script
+
+
+def test_reset_checks_ownership_before_stopping_backend():
+    script = (DEMO / "reset.sh").read_text(encoding="utf-8")
+    assert script.index(".dockerpilot-demo-owner") < script.index('bash "$ROOT/demo/stop.sh"')
+
+
+def test_request_limit_is_scoped_to_public_read_only_demo():
+    source = (ROOT / "DockerPilotExtras" / "backend" / "app.py").read_text(encoding="utf-8")
+    line = next(line for line in source.splitlines() if "app.config['MAX_CONTENT_LENGTH']" in line)
+    assert "DEMO_MODE and not DEMO_ALLOW_MUTATIONS" in line
+    assert "else None" in line
+    guard = source[source.index("def enforce_demo_read_only"):source.index("def require_auth_for_api")]
+    assert "Demo login requires Content-Length" in guard

@@ -18,6 +18,11 @@ if [[ ! -f "$RUNTIME_ENV" ]]; then
   "$ROOT/.venv/bin/python" "$ROOT/demo/prepare_runtime.py" --state-dir "$STATE_DIR"
 fi
 
+if [[ ! -f "$STATE_DIR/.dockerpilot-demo-owner" || ! -f "$STATE_DIR/.dockerpilot-demo-state" ]]; then
+  echo "[demo] refusing unowned or incomplete demo state directory: $STATE_DIR" >&2
+  exit 1
+fi
+
 set -a
 # Generated values contain only shell-safe URL-safe tokens and simple scalars.
 # shellcheck disable=SC1090
@@ -67,11 +72,20 @@ PY
 )"
   if [[ "$LIVE_MODE" != "$MUTATIONS_FLAG" ]]; then
     echo "[demo] configured access mode changed; restarting DockerPilotExtras"
-    kill "$(cat "$PID_FILE")" 2>/dev/null || true
-    for _ in $(seq 1 20); do
-      kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break
-      sleep 0.1
-    done
+    PID="$(cat "$PID_FILE")"
+    CMDLINE=""
+    if [[ -r "/proc/$PID/cmdline" ]]; then
+      CMDLINE="$(tr '\\0' ' ' < "/proc/$PID/cmdline")"
+    fi
+    if [[ "$CMDLINE" == *"$ROOT/.venv/bin/python"* && "$CMDLINE" == *"run_dev.py"* ]]; then
+      kill "$PID"
+      for _ in $(seq 1 20); do
+        kill -0 "$PID" 2>/dev/null || break
+        sleep 0.1
+      done
+    else
+      echo "[demo] refusing to signal unverified pid $PID; treating pid file as stale" >&2
+    fi
     rm -f "$PID_FILE"
   else
     echo "[demo] DockerPilotExtras already running (pid $(cat "$PID_FILE"))"

@@ -26,7 +26,9 @@ set -a
 # shellcheck disable=SC1090
 source "$RUNTIME_ENV"
 set +a
-if [[ "${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}" == "true" ]]; then
+PUBLIC_MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"
+PUBLIC_MUTATIONS_FLAG="${PUBLIC_MUTATIONS_FLAG,,}"
+if [[ "$PUBLIC_MUTATIONS_FLAG" == "true" ]]; then
   echo "[demo] refusing to expose an interactive demo publicly; set DOCKERPILOT_DEMO_ALLOW_MUTATIONS=false and restart first" >&2
   exit 1
 fi

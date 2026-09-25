@@ -252,7 +252,7 @@ _login_rate_limiter = SlidingWindowRateLimiter(
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
 )
 
-app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(64 * 1024 if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else 1024 * 1024)))
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(64 * 1024))) if DEMO_MODE and not DEMO_ALLOW_MUTATIONS else None
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=APP_SESSION_IDLE_MINUTES)
 
 # Short-lived elevation token settings (for privileged operations)
@@ -437,6 +437,11 @@ PUBLIC_API_PATHS = {
 @app.before_request
 def enforce_demo_read_only():
     """Deny state-changing API calls in a shareable live demo."""
+    if DEMO_MODE and not DEMO_ALLOW_MUTATIONS and request.path == '/api/auth/login' and request.method == 'POST':
+        if request.content_length is None:
+            return jsonify({'success': False, 'error': 'Demo login requires Content-Length'}), 411
+        if request.content_length > DEMO_GENERATOR_MAX_REQUEST_BYTES:
+            return jsonify({'success': False, 'error': 'Demo login request is too large'}), 413
     if DEMO_MODE and not DEMO_ALLOW_MUTATIONS and request.path == '/api/pipeline/generate' and request.method == 'POST':
         # The public demo accepts only bounded, non-streamed JSON. Requiring a
         # declared length prevents chunked bodies from being buffered by

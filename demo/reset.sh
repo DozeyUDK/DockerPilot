@@ -12,13 +12,12 @@ if [[ "$STATE_REAL" == "/" || "$STATE_REAL" == "$HOME_REAL" || "$STATE_REAL" == 
   exit 1
 fi
 
-bash "$ROOT/demo/stop.sh"
-
 if [[ -d "$STATE_REAL" ]]; then
   if [[ ! -f "$STATE_REAL/.dockerpilot-demo-owner" || ! -f "$STATE_REAL/.dockerpilot-demo-state" ]]; then
     echo "[demo] refusing to reset state directory without DockerPilot ownership proof: $STATE_REAL" >&2
     exit 1
   fi
+  bash "$ROOT/demo/stop.sh"
   rm -rf -- "$STATE_REAL/home"
   rm -f -- "$STATE_REAL/runtime.env" "$STATE_REAL/extras.log" "$STATE_REAL/extras.pid" "$STATE_REAL/.dockerpilot-demo-state"
 fi
