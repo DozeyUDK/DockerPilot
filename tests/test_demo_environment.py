@@ -105,3 +105,10 @@ def test_interactive_start_forces_codespaces_port_private_before_backend():
     assert 'bash "$ROOT/demo/private.sh"' in script
     assert "refusing interactive startup" in script
     assert script.index('bash "$ROOT/demo/private.sh"') < script.index('docker compose -p dockerpilot-demo')
+
+
+def test_interactive_start_normalizes_mutation_flag_like_backend():
+    script = (DEMO / "start.sh").read_text(encoding="utf-8")
+    assert 'MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"' in script
+    assert 'MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"' in script
+    assert 'if [[ "$MUTATIONS_FLAG" == "true"' in script

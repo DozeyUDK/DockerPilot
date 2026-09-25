@@ -26,7 +26,9 @@ set +a
 
 # Codespaces keeps forwarded-port visibility across backend restarts. Never
 # start a mutation-enabled backend while the port may still be public.
-if [[ "${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}" == "true" && "${CODESPACES:-}" == "true" ]]; then
+MUTATIONS_FLAG="${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}"
+MUTATIONS_FLAG="${MUTATIONS_FLAG,,}"
+if [[ "$MUTATIONS_FLAG" == "true" && "${CODESPACES:-}" == "true" ]]; then
   echo "[demo] interactive mode requested; forcing port 5000 private before backend startup"
   if ! CODESPACE_NAME="${CODESPACE_NAME:-}" bash "$ROOT/demo/private.sh"; then
     echo "[demo] refusing interactive startup because private port visibility could not be enforced" >&2
