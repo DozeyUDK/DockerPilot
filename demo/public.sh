@@ -31,6 +31,43 @@ if [[ "${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}" == "true" ]]; then
   exit 1
 fi
 
+# runtime.env is configuration for the next process start; it is not proof of
+# what the already-running Flask process imported. Query the live backend before
+# changing Codespaces visibility so stale interactive processes cannot be shared.
+AUTH_STATUS_URL="http://127.0.0.1:${PORT:-5000}/api/auth/status"
+if ! LIVE_STATUS="$("$ROOT/.venv/bin/python" - "$AUTH_STATUS_URL" <<'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        payload = json.load(response)
+except Exception as exc:
+    print(f"[demo] cannot verify running backend: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if payload.get("demo_mode") is not True or payload.get("demo_read_only") is not True:
+    print(
+        "[demo] refusing public exposure: running backend is not verified read-only "
+        f"(demo_mode={payload.get('demo_mode')!r}, demo_read_only={payload.get('demo_read_only')!r})",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print("verified")
+PY
+)"; then
+  echo "[demo] port remains private; restart the backend in read-only mode and retry" >&2
+  exit 1
+fi
+
+if [[ "$LIVE_STATUS" != "verified" ]]; then
+  echo "[demo] refusing public exposure: unexpected backend verification result" >&2
+  exit 1
+fi
+
 gh codespace ports visibility 5000:public -c "$CODESPACE_NAME"
-echo "[demo] read-only port 5000 is now public until Codespaces resets its visibility"
+echo "[demo] verified running backend is read-only; port 5000 is now public until Codespaces resets its visibility"
 bash "$ROOT/demo/status.sh"
