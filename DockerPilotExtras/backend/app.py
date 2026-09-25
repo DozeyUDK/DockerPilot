@@ -60,6 +60,7 @@ from backend.secure_deploy.errors import (
     SecureDeployError as SecureDeployGateError,
 )
 from backend.services.auth_guard import SlidingWindowRateLimiter, csrf_token_matches
+from backend.services.demo_mode import demo_mutation_is_blocked
 from backend.services.deployment_files import (
     find_active_deployment_dir as _svc_find_active_deployment_dir,
     find_all_deployment_dirs as _svc_find_all_deployment_dirs,
@@ -238,6 +239,10 @@ WEB_AUTH_TOTP_SECRET = os.environ.get('WEB_AUTH_TOTP_SECRET', '').strip()
 WEB_AUTH_TOTP_WINDOW = int(os.environ.get('WEB_AUTH_TOTP_WINDOW', '1'))
 AUTH_LOGIN_MAX_FAILURES = int(os.environ.get('AUTH_LOGIN_MAX_FAILURES', '5'))
 AUTH_LOGIN_WINDOW_SECONDS = int(os.environ.get('AUTH_LOGIN_WINDOW_SECONDS', '60'))
+DEMO_MODE = os.environ.get('DOCKERPILOT_DEMO', 'false').lower() == 'true'
+DEMO_ALLOW_MUTATIONS = os.environ.get(
+    'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
+).lower() == 'true'
 _login_rate_limiter = SlidingWindowRateLimiter(
     max_failures=AUTH_LOGIN_MAX_FAILURES,
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
@@ -410,6 +415,8 @@ def _auth_status_payload():
         'mfa_verified': bool(session.get('auth_mfa_verified')) if authed else False,
         'session_idle_minutes': APP_SESSION_IDLE_MINUTES,
         'session_expires_in_seconds': expires_in,
+        'demo_mode': DEMO_MODE,
+        'demo_read_only': bool(DEMO_MODE and not DEMO_ALLOW_MUTATIONS),
         'csrf_token': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
         'secure_deploy_csrf': _ensure_secure_deploy_csrf() if authed and WEB_AUTH_ENABLED else None,
     }
@@ -420,6 +427,24 @@ PUBLIC_API_PATHS = {
     '/api/auth/login',
     '/api/auth/status',
 }
+
+
+@app.before_request
+def enforce_demo_read_only():
+    """Deny state-changing API calls in a shareable live demo."""
+    if demo_mutation_is_blocked(
+        enabled=DEMO_MODE,
+        allow_mutations=DEMO_ALLOW_MUTATIONS,
+        method=request.method,
+        path=request.path,
+    ):
+        return jsonify({
+            'success': False,
+            'error': 'DockerPilot live demo is read-only',
+            'demo_mode': True,
+            'demo_read_only': True,
+        }), 403
+    return None
 
 
 @app.before_request

@@ -26,11 +26,17 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   BACKEND="running (pid $(cat "$PID_FILE"))"
 fi
 
+DEMO_ACCESS="read-only"
+if [[ "${DOCKERPILOT_DEMO_ALLOW_MUTATIONS:-false}" == "true" ]]; then
+  DEMO_ACCESS="interactive (DO NOT expose publicly)"
+fi
+
 cat <<EOF
 
 DockerPilot live demo
 ---------------------
 Backend:  $BACKEND
+Access:   $DEMO_ACCESS
 URL:      $URL
 Username: $WEB_AUTH_USERNAME
 Password: $WEB_AUTH_PASSWORD
@@ -43,7 +49,7 @@ if [[ "${CODESPACES:-}" == "true" ]]; then
   cat <<EOF
 
 Port 5000 is PRIVATE by default.
-To share the demo temporarily:
+To share the read-only demo temporarily:
   bash demo/public.sh
 
 To make it private again:

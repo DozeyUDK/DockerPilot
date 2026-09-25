@@ -31,6 +31,7 @@ def create_runtime(state_dir: Path, *, codespaces: bool | None = None, rotate: b
 
     values = {
         "DOCKERPILOT_DEMO": "true",
+        "DOCKERPILOT_DEMO_ALLOW_MUTATIONS": "false",
         "FLASK_ENV": "production",
         "PORT": "5000",
         "DP_STORAGE_BACKEND": "file",
@@ -42,7 +43,11 @@ def create_runtime(state_dir: Path, *, codespaces: bool | None = None, rotate: b
         "SECRET_KEY": secrets.token_urlsafe(48),
         "SESSION_COOKIE_SECURE": "true" if codespaces else "false",
         "APP_SESSION_IDLE_MINUTES": "30",
-        "AUTH_LOGIN_MAX_FAILURES": "25",
+        # Codespaces terminates TLS behind infrastructure whose peer CIDRs are
+        # intentionally not trusted by Extras.  A generated high-entropy demo
+        # password does not need a tiny shared-IP lockout bucket, which would
+        # otherwise let one public viewer lock out the presenter.
+        "AUTH_LOGIN_MAX_FAILURES": "1000",
         "AUTH_LOGIN_WINDOW_SECONDS": "60",
     }
 

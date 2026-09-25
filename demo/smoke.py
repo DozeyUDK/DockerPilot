@@ -7,6 +7,7 @@ import argparse
 import http.cookiejar
 import json
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -29,15 +30,19 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
-def request_json(opener, url: str, *, method: str = "GET", payload=None):
+def request_json(opener, url: str, *, method: str = "GET", payload=None, headers=None):
     data = None
-    headers = {}
+    request_headers = dict(headers or {})
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with opener.open(request, timeout=10) as response:
-        return response.status, json.loads(response.read().decode("utf-8"))
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+    try:
+        with opener.open(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return exc.code, json.loads(body) if body else {}
 
 
 def main() -> int:
@@ -62,6 +67,35 @@ def main() -> int:
     )
     if status != 200 or not login.get("authenticated"):
         raise RuntimeError(f"demo login failed: {status} {login}")
+    if not login.get("demo_mode") or not login.get("demo_read_only"):
+        raise RuntimeError(f"shareable demo did not start read-only: {login}")
+
+    blocked_status, blocked = request_json(
+        opener,
+        f"{args.base_url}/api/storage/configure",
+        method="POST",
+        payload={"backend": "file"},
+    )
+    if blocked_status != 403 or not blocked.get("demo_read_only"):
+        raise RuntimeError(f"demo mutation guard failed: {blocked_status} {blocked}")
+
+    csrf_token = login.get("csrf_token") or login.get("secure_deploy_csrf")
+    generate_status, generated = request_json(
+        opener,
+        f"{args.base_url}/api/pipeline/generate",
+        method="POST",
+        headers={"X-CSRF-Token": csrf_token or ""},
+        payload={
+            "type": "gitlab",
+            "project_name": "dockerpilot-demo",
+            "docker_image": "dockerpilot-demo:latest",
+            "dockerfile": "./Dockerfile",
+            "stages": ["build", "test"],
+            "env_vars": "ENV=demo",
+        },
+    )
+    if generate_status != 200 or not generated.get("success") or not generated.get("content"):
+        raise RuntimeError(f"safe pipeline generation failed: {generate_status} {generated}")
 
     status_code, service_status = request_json(opener, f"{args.base_url}/api/status")
     if status_code != 200:

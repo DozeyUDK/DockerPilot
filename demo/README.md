@@ -20,7 +20,7 @@ Use the repository's **Open in GitHub Codespaces** link or create a Codespace fr
 
 Bootstrap installs DockerPilot from the current checkout with `pip install -e`, installs the real DockerPilotExtras dependencies, and builds the real React frontend. Start launches sample containers in Docker-in-Docker and then starts DockerPilotExtras on port `5000`.
 
-Run this at any time to see the URL and generated credentials:
+Run this at any time to see the URL, access mode, and generated credentials:
 
 ```bash
 bash demo/status.sh
@@ -28,9 +28,23 @@ bash demo/status.sh
 
 The generated username is `demo`. The password and Flask session key are generated per demo state and stored outside the repository under `~/.dockerpilot_demo/`.
 
+## Public-safe read-only mode
+
+`DOCKERPILOT_DEMO=true` enables a backend safety gate. The generated runtime also sets:
+
+```text
+DOCKERPILOT_DEMO_ALLOW_MUTATIONS=false
+```
+
+In this mode the real application remains browsable, but state-changing `/api/*` requests are denied. The narrow exception is authentication lifecycle plus `/api/pipeline/generate`, which only validates input and returns generated pipeline text without writing files or invoking Docker/subprocesses. This blocks deployment, migration, command execution, server/storage changes, elevation, pipeline saving/integration, and Secure Deploy mutations before a public viewer can reach Docker-admin functionality.
+
+The backend runs with an isolated HOME at `~/.dockerpilot_demo/home`; its file browser cannot walk back into the real Codespace HOME. The sample containers also expose no host ports and receive no host Docker socket mounts.
+
+Interactive demo mode is intentionally not the shareable default. If you explicitly set `DOCKERPILOT_DEMO_ALLOW_MUTATIONS=true` for your own testing, keep port `5000` private. `demo/public.sh` refuses to make an interactive demo public.
+
 ## Share the demo
 
-Codespaces forwards port `5000` privately by default. Right before a presentation you can make it public:
+Codespaces forwards port `5000` privately by default. Right before a presentation you can make the **read-only** demo public:
 
 ```bash
 bash demo/public.sh
@@ -41,6 +55,8 @@ Share the displayed URL and generated demo password. Make it private again when 
 ```bash
 bash demo/private.sh
 ```
+
+The scripts use the official `gh codespace ports visibility` command. If GitHub CLI is not authenticated, use `gh auth login` or change visibility from the Codespaces **Ports** panel.
 
 GitHub resets a public forwarded port back to private after the port is removed/re-added or the Codespace restarts, so public visibility is intentionally temporary.
 
@@ -76,6 +92,7 @@ bash demo/stop.sh
 `.github/workflows/demo-smoke.yml` boots the same demo on a GitHub-hosted Linux runner. It verifies that:
 
 - DockerPilotExtras can authenticate with the generated demo credentials;
+- the backend reports demo/read-only mode and rejects a mutating API request;
 - Extras sees a working local Docker daemon and DockerPilot installation;
 - the DockerPilot CLI sees the seeded demo containers.
 

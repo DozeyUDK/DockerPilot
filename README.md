@@ -16,7 +16,7 @@ Launch an isolated DockerPilot demo directly from the current repository checkou
 
 The Codespace runs the real `src/dockerpilot/` package and the real `DockerPilotExtras/` frontend/backend against Docker-in-Docker. `demo/` only supplies disposable sample containers, isolated state, generated credentials, and lifecycle helpers, so there is no second copy of the application to keep in sync. A new Codespace created from `main` therefore uses the current `main`; a Codespace created from a branch or PR demonstrates that ref instead.
 
-After startup, run `bash demo/status.sh` to show the URL and generated demo credentials. Port `5000` remains private by default; use `bash demo/public.sh` only when you intentionally want to share the demo, then `bash demo/private.sh` when finished. See [demo/README.md](demo/README.md) for the full workflow.
+The shareable demo is **read-only by default**: Docker-admin mutations, command execution, migrations, server/storage changes and Secure Deploy mutations are blocked by the backend demo guard. After startup, run `bash demo/status.sh` to show the URL and generated demo credentials. Port `5000` remains private by default; use `bash demo/public.sh` only when you intentionally want to share the read-only demo, then `bash demo/private.sh` when finished. See [demo/README.md](demo/README.md) for the full workflow and isolation model.
 
 ## Full Stack Install (CLI + DockerPilotExtras)
 

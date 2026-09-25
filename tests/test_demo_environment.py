@@ -63,6 +63,8 @@ def test_demo_runtime_credentials_are_generated_outside_repo(tmp_path):
     assert values["WEB_AUTH_USERNAME"] == "demo"
     assert values["WEB_AUTH_PASSWORD"]
     assert values["WEB_AUTH_PASSWORD"] not in (DEMO / "README.md").read_text(encoding="utf-8")
+    assert values["DOCKERPILOT_DEMO"] == "true"
+    assert values["DOCKERPILOT_DEMO_ALLOW_MUTATIONS"] == "false"
     assert values["SESSION_COOKIE_SECURE"] == "false"
     if os.name == "posix":
         assert env_path.stat().st_mode & 0o777 == 0o600
@@ -70,8 +72,17 @@ def test_demo_runtime_credentials_are_generated_outside_repo(tmp_path):
     codespaces_state = tmp_path / "codespaces-state"
     codespaces_values = runtime.create_runtime(codespaces_state, codespaces=True)
     assert codespaces_values["SESSION_COOKIE_SECURE"] == "true"
+    assert codespaces_values["DOCKERPILOT_DEMO_ALLOW_MUTATIONS"] == "false"
     assert codespaces_values["WEB_AUTH_PASSWORD"] != values["WEB_AUTH_PASSWORD"]
     assert codespaces_values["SECRET_KEY"] != values["SECRET_KEY"]
+
+
+def test_public_share_script_refuses_interactive_demo():
+    script = (DEMO / "public.sh").read_text(encoding="utf-8")
+    assert "DOCKERPILOT_DEMO_ALLOW_MUTATIONS" in script
+    assert "refusing to expose an interactive demo publicly" in script
+    assert "gh auth status" in script
+    assert "gh codespace ports visibility 5000:public" in script
 
 
 def test_demo_seed_uses_isolated_home_and_environment_bindings(tmp_path):
