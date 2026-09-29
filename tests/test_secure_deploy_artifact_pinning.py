@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import signal
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,24 @@ def test_open_trusted_artifact_keeps_verified_inode_after_atomic_replace(tmp_pat
         assert Path(pinned.proc_path).read_bytes() == trusted_bytes
 
 
+def test_open_trusted_artifact_rejects_fifo_without_blocking(tmp_path):
+    fifo = tmp_path / "dozeyguard-fifo"
+    os.mkfifo(fifo, 0o600)
+
+    def alarm_handler(_signum, _frame):
+        raise AssertionError("open_trusted_artifact blocked on attacker-controlled FIFO")
+
+    previous = signal.signal(signal.SIGALRM, alarm_handler)
+    signal.alarm(2)
+    try:
+        with pytest.raises(BrokerError) as exc_info:
+            open_trusted_artifact(fifo, expected_sha256="0" * 64)
+        assert exc_info.value.code == "artifact_missing"
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def test_runner_rejects_replacement_that_happens_before_verified_open(tmp_path):
     executable, policy = _trusted_fixture(tmp_path)
     config = resolve_broker_dozeyguard_config(
@@ -69,6 +88,24 @@ def test_runner_rejects_replacement_that_happens_before_verified_open(tmp_path):
     assert exc_info.value.code == "artifact_hash"
 
 
+def test_runner_reapplies_owner_constraint_on_pinned_open(tmp_path):
+    executable, policy = _trusted_fixture(tmp_path)
+    impossible_uid = os.getuid() + 1
+    config = resolve_broker_dozeyguard_config(
+        executable=str(executable),
+        policy_path=str(policy),
+        expected_artifact_uid=impossible_uid,
+    )
+
+    # The resolver records the runtime ownership requirement. The security-
+    # sensitive pinned open must re-apply it to the exact inode that will be
+    # inherited by the child, not rely on an earlier pathname check.
+    assert config.expected_artifact_uid == impossible_uid
+    with pytest.raises(BrokerError) as exc_info:
+        dg_runner.run_broker_dozeyguard_bytes(b'{"services":{}}', config)
+    assert exc_info.value.code == "artifact_owner"
+
+
 def test_runner_pins_binary_and_policy_across_atomic_replacement_before_popen(monkeypatch, tmp_path):
     executable, policy = _trusted_fixture(tmp_path)
     trusted_executable = executable.read_bytes()
@@ -76,6 +113,8 @@ def test_runner_pins_binary_and_policy_across_atomic_replacement_before_popen(mo
     config = resolve_broker_dozeyguard_config(
         executable=str(executable),
         policy_path=str(policy),
+        expected_artifact_uid=os.getuid(),
+        expected_artifact_gid=os.getgid(),
     )
 
     evil_executable = tmp_path / "evil-dozeyguard"
