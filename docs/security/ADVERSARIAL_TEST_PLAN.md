@@ -53,6 +53,14 @@ Exercise `/api/deployment/execute`, `/api/containers/blue-green-replace`, promot
 
 **Expected:** denied or explicitly routed through the reviewed broker contract in agent-safe mode.
 
+### AT-06B — Extras storage bootstrap
+
+POST `/api/storage/bootstrap-local-postgres` with a caller-selected `image`, and exercise both the create-new-container and start-existing-container paths.
+
+**Expected:** denied or explicitly routed through the reviewed broker contract in agent-safe mode. The request must be blocked before `docker.from_env()`, `containers.run()` or `container.start()` can mutate Docker state.
+
+**Invariant:** INV-01.
+
 ### AT-07 — Web Auth disabled
 
 Start an agent-safe deployment with `WEB_AUTH_ENABLED=false`.
@@ -215,7 +223,7 @@ Create another target network whose subnet conflicts with the source network bei
 
 ## Suggested execution order
 
-1. AT-01 through AT-07 first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
+1. All Track A scenarios (AT-01 through AT-07, including AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
 2. AT-13 next. It makes the approval-provenance limitation executable and prevents accidental overclaiming.
 3. Run existing broker/canary tests as baseline for AT-08 through AT-27 and fill only uncovered cases.
 4. Implement agent-safe mode in a small isolated PR.
