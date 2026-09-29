@@ -6,6 +6,7 @@ import json
 import subprocess
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dockerpilot.secure_deploy.canonical import sha256_canonical, sha256_hex
@@ -47,14 +48,24 @@ def run_broker_dozeyguard_bytes(
 ) -> Dict[str, Any]:
     """Run broker-owned DozeyGuard against payload.
 
-    When ``artifact_trust`` is supplied, the executable and policy are opened,
-    verified and kept pinned by file descriptor for the whole subprocess run.
-    The child receives ``/proc/self/fd/*`` paths plus inherited descriptors, so
-    replacing either original pathname after verification cannot change the
-    bytes consumed by the privileged broker execution.
+    Resolved broker configs carry expected hashes for both artifacts. When those
+    hashes are present (the production/default path), the executable and policy
+    are opened, verified and kept pinned by file descriptor for the whole
+    subprocess run. The child receives ``/proc/self/fd/*`` paths plus inherited
+    descriptors, so replacing either original pathname after verification cannot
+    change the bytes consumed by the privileged broker execution.
     """
 
+    if artifact_trust is None and config.expected_binary_sha256 and config.expected_policy_sha256:
+        artifact_trust = DozeyguardArtifactTrust(
+            binary_sha256=config.expected_binary_sha256,
+            policy_sha256=config.expected_policy_sha256,
+        )
+
     if artifact_trust is None:
+        # Compatibility path for hand-constructed unit-test configs. Production
+        # configs are created by resolve_broker_dozeyguard_config() and therefore
+        # always carry both expected hashes.
         return _run_broker_dozeyguard_bytes(
             payload,
             executable=config.executable,
@@ -63,14 +74,14 @@ def run_broker_dozeyguard_bytes(
         )
 
     with open_trusted_artifact(
-        __import__("pathlib").Path(config.executable),
+        Path(config.executable),
         expected_sha256=artifact_trust.binary_sha256,
         expected_uid=artifact_trust.expected_uid,
         expected_gid=artifact_trust.expected_gid,
         require_executable=True,
         deny_writable_uid=artifact_trust.deny_writable_uid,
     ) as executable, open_trusted_artifact(
-        __import__("pathlib").Path(config.policy_path),
+        Path(config.policy_path),
         expected_sha256=artifact_trust.policy_sha256,
         expected_uid=artifact_trust.expected_uid,
         expected_gid=artifact_trust.expected_gid,
