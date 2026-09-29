@@ -24,7 +24,9 @@ The AI-facing process MUST NOT receive root credentials, unrestricted sudo crede
 
 Every security-relevant execution input MUST be represented in the deterministic plan hash or in an equally strong approval-bound mechanism. Mutating such an input after plan creation MUST change `plan_sha256` or otherwise make the approval invalid.
 
-Current status: **target invariant, not fully satisfied for plan expiry**. `PLAN_HASH_EXCLUDED_FIELDS` currently excludes the plan-level `expires_at`, while the broker uses that field to decide whether execution is still permitted. Approval binding checks `plan_id` and `plan_sha256`, not the plan expiry. Therefore changing a still-future plan `expires_at` can preserve both plan identity and approval binding. The preferred repair is to include plan `expires_at` in plan identity; an alternative is a separately broker-verifiable binding that makes expiry mutation invalidate approval.
+Current remediation in PR #59: plan-level `expires_at` participates in `plan_sha256`. Extending or shortening plan expiry therefore changes plan identity and invalidates an approval bound to the previous hash. The broker still performs an independent TTL check after validating plan identity.
+
+Compatibility rule: plans produced with the earlier expiry-excluding hash algorithm are not grandfathered. They must be regenerated and approved again rather than silently inheriting the previous approval under corrected hash semantics.
 
 ### INV-05 — Broker independently validates
 
@@ -42,7 +44,9 @@ A client MUST NOT be able to provide arbitrary shell text, argv, compose path/co
 
 ### INV-08 — Approval is bound to one immutable plan
 
-An approval MUST identify exactly one `plan_id` and `plan_sha256`. It MUST NOT authorize a different plan. Any execution-authorizing metadata excluded from `plan_sha256`, such as plan expiry, MUST be independently bound if it can affect whether or how the approved operation may execute.
+An approval MUST identify exactly one `plan_id` and `plan_sha256`. It MUST NOT authorize a different plan. Execution-authorizing metadata that affects whether or how the plan may execute MUST participate in plan identity or be independently approval-bound.
+
+For the corrected plan-hash semantics in PR #59, plan-level `expires_at` is included in `plan_sha256`; approval-level expiry remains a separate TTL on the approval record.
 
 ### INV-09 — Approval provenance matches the threat model
 
@@ -88,13 +92,13 @@ The system SHOULD emit bounded records containing plan hash, policy result ident
 
 ## Current implementation snapshot
 
-As of `main@8668e9945a76265c19f3c981304efc498911a08d`:
+The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498911a08d`. Subsequent focused remediation PRs should be read together with that snapshot rather than treating the historical status bullets as immutable current state.
 
 - INV-05/06/07 are strongly represented in the fixed broker canary path.
-- INV-04 is not fully satisfied because plan-level `expires_at` is execution-authorizing metadata but is excluded from `plan_sha256` and is not independently approval-bound.
-- INV-08/10 are substantially implemented for the current broker admission ledger, subject to the plan-expiry binding gap above.
+- INV-04 plan-expiry gap is addressed by PR #59 by including plan-level `expires_at` in `plan_sha256`; AT-08B must remain green before this status is considered enforced on `main`.
+- INV-08/10 are substantially implemented for the current broker admission ledger, subject to approval provenance limitations described by INV-09.
 - INV-09 is not satisfied against arbitrary Extras-process compromise.
-- INV-01 is not satisfied when legacy MCP/API write surfaces are enabled.
+- INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
 - INV-11 is only partially implemented: final artifact files are hash/owner/mode checked, but writable parent directories can permit post-validation pathname replacement before root execution; broker config ownership is also still an explicit TCB assumption to harden/test.

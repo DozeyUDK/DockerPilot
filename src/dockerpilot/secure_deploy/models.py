@@ -8,11 +8,12 @@ from typing import Any, Dict, Iterable, Mapping, Set
 
 from .canonical import sha256_canonical
 
-# Fields excluded from plan_sha256 input (non-deterministic or self-referential).
+# Fields excluded from plan_sha256 input because they are self-referential or
+# non-authorizing metadata. Execution-authorizing fields such as ``expires_at``
+# must participate in plan identity so approval cannot extend them after the fact.
 PLAN_HASH_EXCLUDED_FIELDS: Set[str] = {
     "plan_sha256",
     "created_at",
-    "expires_at",
     "approval",  # approval binding references plan_sha256; hashed separately by consumers
 }
 
@@ -55,7 +56,7 @@ def plan_hash_payload(plan: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def compute_plan_sha256(plan: Mapping[str, Any]) -> str:
-    """SHA-256 over canonical JSON of the plan without self-hash / timestamps / approval."""
+    """SHA-256 over canonical plan JSON without self-hash, creation time or approval."""
     return sha256_canonical(plan_hash_payload(plan))
 
 

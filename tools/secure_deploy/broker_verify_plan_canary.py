@@ -28,7 +28,7 @@ DEFAULT_OUT = Path("/tmp/broker_verify_plan_canary_results.json")
 
 # Mirror dockerpilot.secure_deploy.models.PLAN_HASH_EXCLUDED_FIELDS (stdlib only —
 # do not import dockerpilot package: its __init__ pulls the Docker SDK).
-_PLAN_HASH_EXCLUDED: Set[str] = {"plan_sha256", "created_at", "expires_at", "approval"}
+_PLAN_HASH_EXCLUDED: Set[str] = {"plan_sha256", "created_at", "approval"}
 
 
 def _canonicalize(obj: Any) -> Any:
@@ -110,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     p = copy.deepcopy(base)
     p["actor"] = str(base.get("actor")) + "_forged"
     negatives["plan_hash"] = _call("verify_plan", plan=p)
+
+    # AT-08B: extending plan expiry without recomputing the hash must now fail
+    # at plan identity, before the broker uses the modified TTL for authorization.
+    p = copy.deepcopy(base)
+    p["expires_at"] = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat().replace("+00:00", "Z")
+    negatives["expiry_hash"] = _call("verify_plan", plan=p)
 
     p = copy.deepcopy(base)
     p["source_spec"] = copy.deepcopy(base["source_spec"])

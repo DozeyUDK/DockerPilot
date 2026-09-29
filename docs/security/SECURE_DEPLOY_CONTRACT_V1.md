@@ -55,26 +55,35 @@ Helpers: `canonical_json_bytes`, `sha256_hex`, `sha256_canonical`.
 
 ### `plan_sha256` coverage
 
-Hashed payload **excludes**:
+Current hash semantics intentionally bind plan expiry because `expires_at` is execution-authorizing metadata.
 
-- `plan_sha256` (self)
-- `created_at`
-- `expires_at`
-- entire `approval` object
+Hashed payload **excludes only**:
 
-Everything else in the plan document is included (including `spec_sha256`, compose model, firewall stubs, invariants).
+- `plan_sha256` (self),
+- `created_at` (non-authorizing creation metadata),
+- entire `approval` object (approval references `plan_sha256` and is validated separately).
+
+`expires_at` **is included** in the hashed payload. Changing plan expiry therefore changes `plan_sha256` and invalidates any approval bound to the previous hash.
+
+Everything else in the plan document is included (including `expires_at`, `spec_sha256`, compose model, firewall stubs and invariants).
 
 `compute_plan_sha256(plan)` implements this.
+
+#### Compatibility note
+
+This is a deliberate security correction to the earlier documented v1 hash algorithm, which excluded `expires_at`. Plans persisted with that earlier algorithm are not accepted by the corrected broker hash verification. They must be regenerated and approved again; DockerPilot does not silently reinterpret or grandfather an old approval under the new plan identity.
 
 ### Approval binding (#11B functions only)
 
 Logical binding fields:
 
-- `plan_sha256`
-- `actor`
-- `nonce`
-- `expires_at`
-- one-time `status` transition (`pending` → `approved` → `consumed`)
+- `plan_sha256`,
+- `actor`,
+- `nonce`,
+- approval `expires_at`,
+- one-time `status` transition (`pending` → `approved` → `consumed`).
+
+Plan-level `expires_at` is bound indirectly because it participates in `plan_sha256`; approval-level `expires_at` remains a separate approval-record TTL.
 
 Storage / HTTP endpoints are **not** implemented in #11B.
 
@@ -111,6 +120,7 @@ Any future auto-migration must default to untrusted, require re-validation, stri
 
 ## Breaking changes (conscious)
 
+- Plan-hash semantics now include plan-level `expires_at`; plans/approvals produced with the previous expiry-excluding hash must be regenerated and re-approved.
 - Dozeyguard `--output json` now emits contract v1 envelope (not a bare `{findings:…}` list wrapper only).
 - Finding field exposed as `path`; exception as `{status}` object.
 - New rule **DG026** (does not alter DG001–DG025 meanings).
