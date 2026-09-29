@@ -40,6 +40,7 @@ class MCPConfig:
     max_log_lines: int
     exec_timeout: int
     redact_secrets: bool
+    agent_safe_mode: bool = False
     migration_max_bundle_bytes: int = 2_147_483_648  # 2 GiB
     migration_allow_arbitrary_output_dir: bool = False
 
@@ -50,14 +51,24 @@ class MCPConfig:
     @classmethod
     def from_env(cls, environ: Optional[dict[str, str]] = None) -> "MCPConfig":
         env = os.environ if environ is None else environ
+        agent_safe_mode = _parse_bool(env.get("DOCKERPILOT_AGENT_SAFE_MODE"), False)
+        # Agent-safe mode is captured once at startup in this frozen config.
+        # It is intentionally stronger than the normal MCP write/destructive flags:
+        # callers cannot re-enable direct Docker mutation by setting confirm=true or
+        # by changing process environment variables after the server has started.
+        readonly = agent_safe_mode or _parse_bool(env.get("DOCKERPILOT_MCP_READONLY"), True)
+        allow_destructive = (not agent_safe_mode) and _parse_bool(
+            env.get("DOCKERPILOT_MCP_ALLOW_DESTRUCTIVE"), False
+        )
         return cls(
-            readonly=_parse_bool(env.get("DOCKERPILOT_MCP_READONLY"), True),
-            allow_destructive=_parse_bool(env.get("DOCKERPILOT_MCP_ALLOW_DESTRUCTIVE"), False),
+            readonly=readonly,
+            allow_destructive=allow_destructive,
             allowed_containers=_parse_csv(env.get("DOCKERPILOT_MCP_ALLOWED_CONTAINERS")),
             denied_containers=_parse_csv(env.get("DOCKERPILOT_MCP_DENIED_CONTAINERS")),
             max_log_lines=max(1, _parse_int(env.get("DOCKERPILOT_MCP_MAX_LOG_LINES"), 200)),
             exec_timeout=max(1, _parse_int(env.get("DOCKERPILOT_MCP_EXEC_TIMEOUT"), 10)),
             redact_secrets=_parse_bool(env.get("DOCKERPILOT_MCP_REDACT_SECRETS"), True),
+            agent_safe_mode=agent_safe_mode,
             migration_max_bundle_bytes=max(
                 10_000_000, _parse_int(env.get("DOCKERPILOT_MCP_MIGRATION_MAX_BUNDLE_BYTES"), 2_147_483_648)
             ),
