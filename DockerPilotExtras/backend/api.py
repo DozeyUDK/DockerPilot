@@ -2,6 +2,73 @@
 
 from __future__ import annotations
 
+import os
+
+from flask import jsonify, request
+
+
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_AGENT_SAFE_ALLOWED_MUTATION_PATHS = frozenset(
+    {
+        "/api/auth/login",
+        "/api/auth/logout",
+    }
+)
+_AGENT_SAFE_ALLOWED_MUTATION_PREFIXES = ("/api/secure-deploy/",)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def agent_safe_mutation_is_blocked(*, enabled: bool, method: str, path: str) -> bool:
+    """Return True when agent-safe mode must reject this HTTP request.
+
+    The rule is deliberately fail-closed for legacy API writes: new mutating
+    endpoints are blocked automatically unless they live under the separately
+    reviewed Secure Deploy contract or are limited to login/logout session state.
+    """
+    if not enabled:
+        return False
+    if (method or "").upper() not in _MUTATING_METHODS:
+        return False
+    normalized_path = path or ""
+    if not normalized_path.startswith("/api/"):
+        return False
+    if normalized_path in _AGENT_SAFE_ALLOWED_MUTATION_PATHS:
+        return False
+    if any(normalized_path.startswith(prefix) for prefix in _AGENT_SAFE_ALLOWED_MUTATION_PREFIXES):
+        return False
+    return True
+
+
+def _install_agent_safe_guard(api) -> None:
+    """Install a startup-captured fail-closed guard for legacy API mutations."""
+    enabled = _env_flag("DOCKERPILOT_AGENT_SAFE_MODE", False)
+    app = getattr(api, "app", None)
+    if app is None:
+        raise RuntimeError("Flask app must be attached before registering DockerPilot API routes")
+
+    @app.before_request
+    def enforce_agent_safe_mode():
+        if not agent_safe_mutation_is_blocked(
+            enabled=enabled,
+            method=request.method,
+            path=request.path,
+        ):
+            return None
+        return jsonify(
+            {
+                "success": False,
+                "error": "Mutation blocked by DockerPilot agent-safe mode",
+                "agent_safe_mode": True,
+                "code": "agent_safe_mutation_blocked",
+            }
+        ), 403
+
 
 def register_api_routes(
     api,
@@ -70,6 +137,8 @@ def register_api_routes(
     SecureDeployCanaryRemove=None,
 ):
     """Register all API resources and routes."""
+    _install_agent_safe_guard(api)
+
     api.add_resource(HealthCheck, "/api/health")
     api.add_resource(AuthStatus, "/api/auth/status")
     api.add_resource(AuthLogin, "/api/auth/login")
