@@ -25,6 +25,7 @@ from .errors import VerificationError
 class BrokerDozeyguardConfig:
     executable: str
     policy_path: str
+    expected_binary_sha256: Optional[str] = None
     expected_policy_sha256: Optional[str] = None
 
 
@@ -32,6 +33,7 @@ def resolve_broker_dozeyguard_config(
     *,
     executable: Optional[str] = None,
     policy_path: Optional[str] = None,
+    expected_binary_sha256: Optional[str] = None,
     expected_policy_sha256: Optional[str] = None,
     allow_writable_by_uid: Optional[int] = None,
 ) -> BrokerDozeyguardConfig:
@@ -55,13 +57,19 @@ def resolve_broker_dozeyguard_config(
                 "broker_policy_writable",
                 "broker policy writable by untrusted UID",
             )
+
+    binary_sha = sha256_hex(exe_path.read_bytes())
     policy_sha = sha256_hex(policy_file.read_bytes())
-    expected = expected_policy_sha256 or os.environ.get("BROKER_DOZEYGUARD_POLICY_SHA256")
-    if expected and expected != policy_sha:
+    expected_binary = expected_binary_sha256 or os.environ.get("BROKER_DOZEYGUARD_BIN_SHA256")
+    expected_policy = expected_policy_sha256 or os.environ.get("BROKER_DOZEYGUARD_POLICY_SHA256")
+    if expected_binary and expected_binary != binary_sha:
+        raise VerificationError("broker_binary_hash", "broker Dozeyguard checksum mismatch")
+    if expected_policy and expected_policy != policy_sha:
         raise VerificationError("broker_policy_hash", "broker policy checksum mismatch")
     return BrokerDozeyguardConfig(
         executable=str(exe_path.resolve()),
         policy_path=str(policy_file.resolve()),
+        expected_binary_sha256=binary_sha,
         expected_policy_sha256=policy_sha,
     )
 
