@@ -147,6 +147,16 @@ The broker permits removal by broker execution ID without a plan/approval tuple.
 
 Keep this explicitly documented as a cleanup capability. Add regression tests ensuring the client can never supply project, path, compose file or cleanup argv.
 
+### F-06 — MEDIUM — Plan expiry is execution-authorizing metadata but is not bound to plan identity
+
+`PLAN_HASH_EXCLUDED_FIELDS` excludes the plan-level `expires_at` from `plan_sha256`. The broker later parses that same field and rejects the plan only if the current time has reached it. Approval binding checks the plan ID and plan hash, but not the plan-level expiry.
+
+**Consequence:** after approval, a control-plane process can change only `plan.expires_at` to a later still-future time while preserving `plan_id`, `plan_sha256` and the approval binding. The broker then evaluates the modified expiry and may accept a plan outside the originally intended validity window.
+
+This does not change the approved image, mounts, runtime privileges or other hashed execution content, so the impact is narrower than arbitrary plan tampering. It nevertheless violates the stronger invariant that all execution-authorizing metadata of an approved plan is immutable.
+
+**Required direction:** preferably include plan `expires_at` in `plan_sha256`. If expiry intentionally remains excluded for determinism or lifecycle reasons, it needs a separate broker-verifiable binding that cannot be changed without invalidating approval. Add an adversarial regression that extends expiry after approval while leaving the hash and approval unchanged.
+
 ## Strategic conclusion
 
 The most defensible current security statement is:
@@ -157,22 +167,24 @@ The following statement is **not yet** defensible:
 
 > Every infrastructure mutation available to an AI agent using DockerPilot is mediated by Secure Deploy and a broker-verifiable human approval.
 
-Two gaps block that stronger statement:
+The primary gaps blocking stronger claims are:
 
-1. alternate AI-facing / legacy mutation paths (`F-01`), and
-2. approval provenance under control-plane compromise (`F-02`).
+1. alternate AI-facing / legacy mutation paths (`F-01`),
+2. approval provenance under control-plane compromise (`F-02`), and
+3. plan-expiry immutability for an already approved plan (`F-06`).
 
-These should be the next security-development priorities before adding more deployment UX or broadening broker execution capabilities.
+These should be addressed before adding more deployment UX or broadening broker execution capabilities.
 
 ## Recommended order of work
 
 1. Define and enforce **agent-safe mode**: read-only legacy MCP/API surfaces, no direct Docker mutation, no generic command execution.
 2. Add adversarial tests proving no alternate mutation route exists in agent-safe mode.
-3. Decide whether human approval is intended to survive Extras compromise.
-4. If yes, design broker-verifiable approval provenance and replay/revocation semantics.
-5. Add the approval-forgery adversarial tests before implementing the fix.
-6. Harden / test broker config ownership as part of the TCB.
-7. Only after these invariants hold, consider broadening the broker beyond the current fixed canary.
+3. Repair plan-expiry binding and add the expiry-tamper regression.
+4. Decide whether human approval is intended to survive Extras compromise.
+5. If yes, design broker-verifiable approval provenance and replay/revocation semantics.
+6. Add the approval-forgery adversarial tests before implementing the fix.
+7. Harden / test broker config ownership as part of the TCB.
+8. Only after these invariants hold, consider broadening the broker beyond the current fixed canary.
 
 ## Non-goals of this audit
 
