@@ -58,7 +58,11 @@ Approval use MUST be time-bounded and replay semantics MUST be explicit. Nonces 
 
 ### INV-11 — Broker artifact and configuration trust is explicit
 
-The broker executable, policy and security-relevant config MUST be root-controlled / immutable to the unprivileged control-plane UID. Runtime must fail closed when these assumptions cannot be established.
+The broker executable, policy, their containing pathname components, and security-relevant config MUST be root-controlled / immutable to the unprivileged control-plane UID. Runtime must fail closed when these assumptions cannot be established.
+
+Validating only the final file object is insufficient if an untrusted process can replace that pathname through a writable parent directory after validation. For artifacts that are opened or executed later by pathname, either every relevant parent directory MUST be non-writable by the untrusted UID, or the broker MUST use an already-open verified object / equivalent race-resistant primitive that cryptographically and referentially ties the checked bytes to the consumed bytes.
+
+Current status: **target invariant, not fully satisfied for artifact pathname TOCTOU**. `assert_trusted_artifact()` checks the current file target, ownership/mode and hash, but the broker later reuses the pathname for DozeyGuard execution/policy loading. A clean root-owned file in an Extras-writable directory can therefore be replaced atomically after validation.
 
 ### INV-12 — Peer identity is necessary but not authorization
 
@@ -93,4 +97,4 @@ As of `main@8668e9945a76265c19f3c981304efc498911a08d`:
 - INV-01 is not satisfied when legacy MCP/API write surfaces are enabled.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
-- INV-11 is partly implemented for broker binary/policy; config ownership remains an explicit TCB assumption to harden/test.
+- INV-11 is only partially implemented: final artifact files are hash/owner/mode checked, but writable parent directories can permit post-validation pathname replacement before root execution; broker config ownership is also still an explicit TCB assumption to harden/test.
