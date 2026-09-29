@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     dg = resolve_broker_dozeyguard_config(
         executable=cfg.dozeyguard_path,
         policy_path=cfg.policy_path,
+        expected_binary_sha256=cfg.expected_binary_sha256,
         expected_policy_sha256=cfg.expected_policy_sha256,
     )
     runtime = BrokerRuntimeConfig(
