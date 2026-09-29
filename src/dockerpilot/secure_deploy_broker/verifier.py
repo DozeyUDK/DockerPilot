@@ -27,6 +27,9 @@ class BrokerDozeyguardConfig:
     policy_path: str
     expected_binary_sha256: Optional[str] = None
     expected_policy_sha256: Optional[str] = None
+    expected_artifact_uid: Optional[int] = None
+    expected_artifact_gid: Optional[int] = None
+    deny_writable_uid: Optional[int] = None
 
 
 def resolve_broker_dozeyguard_config(
@@ -35,6 +38,8 @@ def resolve_broker_dozeyguard_config(
     policy_path: Optional[str] = None,
     expected_binary_sha256: Optional[str] = None,
     expected_policy_sha256: Optional[str] = None,
+    expected_artifact_uid: Optional[int] = None,
+    expected_artifact_gid: Optional[int] = None,
     allow_writable_by_uid: Optional[int] = None,
 ) -> BrokerDozeyguardConfig:
     """Resolve broker-owned Dozeyguard paths. Does NOT inherit Flask env vars."""
@@ -71,6 +76,9 @@ def resolve_broker_dozeyguard_config(
         policy_path=str(policy_file.resolve()),
         expected_binary_sha256=binary_sha,
         expected_policy_sha256=policy_sha,
+        expected_artifact_uid=expected_artifact_uid,
+        expected_artifact_gid=expected_artifact_gid,
+        deny_writable_uid=deny_uid,
     )
 
 
