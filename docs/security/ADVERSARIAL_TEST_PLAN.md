@@ -187,11 +187,21 @@ Change artifact contents while preserving path.
 
 **Expected:** expected SHA-256 check fails before verification/execution.
 
-### AT-22 — writable/symlink artifact
+### AT-22 — writable/symlink artifact and writable-parent replacement race
 
-Make trusted binary/policy writable by an untrusted UID or replace it with symlink.
+Exercise three cases for both the broker-owned DozeyGuard binary and policy path:
 
-**Expected:** fail closed.
+1. make the artifact itself writable by the untrusted / Extras UID,
+2. replace the artifact with a direct symlink,
+3. keep the artifact itself clean, root-owned, non-writable and hash-correct, but place it in a directory writable by the untrusted / Extras UID; after `assert_trusted_artifact()` completes, atomically replace the pathname before the later consumer opens or executes it.
+
+For the binary case, race the replacement between integrity validation and `subprocess.Popen()`. For the policy case, race replacement before the DozeyGuard child resolves the `--policy` pathname.
+
+**Expected:** fail closed. Artifact trust MUST include every attacker-controlled pathname component needed to resolve the checked object, or execution MUST use an already-open verified object / equivalent race-resistant primitive. A successful validation of a file followed by execution of different bytes through the same pathname is a security failure.
+
+**Current expected result:** the writable-parent atomic replacement case is expected to expose an INV-11 TOCTOU gap because `assert_trusted_artifact()` validates/hash-checks the current pathname target, then later broker code passes the pathname again to the subprocess runner.
+
+**Invariant:** INV-11, INV-14.
 
 ### AT-23 — broker config ownership / mode
 
@@ -250,11 +260,11 @@ Create another target network whose subnet conflicts with the source network bei
 ## Suggested execution order
 
 1. All Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
-2. AT-08B and AT-13 next. They make the plan-expiry and approval-provenance limitations executable and prevent accidental overclaiming.
+2. AT-22 writable-parent race, AT-08B and AT-13 next. They make the root-TCB pathname race, plan-expiry and approval-provenance limitations executable and prevent accidental overclaiming.
 3. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
 4. Implement agent-safe mode in a small isolated PR.
 5. Make Track A green before broadening broker capabilities.
-6. Repair plan-expiry binding in a focused contract/runtime PR.
+6. Repair the broker artifact/path trust race and plan-expiry binding in focused security PRs.
 7. Design approval provenance separately; do not combine it with agent-safe routing in one large security PR.
 
 ## Acceptance gate for the stronger project claim
@@ -265,6 +275,8 @@ The project may claim that AI-agent infrastructure mutation is broker-mediated o
 - no write-enabled AI-facing route reaches Docker outside the reviewed broker contract,
 - the deployment profile and limitations are documented,
 - and CI treats these tests as merge-blocking security regressions.
+
+Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires the AT-22 writable-parent replacement race to be green.
 
 Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to be green.
 
