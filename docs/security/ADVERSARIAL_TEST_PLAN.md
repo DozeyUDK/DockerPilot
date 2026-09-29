@@ -95,9 +95,13 @@ Change a security-relevant plan field that participates in `plan_sha256` after a
 
 Create and approve a plan, then change only the plan-level `expires_at` to a later still-future timestamp while leaving `plan_id`, `plan_sha256` and the approval unchanged.
 
-**Target expected:** reject because plan expiry is execution-authorizing metadata and must be covered by plan identity or by a separately broker-verifiable approval binding.
+**Expected:** reject with plan identity / approval binding failure before the modified TTL can authorize execution. Under the corrected hash semantics from PR #59, plan-level `expires_at` participates in `plan_sha256`, so changing expiry without recomputing the hash yields `plan_hash_mismatch`.
 
-**Current expected result:** exposes the known INV-04 gap. `PLAN_HASH_EXCLUDED_FIELDS` currently excludes plan `expires_at`, the broker independently reads that mutable field for its TTL decision, and approval binding checks only `plan_id` / `plan_sha256`. Until repaired, this scenario should be classified `FAIL_IMPLEMENTATION` if the intended fix is to hash expiry, or `FAIL_ARCHITECTURE` if the design intentionally keeps expiry outside plan identity without another trusted binding mechanism.
+A second control case must recompute `plan_sha256` for an already-expired plan and verify that the broker's independent TTL gate still rejects it as `plan_expired`. This proves expiry is both identity-bound and independently time-checked.
+
+Plans persisted with the earlier expiry-excluding hash algorithm are intentionally incompatible with the corrected identity semantics and must be regenerated / approved again rather than grandfathered.
+
+**Current expected result after PR #59:** `PASS` when both the hash-mismatch tamper case and independent expired-plan TTL case are green.
 
 **Invariant:** INV-04, INV-08.
 
@@ -260,11 +264,11 @@ Create another target network whose subnet conflicts with the source network bei
 ## Suggested execution order
 
 1. All Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
-2. AT-22 writable-parent race, AT-08B and AT-13 next. They make the root-TCB pathname race, plan-expiry and approval-provenance limitations executable and prevent accidental overclaiming.
+2. AT-22 writable-parent race and AT-13 approval forgery remain the highest-value unresolved trust-boundary tests. Keep AT-08B as a permanent regression after PR #59 rather than as an expected red test.
 3. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
-4. Implement agent-safe mode in a small isolated PR.
-5. Make Track A green before broadening broker capabilities.
-6. Repair the broker artifact/path trust race and plan-expiry binding in focused security PRs.
+4. Keep agent-safe mode isolated and make all Track A cases merge-blocking for changes to AI-facing mutation surfaces.
+5. Repair the broker artifact/path trust race before broadening broker capabilities.
+6. Keep plan-expiry identity binding and AT-08B regression green; do not reintroduce expiry-excluding hash semantics for compatibility convenience.
 7. Design approval provenance separately; do not combine it with agent-safe routing in one large security PR.
 
 ## Acceptance gate for the stronger project claim
@@ -278,6 +282,6 @@ The project may claim that AI-agent infrastructure mutation is broker-mediated o
 
 Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires the AT-22 writable-parent replacement race to be green.
 
-Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to be green.
+Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to remain green under the corrected hash semantics.
 
 The stronger additional claim that a human approval remains authoritative after control-plane compromise requires Track C approval-provenance tests to be green as well.
