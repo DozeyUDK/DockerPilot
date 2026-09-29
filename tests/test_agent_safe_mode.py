@@ -10,14 +10,14 @@ from dockerpilot.mcp.context import MCPConfig
 from dockerpilot.mcp.safety import ToolBlocked
 from dockerpilot.mcp.tools import DockerPilotTools
 
-pytest.importorskip("flask")
-pytest.importorskip("flask_restful")
-pytest.importorskip("cryptography")
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_extras_app(monkeypatch, tmp_path: Path):
+    pytest.importorskip("flask")
+    pytest.importorskip("flask_restful")
+    pytest.importorskip("cryptography")
+
     extras = ROOT / "DockerPilotExtras"
     src = ROOT / "src"
     for path in (extras, src):
