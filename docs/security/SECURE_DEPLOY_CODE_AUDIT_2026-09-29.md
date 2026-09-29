@@ -23,6 +23,16 @@ Primary question:
 
 This is a static code audit. It is not yet a host-level penetration test of the installed broker unit.
 
+## Post-audit remediation status
+
+The finding sections below are preserved as the evidence recorded at the original audit base. Current implementation status should be read together with the focused remediation PRs:
+
+- **F-01 / INV-01:** agent-safe mutation isolation merged in PR #57 (`ace7b3498faa6749185d03a00e4d76f051de6e2b`).
+- **F-06 / INV-04:** plan-level `expires_at` is bound into `plan_sha256` after PR #59 (`345f646b0abe0b83a38c57046f393b8d5fbae9f3`).
+- **F-07 / INV-11:** PR #60 replaces pathname check-then-reopen for the broker-owned DozeyGuard binary/policy with verified open-file-descriptor pinning and a deterministic AT-22 atomic-replacement regression. This remediation is effective only after #60 merges and remains subject to CI/review.
+- **F-02 / INV-09:** approval provenance under arbitrary Extras RCE remains unresolved.
+- **F-04 / AT-23:** broker config ownership/mode runtime hardening remains unresolved and is intentionally separate from F-07 artifact-byte pinning.
+
 ## Trust domains found in code
 
 ```text
