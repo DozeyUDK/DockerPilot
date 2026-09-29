@@ -85,14 +85,16 @@ def open_trusted_artifact(
 
     Verification is performed against the already-open file descriptor. The
     returned descriptor therefore continues to reference the verified inode even
-    if an attacker later renames or replaces the original pathname.
+    if an attacker later renames or replaces the original pathname. The initial
+    open is nonblocking so a substituted FIFO/device cannot wedge the broker
+    before the regular-file check runs.
     """
 
     path = Path(path)
     if not path.is_absolute():
         raise BrokerError("artifact_path", f"absolute artifact path required: {path}")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
 
