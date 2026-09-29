@@ -74,9 +74,11 @@ The final Compose bytes are written by the broker, hashed, scanned by DozeyGuard
 
 The canary ledger binds staged admission to plan / approval identifiers and a bundle hash, tracks nonce and replay keys, checks TTLs, uses file locking and atomic state transitions, and prevents concurrent double execution from starting the canary twice.
 
-### S-05 — Broker runtime is hardened
+### S-05 — Broker runtime has meaningful hardening, but artifact path trust is incomplete
 
-The systemd unit runs as root but applies a restrictive sandbox and deliberately exposes only the minimum live path currently required by the canary. Broker policy / binary checks enforce expected SHA-256 values and reject symlinked or writable artifacts.
+The systemd unit runs as root but applies a restrictive sandbox and deliberately exposes only the minimum live path currently required by the canary. Broker artifact checks validate expected SHA-256 values, reject direct symlinks, and reject writable / incorrectly owned final files.
+
+Those checks do not yet prove that the pathname remains bound to the validated object until use. If an untrusted process can write an artifact's containing directory, it can potentially replace a clean validated pathname before the broker later executes or reopens it. This is recorded as F-07 below.
 
 The residual consequence remains important: broker RCE plus its deliberate Docker socket access is effectively compromise of the Docker trust boundary.
 
@@ -157,21 +159,32 @@ This does not change the approved image, mounts, runtime privileges or other has
 
 **Required direction:** preferably include plan `expires_at` in `plan_sha256`. If expiry intentionally remains excluded for determinism or lifecycle reasons, it needs a separate broker-verifiable binding that cannot be changed without invalidating approval. Add an adversarial regression that extends expiry after approval while leaving the hash and approval unchanged.
 
+### F-07 — HIGH — Validated broker artifact pathname can be swapped through a writable parent directory
+
+`assert_trusted_artifact()` rejects direct symlinks, checks the current final file's type / ownership / mode, and hashes its contents. After this check returns, broker request handling continues and the DozeyGuard runner later passes `config.executable` and `config.policy_path` as pathnames to `subprocess.Popen()` / the child process.
+
+The trust check does not validate every parent directory in the path and does not hold an open verified file descriptor across the later use. Therefore a clean, root-owned, non-writable, hash-correct artifact can reside inside a directory writable by the compromised Extras UID; after validation, the attacker can atomically rename/replace the pathname before root execution or before DozeyGuard opens the policy path.
+
+**Consequence:** for the executable path, winning this race can cause attacker-controlled bytes to be executed by the root broker despite the earlier trusted-artifact check. For the policy path, it can substitute policy after validation and undermine broker-owned policy enforcement. This directly violates INV-11 and is a privilege-boundary issue, not merely a test-coverage problem.
+
+**Required direction:** make artifact trust race-resistant. At minimum, validate the entire relevant pathname chain as root-controlled and non-writable by the untrusted UID. Stronger designs should avoid check-then-reopen by pathname: open the verified artifact with no-follow semantics, validate identity/content on that open object, and execute/consume the same object or use an equivalent immutable/root-owned deployment location whose parent chain cannot be replaced by Extras. Add a deterministic adversarial race test that swaps the pathname after validation and before consumption.
+
 ## Strategic conclusion
 
 The most defensible current security statement is:
 
-> DockerPilot Secure Deploy demonstrates an independently revalidated, privilege-separated and closed broker execution path. The fixed canary remains constrained even if DockerPilot Extras supplies malicious plan metadata, provided the broker / Docker host trust domain is intact.
+> DockerPilot Secure Deploy demonstrates a closed, independently revalidated broker design with meaningful privilege separation, but the stronger control-plane-compromise claim remains blocked by alternate mutation paths and unresolved trust-boundary gaps documented below.
 
 The following statement is **not yet** defensible:
 
-> Every infrastructure mutation available to an AI agent using DockerPilot is mediated by Secure Deploy and a broker-verifiable human approval.
+> Every infrastructure mutation available to an AI agent using DockerPilot is mediated by Secure Deploy and a broker-verifiable human approval, while broker-owned policy artifacts remain immutable against the compromised control plane.
 
 The primary gaps blocking stronger claims are:
 
 1. alternate AI-facing / legacy mutation paths (`F-01`),
-2. approval provenance under control-plane compromise (`F-02`), and
-3. plan-expiry immutability for an already approved plan (`F-06`).
+2. approval provenance under control-plane compromise (`F-02`),
+3. plan-expiry immutability for an already approved plan (`F-06`), and
+4. broker artifact pathname TOCTOU when a parent directory is writable by the untrusted control-plane UID (`F-07`).
 
 These should be addressed before adding more deployment UX or broadening broker execution capabilities.
 
@@ -179,12 +192,13 @@ These should be addressed before adding more deployment UX or broadening broker 
 
 1. Define and enforce **agent-safe mode**: read-only legacy MCP/API surfaces, no direct Docker mutation, no generic command execution.
 2. Add adversarial tests proving no alternate mutation route exists in agent-safe mode.
-3. Repair plan-expiry binding and add the expiry-tamper regression.
-4. Decide whether human approval is intended to survive Extras compromise.
-5. If yes, design broker-verifiable approval provenance and replay/revocation semantics.
-6. Add the approval-forgery adversarial tests before implementing the fix.
-7. Harden / test broker config ownership as part of the TCB.
-8. Only after these invariants hold, consider broadening the broker beyond the current fixed canary.
+3. Repair the broker artifact pathname trust / writable-parent TOCTOU and add the atomic-replacement regression.
+4. Repair plan-expiry binding and add the expiry-tamper regression.
+5. Decide whether human approval is intended to survive Extras compromise.
+6. If yes, design broker-verifiable approval provenance and replay/revocation semantics.
+7. Add the approval-forgery adversarial tests before implementing the fix.
+8. Harden / test broker config ownership as part of the TCB.
+9. Only after these invariants hold, consider broadening the broker beyond the current fixed canary.
 
 ## Non-goals of this audit
 
