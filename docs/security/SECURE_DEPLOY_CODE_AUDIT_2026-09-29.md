@@ -18,7 +18,7 @@ Primary question:
 - broker protocol, peer authentication, artifact integrity and systemd unit
 - broker-owned canary execution path
 - `src/dockerpilot/mcp/*`
-- legacy DockerPilot Extras mutation surfaces, including command execution and deployment routes
+- legacy DockerPilot Extras mutation surfaces, including command execution, deployment and storage-bootstrap routes
 - existing Secure Deploy / broker / canary tests
 
 This is a static code audit. It is not yet a host-level penetration test of the installed broker unit.
@@ -93,6 +93,7 @@ The repository contains mutation paths that do not pass through the Secure Deplo
 - DockerPilot Extras exposes `/api/command/execute`, which can invoke `docker` or `dockerpilot` directly.
 - Extras exposes `/api/deployment/execute` and `/api/containers/blue-green-replace`, which invoke normal DockerPilot deployment flows.
 - promotion and migration endpoints are separate mutation systems and are not broker-mediated Secure Deploy operations.
+- Extras exposes `/api/storage/bootstrap-local-postgres`; its request accepts a caller-selected `image`, and the backing service uses `docker.from_env()` to start an existing container or `containers.run()` a new PostgreSQL container directly, outside the broker.
 
 MCP defaults mitigate this: `DOCKERPILOT_MCP_READONLY` defaults to `true`, and destructive actions additionally default to disabled. Those defaults are useful, but they do not create a system invariant once write mode is enabled.
 
