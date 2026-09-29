@@ -85,15 +85,25 @@ Start an agent-safe deployment with `WEB_AUTH_ENABLED=false`.
 
 ## Track B — plan / hash binding
 
-### AT-08 — mutate plan after approval
+### AT-08 — mutate hashed plan field after approval
 
-Change a security-relevant plan field after approval without updating the approval.
+Change a security-relevant plan field that participates in `plan_sha256` after approval without updating the approval.
 
 **Expected:** broker rejects hash mismatch / binding mismatch before execution.
 
+### AT-08B — extend plan expiry after approval
+
+Create and approve a plan, then change only the plan-level `expires_at` to a later still-future timestamp while leaving `plan_id`, `plan_sha256` and the approval unchanged.
+
+**Target expected:** reject because plan expiry is execution-authorizing metadata and must be covered by plan identity or by a separately broker-verifiable approval binding.
+
+**Current expected result:** exposes the known INV-04 gap. `PLAN_HASH_EXCLUDED_FIELDS` currently excludes plan `expires_at`, the broker independently reads that mutable field for its TTL decision, and approval binding checks only `plan_id` / `plan_sha256`. Until repaired, this scenario should be classified `FAIL_IMPLEMENTATION` if the intended fix is to hash expiry, or `FAIL_ARCHITECTURE` if the design intentionally keeps expiry outside plan identity without another trusted binding mechanism.
+
+**Invariant:** INV-04, INV-08.
+
 ### AT-09 — recompute plan hash after mutation
 
-Change a security-relevant field and recompute `plan_sha256`, but reuse the old approval.
+Change a security-relevant hashed field and recompute `plan_sha256`, but reuse the old approval.
 
 **Expected:** approval binding mismatch.
 
@@ -240,11 +250,12 @@ Create another target network whose subnet conflicts with the source network bei
 ## Suggested execution order
 
 1. All Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
-2. AT-13 next. It makes the approval-provenance limitation executable and prevents accidental overclaiming.
-3. Run existing broker/canary tests as baseline for AT-08 through AT-27 and fill only uncovered cases.
+2. AT-08B and AT-13 next. They make the plan-expiry and approval-provenance limitations executable and prevent accidental overclaiming.
+3. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
 4. Implement agent-safe mode in a small isolated PR.
 5. Make Track A green before broadening broker capabilities.
-6. Design approval provenance separately; do not combine it with agent-safe routing in one large security PR.
+6. Repair plan-expiry binding in a focused contract/runtime PR.
+7. Design approval provenance separately; do not combine it with agent-safe routing in one large security PR.
 
 ## Acceptance gate for the stronger project claim
 
@@ -254,5 +265,7 @@ The project may claim that AI-agent infrastructure mutation is broker-mediated o
 - no write-enabled AI-facing route reaches Docker outside the reviewed broker contract,
 - the deployment profile and limitations are documented,
 - and CI treats these tests as merge-blocking security regressions.
+
+Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to be green.
 
 The stronger additional claim that a human approval remains authoritative after control-plane compromise requires Track C approval-provenance tests to be green as well.
