@@ -35,11 +35,27 @@ Attempt every direct container lifecycle mutation, including destructive mode to
 
 **Expected:** blocked or broker-routed; environment variables controlled by the same agent process cannot silently turn off agent-safe mode at runtime.
 
+### AT-03B — MCP image prune
+
+Attempt `dockerpilot_image_prune(dangling_only=False, confirm=true, dry_run=false)` with write and destructive MCP settings enabled.
+
+**Expected:** blocked before the Docker image-prune API is invoked, or broker-routed through a separately reviewed contract. Agent-safe mode must override caller/config combinations that would otherwise permit destructive pruning.
+
+**Invariant:** INV-01, INV-02.
+
 ### AT-04 — MCP migration import / replace
 
 Attempt a bundle import with `start=true` and conflict replacement.
 
 **Expected:** blocked or broker-routed in agent-safe mode.
+
+### AT-04B — MCP migration export with named-volume data
+
+Attempt `dockerpilot_migration_export_bundle` with `include_data=true` and `confirm=true` for a container that has a named volume and with MCP write mode enabled.
+
+**Expected:** blocked before the helper-container path can call Docker `containers.create()`, `start()` or `remove()`, or broker-routed through a separately reviewed contract. An operation described as export/read must still count as a Docker mutation when its implementation creates ephemeral containers.
+
+**Invariant:** INV-01, INV-02.
 
 ### AT-05 — Extras generic command execution
 
@@ -223,7 +239,7 @@ Create another target network whose subnet conflicts with the source network bei
 
 ## Suggested execution order
 
-1. All Track A scenarios (AT-01 through AT-07, including AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
+1. All Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
 2. AT-13 next. It makes the approval-provenance limitation executable and prevents accidental overclaiming.
 3. Run existing broker/canary tests as baseline for AT-08 through AT-27 and fill only uncovered cases.
 4. Implement agent-safe mode in a small isolated PR.
