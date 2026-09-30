@@ -68,7 +68,9 @@ Validating only the final file object is insufficient if an untrusted process ca
 
 Current remediation in PR #60: the broker opens the DozeyGuard executable and policy with no-follow semantics, validates type/mode/ownership expectations and hashes the already-open file descriptors, then keeps those descriptors open across subprocess creation. The child receives `/proc/self/fd/*` references through `pass_fds`, so replacing the original binary or policy pathname after validation no longer changes the file objects executed or read.
 
-The separate broker-config ownership/mode hardening item from F-04 remains open. PR #60 fixes the artifact pathname TOCTOU; it does not claim that all broker TCB configuration assumptions are now runtime-enforced.
+Current remediation in PR #61: when the installed broker runs as root, the runtime config must be an absolute root:root regular file that is not group/other writable, and every containing directory through `/` must be root-owned/root-group, non-symlink and not group/other writable. The config is opened once with no-follow/nonblocking semantics, metadata is checked with `fstat`, and JSON is read from that same descriptor, so pathname replacement after the verified open cannot swap the parsed bytes.
+
+PR #61 is considered enforcement only after its CI and AT-23 regression are green and it merges to `main`.
 
 ### INV-12 — Peer identity is necessary but not authorization
 
@@ -103,4 +105,4 @@ The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498
 - INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
-- INV-11 artifact pathname TOCTOU is addressed by PR #60 through verified open-file-descriptor pinning for the broker-owned DozeyGuard executable and policy. Broker config ownership remains a separate explicit TCB assumption under F-04.
+- INV-11 artifact pathname TOCTOU is addressed by PR #60 through verified open-file-descriptor pinning for the broker-owned DozeyGuard executable and policy. PR #61 adds independent runtime owner/mode/parent-chain and same-FD checks for the root broker config; AT-23 must remain green after merge.
