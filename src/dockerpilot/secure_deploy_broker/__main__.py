@@ -34,10 +34,15 @@ def main(argv: list[str] | None = None) -> int:
     from dockerpilot.secure_deploy_broker.verifier import resolve_broker_dozeyguard_config
 
     cfg = load_broker_config(Path(args.config))
+    expected_artifact_uid = 0 if os.geteuid() == 0 else None
+    expected_artifact_gid = 0 if os.geteuid() == 0 else None
     dg = resolve_broker_dozeyguard_config(
         executable=cfg.dozeyguard_path,
         policy_path=cfg.policy_path,
+        expected_binary_sha256=cfg.expected_binary_sha256,
         expected_policy_sha256=cfg.expected_policy_sha256,
+        expected_artifact_uid=expected_artifact_uid,
+        expected_artifact_gid=expected_artifact_gid,
     )
     runtime = BrokerRuntimeConfig(
         socket_path=args.socket or cfg.socket_path,
@@ -46,8 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         request_timeout=cfg.request_timeout_seconds,
         expected_binary_sha256=cfg.expected_binary_sha256,
         expected_policy_sha256=cfg.expected_policy_sha256,
-        expected_artifact_uid=0 if os.geteuid() == 0 else None,
-        expected_artifact_gid=0 if os.geteuid() == 0 else None,
+        expected_artifact_uid=expected_artifact_uid,
+        expected_artifact_gid=expected_artifact_gid,
         socket_activation=cfg.socket_activation,
         allowed_operations=cfg.allowed_operations,
         canary_workdir=cfg.canary_workdir,

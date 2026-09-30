@@ -197,13 +197,13 @@ Exercise three cases for both the broker-owned DozeyGuard binary and policy path
 
 1. make the artifact itself writable by the untrusted / Extras UID,
 2. replace the artifact with a direct symlink,
-3. keep the artifact itself clean, root-owned, non-writable and hash-correct, but place it in a directory writable by the untrusted / Extras UID; after `assert_trusted_artifact()` completes, atomically replace the pathname before the later consumer opens or executes it.
+3. keep the artifact itself clean, root-owned, non-writable and hash-correct, then atomically replace the original pathname after the broker has opened and verified the artifact but before `subprocess.Popen()` / child policy loading.
 
-For the binary case, race the replacement between integrity validation and `subprocess.Popen()`. For the policy case, race replacement before the DozeyGuard child resolves the `--policy` pathname.
+For the binary case, race the replacement immediately before `Popen`. For the policy case, replace the original policy pathname at the same point and verify the child still receives the already-open verified policy object.
 
-**Expected:** fail closed. Artifact trust MUST include every attacker-controlled pathname component needed to resolve the checked object, or execution MUST use an already-open verified object / equivalent race-resistant primitive. A successful validation of a file followed by execution of different bytes through the same pathname is a security failure.
+**Expected:** `PASS`. The broker must reject replacement that occurs before the verified open/hash step. Once verification succeeds, it must consume the same already-open file objects rather than reopening the original pathnames. The DozeyGuard executable and policy should be referenced through inherited `/proc/self/fd/*` descriptors (or an equivalent race-resistant primitive), so a later rename/`os.replace()` of the pathname cannot change the executed or parsed bytes.
 
-**Current expected result:** the writable-parent atomic replacement case is expected to expose an INV-11 TOCTOU gap because `assert_trusted_artifact()` validates/hash-checks the current pathname target, then later broker code passes the pathname again to the subprocess runner.
+The permanent regression must assert both halves of the property: pre-open replacement fails on hash mismatch, while post-verification pathname replacement leaves the pinned executable/policy bytes unchanged.
 
 **Invariant:** INV-11, INV-14.
 
@@ -263,13 +263,12 @@ Create another target network whose subnet conflicts with the source network bei
 
 ## Suggested execution order
 
-1. All Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) first. They decide whether DockerPilot can make a system-wide agent-safety claim at all.
-2. AT-22 writable-parent race and AT-13 approval forgery remain the highest-value unresolved trust-boundary tests. Keep AT-08B as a permanent regression after PR #59 rather than as an expected red test.
-3. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
-4. Keep agent-safe mode isolated and make all Track A cases merge-blocking for changes to AI-facing mutation surfaces.
-5. Repair the broker artifact/path trust race before broadening broker capabilities.
-6. Keep plan-expiry identity binding and AT-08B regression green; do not reintroduce expiry-excluding hash semantics for compatibility convenience.
-7. Design approval provenance separately; do not combine it with agent-safe routing in one large security PR.
+1. Keep all Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) merge-blocking for changes to AI-facing mutation surfaces.
+2. Keep AT-22 and AT-08B as permanent regressions after PR #60 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
+3. AT-13 approval forgery is now the highest-value unresolved trust-boundary test.
+4. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
+5. Keep broker config ownership/mode hardening (AT-23 / F-04) separate from artifact byte pinning.
+6. Design approval provenance separately; do not combine it with agent-safe routing or artifact pinning in one large security PR.
 
 ## Acceptance gate for the stronger project claim
 
@@ -280,7 +279,7 @@ The project may claim that AI-agent infrastructure mutation is broker-mediated o
 - the deployment profile and limitations are documented,
 - and CI treats these tests as merge-blocking security regressions.
 
-Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires the AT-22 writable-parent replacement race to be green.
+Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires AT-22 to remain green: replacing the original DozeyGuard binary or policy pathname after verification must not change the pinned objects consumed by root.
 
 Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to remain green under the corrected hash semantics.
 

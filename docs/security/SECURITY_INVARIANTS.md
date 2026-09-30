@@ -66,7 +66,9 @@ The broker executable, policy, their containing pathname components, and securit
 
 Validating only the final file object is insufficient if an untrusted process can replace that pathname through a writable parent directory after validation. For artifacts that are opened or executed later by pathname, either every relevant parent directory MUST be non-writable by the untrusted UID, or the broker MUST use an already-open verified object / equivalent race-resistant primitive that cryptographically and referentially ties the checked bytes to the consumed bytes.
 
-Current status: **target invariant, not fully satisfied for artifact pathname TOCTOU**. `assert_trusted_artifact()` checks the current file target, ownership/mode and hash, but the broker later reuses the pathname for DozeyGuard execution/policy loading. A clean root-owned file in an Extras-writable directory can therefore be replaced atomically after validation.
+Current remediation in PR #60: the broker opens the DozeyGuard executable and policy with no-follow semantics, validates type/mode/ownership expectations and hashes the already-open file descriptors, then keeps those descriptors open across subprocess creation. The child receives `/proc/self/fd/*` references through `pass_fds`, so replacing the original binary or policy pathname after validation no longer changes the file objects executed or read.
+
+The separate broker-config ownership/mode hardening item from F-04 remains open. PR #60 fixes the artifact pathname TOCTOU; it does not claim that all broker TCB configuration assumptions are now runtime-enforced.
 
 ### INV-12 — Peer identity is necessary but not authorization
 
@@ -101,4 +103,4 @@ The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498
 - INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
-- INV-11 is only partially implemented: final artifact files are hash/owner/mode checked, but writable parent directories can permit post-validation pathname replacement before root execution; broker config ownership is also still an explicit TCB assumption to harden/test.
+- INV-11 artifact pathname TOCTOU is addressed by PR #60 through verified open-file-descriptor pinning for the broker-owned DozeyGuard executable and policy. Broker config ownership remains a separate explicit TCB assumption under F-04.
