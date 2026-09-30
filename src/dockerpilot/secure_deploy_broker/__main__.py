@@ -33,9 +33,15 @@ def main(argv: list[str] | None = None) -> int:
     from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
     from dockerpilot.secure_deploy_broker.verifier import resolve_broker_dozeyguard_config
 
-    cfg = load_broker_config(Path(args.config))
-    expected_artifact_uid = 0 if os.geteuid() == 0 else None
-    expected_artifact_gid = 0 if os.geteuid() == 0 else None
+    running_as_root = os.geteuid() == 0
+    expected_artifact_uid = 0 if running_as_root else None
+    expected_artifact_gid = 0 if running_as_root else None
+    cfg = load_broker_config(
+        Path(args.config),
+        expected_uid=expected_artifact_uid,
+        expected_gid=expected_artifact_gid,
+        require_trusted_parents=running_as_root,
+    )
     dg = resolve_broker_dozeyguard_config(
         executable=cfg.dozeyguard_path,
         policy_path=cfg.policy_path,
