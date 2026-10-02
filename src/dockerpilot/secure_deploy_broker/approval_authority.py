@@ -1,9 +1,9 @@
 """Broker-owned approval provenance authority.
 
-This module deliberately does not trust approval objects supplied by DockerPilot
-Extras. It owns one-shot approval challenges and resulting approval records in
-broker-controlled state. A later transport layer can feed the approver UID from
-SO_PEERCRED on a socket that is not accessible to the Extras service account.
+Client-supplied approval JSON is not authority here. This module owns one-shot
+approval challenges and resulting approval records in broker-controlled state.
+A later transport layer supplies the approver UID from SO_PEERCRED on a socket
+that is unavailable to the DockerPilot Extras service account.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, FrozenSet, Optional
 
 try:  # Linux broker runtime; keep package importable on Windows CI.
     import fcntl
-except ImportError:  # pragma: no cover - exercised by Windows import smoke only.
+except ImportError:  # pragma: no cover
     fcntl = None
 
 from .errors import VerificationError
@@ -29,20 +29,33 @@ from .errors import VerificationError
 CHALLENGE_TTL_SECONDS = 120
 APPROVAL_TTL_SECONDS = 600
 MAX_RECORD_BYTES = 64 * 1024
+MAX_CHALLENGE_RECORDS = 1000
+MAX_APPROVAL_RECORDS = 1000
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _utcnow(clock: Optional[Callable[[], datetime]] = None) -> datetime:
-    return clock() if clock else datetime.now(timezone.utc)
+    value = clock() if clock else datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        raise VerificationError("approval_authority_time", "broker clock must be timezone-aware")
+    return value.astimezone(timezone.utc)
 
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _parse_ts(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+def _parse_ts(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise VerificationError("approval_authority_time", "approval timestamp must be a string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise VerificationError("approval_authority_time", "invalid approval timestamp") from exc
+    if parsed.tzinfo is None:
+        raise VerificationError("approval_authority_time", "approval timestamp must include timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 def _fsync_dir(path: Path) -> None:
@@ -57,26 +70,20 @@ def _open_nofollow(path: Path, flags: int, mode: int = 0o600) -> int:
     return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), mode)
 
 
-def _validate_id(value: str, *, field: str) -> str:
+def _validate_id(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not _ID_RE.fullmatch(value):
         raise VerificationError("approval_authority_id", f"invalid {field}")
     return value
 
 
-def _validate_plan_sha(value: str) -> str:
+def _validate_plan_sha(value: object) -> str:
     if not isinstance(value, str) or not _SHA_RE.fullmatch(value):
         raise VerificationError("approval_authority_plan_hash", "invalid plan_sha256")
     return value
 
 
 class BrokerApprovalAuthority:
-    """Durable broker-owned challenge and approval ledger.
-
-    The caller that invokes :meth:`approve_challenge` must supply an approver UID
-    obtained from a trusted transport (planned: SO_PEERCRED on the dedicated
-    approver socket). The untrusted control-plane must never be allowed to choose
-    that UID.
-    """
+    """Durable broker-owned challenge and approval ledger."""
 
     def __init__(
         self,
@@ -87,6 +94,8 @@ class BrokerApprovalAuthority:
         challenge_ttl_seconds: int = CHALLENGE_TTL_SECONDS,
         approval_ttl_seconds: int = APPROVAL_TTL_SECONDS,
         expected_owner_uid: Optional[int] = None,
+        max_challenge_records: int = MAX_CHALLENGE_RECORDS,
+        max_approval_records: int = MAX_APPROVAL_RECORDS,
     ):
         if not allowed_approver_uids or any(int(uid) < 0 for uid in allowed_approver_uids):
             raise VerificationError("approval_authority_uids", "non-empty approver UID allowlist required")
@@ -94,12 +103,18 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_ttl", "challenge TTL out of range")
         if approval_ttl_seconds <= 0 or approval_ttl_seconds > 3600:
             raise VerificationError("approval_authority_ttl", "approval TTL out of range")
+        if max_challenge_records <= 0 or max_challenge_records > 10000:
+            raise VerificationError("approval_authority_limit", "challenge record limit out of range")
+        if max_approval_records <= 0 or max_approval_records > 10000:
+            raise VerificationError("approval_authority_limit", "approval record limit out of range")
         self.state_root = Path(state_root)
         self.allowed_approver_uids = frozenset(int(uid) for uid in allowed_approver_uids)
         self.clock = clock
         self.challenge_ttl_seconds = int(challenge_ttl_seconds)
         self.approval_ttl_seconds = int(approval_ttl_seconds)
         self.expected_owner_uid = expected_owner_uid
+        self.max_challenge_records = int(max_challenge_records)
+        self.max_approval_records = int(max_approval_records)
         self._thread_lock = threading.RLock()
 
     @property
@@ -119,6 +134,8 @@ class BrokerApprovalAuthority:
         plan_sha256 = _validate_plan_sha(plan_sha256)
 
         def op() -> Dict[str, Any]:
+            if self._count_records(self.challenges_dir) >= self.max_challenge_records:
+                raise VerificationError("approval_authority_limit", "approval challenge record limit exceeded")
             now = _utcnow(self.clock)
             record = {
                 "challenge_version": 1,
@@ -131,6 +148,7 @@ class BrokerApprovalAuthority:
                 "expires_at": _iso(now + timedelta(seconds=self.challenge_ttl_seconds)),
                 "status": "pending",
             }
+            self._validate_challenge_record(record)
             self._write_json_create(self._challenge_path(record["challenge_id"]), record)
             return dict(record)
 
@@ -152,36 +170,38 @@ class BrokerApprovalAuthority:
         def op() -> Dict[str, Any]:
             challenge_path = self._challenge_path(challenge_id)
             challenge = self._read_json(challenge_path)
-            if challenge.get("status") != "pending":
+            self._validate_challenge_record(challenge, expected_id=challenge_id)
+            if challenge["status"] != "pending":
                 raise VerificationError("approval_challenge_status", "approval challenge is not pending")
-            if challenge.get("plan_sha256") != expected_plan_sha256:
+            if challenge["plan_sha256"] != expected_plan_sha256:
                 raise VerificationError("approval_challenge_hash", "approval challenge plan hash mismatch")
             now = _utcnow(self.clock)
-            if now >= _parse_ts(str(challenge.get("expires_at") or "")):
+            if now >= _parse_ts(challenge["expires_at"]):
                 expired = dict(challenge)
                 expired["status"] = "expired"
                 self._write_json_replace(challenge_path, expired)
                 raise VerificationError("approval_challenge_expired", "approval challenge expired")
+            if self._count_records(self.approvals_dir) >= self.max_approval_records:
+                raise VerificationError("approval_authority_limit", "approval record limit exceeded")
 
-            approval_id = _validate_id(str(challenge.get("approval_id") or ""), field="approval_id")
+            approval_id = _validate_id(challenge["approval_id"], field="approval_id")
             approval = {
                 "approval_version": 2,
                 "approval_id": approval_id,
                 "challenge_id": challenge_id,
-                "plan_id": _validate_id(str(challenge.get("plan_id") or ""), field="plan_id"),
-                "plan_sha256": _validate_plan_sha(str(challenge.get("plan_sha256") or "")),
+                "plan_id": challenge["plan_id"],
+                "plan_sha256": challenge["plan_sha256"],
                 "nonce": secrets.token_urlsafe(18),
                 "issued_at": _iso(now),
                 "approved_at": _iso(now),
                 "expires_at": _iso(now + timedelta(seconds=self.approval_ttl_seconds)),
                 "status": "approved",
-                "provenance": {
-                    "kind": "unix_peer_uid",
-                    "uid": uid,
-                },
+                "provenance": {"kind": "unix_peer_uid", "uid": uid},
             }
-            # Create-only approval record prevents challenge replay from silently
-            # replacing authority if state becomes inconsistent.
+            self._validate_approval_record(approval, expected_id=approval_id)
+            # Create first. A crash before challenge metadata update remains
+            # authorized only because the trusted approver action already passed.
+            # Reusing the challenge cannot overwrite this create-only record.
             self._write_json_create(self._approval_path(approval_id), approval)
             approved_challenge = dict(challenge)
             approved_challenge["status"] = "approved"
@@ -205,22 +225,17 @@ class BrokerApprovalAuthority:
 
         def op() -> Dict[str, Any]:
             approval = self._read_json(self._approval_path(approval_id))
-            if approval.get("status") != "approved":
+            self._validate_approval_record(approval, expected_id=approval_id)
+            if approval["status"] != "approved":
                 raise VerificationError("approval_authority_status", "broker approval is not active")
-            if approval.get("plan_id") != plan_id:
+            if approval["plan_id"] != plan_id:
                 raise VerificationError("approval_authority_plan", "broker approval plan_id mismatch")
-            if approval.get("plan_sha256") != plan_sha256:
+            if approval["plan_sha256"] != plan_sha256:
                 raise VerificationError("approval_authority_hash", "broker approval plan hash mismatch")
-            provenance = approval.get("provenance")
-            if not isinstance(provenance, dict) or provenance.get("kind") != "unix_peer_uid":
-                raise VerificationError("approval_authority_provenance", "broker approval provenance missing")
-            try:
-                uid = int(provenance.get("uid"))
-            except (TypeError, ValueError) as exc:
-                raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
+            uid = int(approval["provenance"]["uid"])
             if uid not in self.allowed_approver_uids:
                 raise VerificationError("approval_authority_provenance", "broker approval UID no longer authorized")
-            if _utcnow(self.clock) >= _parse_ts(str(approval.get("expires_at") or "")):
+            if _utcnow(self.clock) >= _parse_ts(approval["expires_at"]):
                 raise VerificationError("approval_authority_expired", "broker approval expired")
             return dict(approval)
 
@@ -232,20 +247,74 @@ class BrokerApprovalAuthority:
     def _approval_path(self, approval_id: str) -> Path:
         return self.approvals_dir / f"{approval_id}.json"
 
+    def _validate_challenge_record(self, record: Dict[str, Any], *, expected_id: Optional[str] = None) -> None:
+        if record.get("challenge_version") != 1:
+            raise VerificationError("approval_authority_record", "unsupported challenge version")
+        challenge_id = _validate_id(record.get("challenge_id"), field="challenge_id")
+        if expected_id is not None and challenge_id != expected_id:
+            raise VerificationError("approval_authority_record", "challenge record ID mismatch")
+        _validate_id(record.get("approval_id"), field="approval_id")
+        _validate_id(record.get("plan_id"), field="plan_id")
+        _validate_plan_sha(record.get("plan_sha256"))
+        nonce = record.get("nonce")
+        if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
+            raise VerificationError("approval_authority_record", "invalid challenge nonce")
+        _parse_ts(record.get("issued_at"))
+        _parse_ts(record.get("expires_at"))
+        if record.get("status") not in {"pending", "approved", "expired"}:
+            raise VerificationError("approval_authority_record", "invalid challenge status")
+
+    def _validate_approval_record(self, record: Dict[str, Any], *, expected_id: Optional[str] = None) -> None:
+        if record.get("approval_version") != 2:
+            raise VerificationError("approval_authority_record", "unsupported broker approval version")
+        approval_id = _validate_id(record.get("approval_id"), field="approval_id")
+        if expected_id is not None and approval_id != expected_id:
+            raise VerificationError("approval_authority_record", "approval record ID mismatch")
+        _validate_id(record.get("challenge_id"), field="challenge_id")
+        _validate_id(record.get("plan_id"), field="plan_id")
+        _validate_plan_sha(record.get("plan_sha256"))
+        nonce = record.get("nonce")
+        if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
+            raise VerificationError("approval_authority_record", "invalid approval nonce")
+        _parse_ts(record.get("issued_at"))
+        _parse_ts(record.get("approved_at"))
+        _parse_ts(record.get("expires_at"))
+        if record.get("status") not in {"approved", "consumed", "expired", "revoked"}:
+            raise VerificationError("approval_authority_record", "invalid approval status")
+        provenance = record.get("provenance")
+        if not isinstance(provenance, dict) or set(provenance) != {"kind", "uid"}:
+            raise VerificationError("approval_authority_provenance", "broker approval provenance invalid")
+        if provenance.get("kind") != "unix_peer_uid":
+            raise VerificationError("approval_authority_provenance", "unsupported broker approval provenance")
+        try:
+            uid = int(provenance.get("uid"))
+        except (TypeError, ValueError) as exc:
+            raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
+        if uid < 0:
+            raise VerificationError("approval_authority_provenance", "broker approval UID invalid")
+
     def _prepare_state(self) -> None:
         if fcntl is None:
             raise VerificationError("approval_authority_platform", "approval authority requires POSIX file locking")
-        if self.state_root.exists() and self.state_root.is_symlink():
-            raise VerificationError("approval_authority_symlink", "approval authority state root symlink rejected")
-        self.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.state_root, 0o700)
-        self._assert_controlled_dir(self.state_root)
+        if self.state_root.exists() or self.state_root.is_symlink():
+            if self.state_root.is_symlink():
+                raise VerificationError("approval_authority_symlink", "approval authority state root symlink rejected")
+            self._assert_controlled_dir(self.state_root)
+        else:
+            try:
+                self.state_root.mkdir(mode=0o700)
+            except FileNotFoundError as exc:
+                raise VerificationError("approval_authority_parent", "approval authority parent directory missing") from exc
+            self._assert_controlled_dir(self.state_root)
+
         for directory in (self.challenges_dir, self.approvals_dir):
-            if directory.exists() and directory.is_symlink():
-                raise VerificationError("approval_authority_symlink", "approval authority state directory symlink rejected")
-            directory.mkdir(mode=0o700, exist_ok=True)
-            os.chmod(directory, 0o700)
-            self._assert_controlled_dir(directory)
+            if directory.exists() or directory.is_symlink():
+                if directory.is_symlink():
+                    raise VerificationError("approval_authority_symlink", "approval authority state directory symlink rejected")
+                self._assert_controlled_dir(directory)
+            else:
+                directory.mkdir(mode=0o700)
+                self._assert_controlled_dir(directory)
 
     def _assert_controlled_dir(self, path: Path) -> None:
         st = os.lstat(path)
@@ -253,8 +322,19 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_state", "approval authority state path must be directory")
         if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
             raise VerificationError("approval_authority_owner", "approval authority state owner mismatch")
-        if stat.S_IMODE(st.st_mode) & 0o022:
-            raise VerificationError("approval_authority_mode", "approval authority state must not be group/other writable")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise VerificationError("approval_authority_mode", "approval authority state directory must be mode 0700")
+
+    def _count_records(self, directory: Path) -> int:
+        count = 0
+        for path in directory.iterdir():
+            if path.is_symlink():
+                raise VerificationError("approval_authority_symlink", "approval authority record symlink rejected")
+            if path.name.endswith(".json"):
+                if not path.is_file():
+                    raise VerificationError("approval_authority_state", "approval authority record must be regular file")
+                count += 1
+        return count
 
     def _with_lock(self, fn):
         with self._thread_lock:
@@ -263,6 +343,11 @@ class BrokerApprovalAuthority:
                 raise VerificationError("approval_authority_symlink", "approval authority lock symlink rejected")
             fd = _open_nofollow(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
             try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
+                    raise VerificationError("approval_authority_mode", "approval authority lock must be regular mode 0600")
+                if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
+                    raise VerificationError("approval_authority_owner", "approval authority lock owner mismatch")
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 return fn()
             finally:
@@ -287,7 +372,7 @@ class BrokerApprovalAuthority:
             if not stat.S_ISREG(st.st_mode):
                 raise VerificationError("approval_authority_state", "approval authority record must be regular file")
             if stat.S_IMODE(st.st_mode) & 0o077:
-                raise VerificationError("approval_authority_mode", "approval authority record must be mode 0600")
+                raise VerificationError("approval_authority_mode", "approval authority record must not grant group/other access")
             if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
                 raise VerificationError("approval_authority_owner", "approval authority record owner mismatch")
             if st.st_size < 0 or st.st_size > MAX_RECORD_BYTES:
