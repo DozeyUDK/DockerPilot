@@ -141,7 +141,7 @@ class BrokerApprovalAuthority:
 
         def op() -> Dict[str, Any]:
             now = _utcnow(self.clock)
-            self._reclaim_expired_challenges(now)
+            self._reclaim_completed_records(now)
             if self._count_records(self.challenges_dir) >= self.max_challenge_records:
                 raise VerificationError("approval_authority_limit", "approval challenge record limit exceeded")
             record = {
@@ -183,6 +183,7 @@ class BrokerApprovalAuthority:
             if challenge["plan_sha256"] != expected_plan_sha256:
                 raise VerificationError("approval_challenge_hash", "approval challenge plan hash mismatch")
             now = _utcnow(self.clock)
+            self._reclaim_expired_approvals(now)
             if now >= _parse_ts(challenge["expires_at"]):
                 expired = dict(challenge)
                 expired["status"] = "expired"
@@ -332,7 +333,11 @@ class BrokerApprovalAuthority:
         if stat.S_IMODE(st.st_mode) & 0o077:
             raise VerificationError("approval_authority_mode", "approval authority state directory must be mode 0700")
 
-    def _reclaim_expired_challenges(self, now: datetime) -> None:
+    def _reclaim_completed_records(self, now: datetime) -> None:
+        self._reclaim_completed_challenges(now)
+        self._reclaim_expired_approvals(now)
+
+    def _reclaim_completed_challenges(self, now: datetime) -> None:
         changed = False
         for path in self.challenges_dir.iterdir():
             if path.is_symlink():
@@ -345,11 +350,35 @@ class BrokerApprovalAuthority:
             expected_id = path.name.removesuffix(".json")
             self._validate_challenge_record(record, expected_id=expected_id)
             status = record["status"]
-            if status == "expired" or (status == "pending" and now >= _parse_ts(record["expires_at"])):
+            # Once a challenge produced a durable broker-owned approval record,
+            # the challenge itself no longer carries authority and may be
+            # reclaimed. Pending challenges are retained only through their TTL.
+            if status in {"approved", "expired"} or (
+                status == "pending" and now >= _parse_ts(record["expires_at"])
+            ):
                 path.unlink()
                 changed = True
         if changed:
             _fsync_dir(self.challenges_dir)
+
+    def _reclaim_expired_approvals(self, now: datetime) -> None:
+        changed = False
+        for path in self.approvals_dir.iterdir():
+            if path.is_symlink():
+                raise VerificationError("approval_authority_symlink", "approval authority record symlink rejected")
+            if not path.name.endswith(".json"):
+                continue
+            if not path.is_file():
+                raise VerificationError("approval_authority_state", "approval authority record must be regular file")
+            record = self._read_json(path)
+            expected_id = path.name.removesuffix(".json")
+            self._validate_approval_record(record, expected_id=expected_id)
+            status = record["status"]
+            if status in {"consumed", "expired", "revoked"} or now >= _parse_ts(record["expires_at"]):
+                path.unlink()
+                changed = True
+        if changed:
+            _fsync_dir(self.approvals_dir)
 
     def _count_records(self, directory: Path) -> int:
         count = 0
