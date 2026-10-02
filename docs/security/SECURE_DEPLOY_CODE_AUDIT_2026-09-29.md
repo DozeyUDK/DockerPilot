@@ -29,9 +29,9 @@ The finding sections below are preserved as the evidence recorded at the origina
 
 - **F-01 / INV-01:** agent-safe mutation isolation merged in PR #57 (`ace7b3498faa6749185d03a00e4d76f051de6e2b`).
 - **F-06 / INV-04:** plan-level `expires_at` is bound into `plan_sha256` after PR #59 (`345f646b0abe0b83a38c57046f393b8d5fbae9f3`).
-- **F-07 / INV-11:** PR #60 replaces pathname check-then-reopen for the broker-owned DozeyGuard binary/policy with verified open-file-descriptor pinning and a deterministic AT-22 atomic-replacement regression. This remediation is effective only after #60 merges and remains subject to CI/review.
+- **F-07 / INV-11:** verified open-file-descriptor pinning for the broker-owned DozeyGuard binary/policy and the AT-22 atomic-replacement regression merged in PR #60 (`c76bbf995a4eaa1c94fe29975484a6f5af5bce3c`).
+- **F-04 / AT-23:** PR #61 adds root-owner/mode/parent-chain checks and same-FD parsing for the root broker runtime config. This remediation is effective only after #61 merges and its CI/AT-23 regressions remain green.
 - **F-02 / INV-09:** approval provenance under arbitrary Extras RCE remains unresolved.
-- **F-04 / AT-23:** broker config ownership/mode runtime hardening remains unresolved and is intentionally separate from F-07 artifact-byte pinning.
 
 ## Trust domains found in code
 

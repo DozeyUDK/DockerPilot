@@ -207,11 +207,21 @@ The permanent regression must assert both halves of the property: pre-open repla
 
 **Invariant:** INV-11, INV-14.
 
-### AT-23 — broker config ownership / mode
+### AT-23 — broker config ownership / mode / pathname trust
 
-Make broker config writable by the Extras UID or replace it in a deployment fixture.
+Exercise the installed broker config trust boundary:
 
-**Target expected:** install/runtime validation rejects the unsafe configuration. This test may initially fail until F-04 hardening is implemented.
+1. make the config group/other writable,
+2. replace the final config path with a symlink or non-regular object,
+3. place the config beneath a group/other-writable or symlinked parent component,
+4. present a config with an unexpected owner/group under the root runtime profile,
+5. atomically replace the config pathname after the broker has opened and validated the original file.
+
+**Expected:** `PASS`. Unsafe owner/mode/type/parent-chain states must fail closed before the config can influence broker authority. For the post-open replacement case, the broker must parse the bytes from the already-open verified file descriptor rather than reopening the original pathname.
+
+The root-broker installer materializes `/etc/dockerpilot-secure-broker/config.json` as root:root mode 0644. PR #61 adds the independent runtime enforcement and permanent regression coverage; after merge AT-23 must remain green.
+
+**Invariant:** INV-11, INV-14.
 
 ### AT-24 — ledger symlink / corruption
 
@@ -264,11 +274,11 @@ Create another target network whose subnet conflicts with the source network bei
 ## Suggested execution order
 
 1. Keep all Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) merge-blocking for changes to AI-facing mutation surfaces.
-2. Keep AT-22 and AT-08B as permanent regressions after PR #60 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
+2. Keep AT-22, AT-23 and AT-08B as permanent regressions after PR #60, PR #61 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
 3. AT-13 approval forgery is now the highest-value unresolved trust-boundary test.
 4. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
-5. Keep broker config ownership/mode hardening (AT-23 / F-04) separate from artifact byte pinning.
-6. Design approval provenance separately; do not combine it with agent-safe routing or artifact pinning in one large security PR.
+5. Keep broker config trust changes isolated from approval provenance and broader broker capability work.
+6. Design approval provenance separately; do not combine it with agent-safe routing, artifact pinning or config trust in one large security PR.
 
 ## Acceptance gate for the stronger project claim
 
@@ -279,7 +289,7 @@ The project may claim that AI-agent infrastructure mutation is broker-mediated o
 - the deployment profile and limitations are documented,
 - and CI treats these tests as merge-blocking security regressions.
 
-Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires AT-22 to remain green: replacing the original DozeyGuard binary or policy pathname after verification must not change the pinned objects consumed by root.
+Any claim that broker-owned policy enforcement remains trustworthy against a compromised control plane also requires AT-22 and AT-23 to remain green: replacing broker-owned artifacts after verification must not change the consumed bytes, and the security-relevant broker config must remain root-controlled and fail closed on unsafe owner/mode/path conditions.
 
 Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to remain green under the corrected hash semantics.
 

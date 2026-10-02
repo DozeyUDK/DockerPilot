@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional
 
@@ -13,6 +16,7 @@ from .protocol import MAX_FRAME_BYTES, SUPPORTED_OPERATIONS
 CANARY_OPERATIONS = frozenset({"admit_canary_execution", "revoke_canary_admission", "deploy_canary", "remove_canary"})
 PLACEHOLDER_DIGEST = "sha256:" + ("a" * 64)
 _SHA_IMAGE_RE = re.compile(r"^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$")
+_CONFIG_MAX_BYTES = 1024 * 1024
 
 ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -123,10 +127,126 @@ class BrokerConfig:
         return ttl
 
 
-def load_broker_config(path: Path) -> BrokerConfig:
-    if path.is_symlink():
-        raise BrokerError("config_symlink", "config path must not be a symlink")
-    data = json.loads(path.read_text(encoding="utf-8"))
+def _assert_trusted_parent_chain(
+    path: Path,
+    *,
+    expected_uid: int,
+    expected_gid: Optional[int] = None,
+    stop_at: Optional[Path] = None,
+) -> None:
+    """Require every parent in scope to be trusted and non-writable by peers.
+
+    Production callers walk from the config directory to ``/``. ``stop_at`` is
+    only useful for isolated tests that build a synthetic trusted subtree.
+    """
+
+    if not path.is_absolute():
+        raise BrokerError("config_path", "trusted runtime config path must be absolute")
+    stop = Path("/") if stop_at is None else Path(stop_at)
+    if not stop.is_absolute():
+        raise BrokerError("config_parent_scope", "trusted parent scope must be absolute")
+
+    current = path.parent
+    while True:
+        try:
+            st = os.lstat(current)
+        except OSError as exc:
+            raise BrokerError("config_parent_missing", f"trusted config parent unavailable: {current}") from exc
+        if stat.S_ISLNK(st.st_mode):
+            raise BrokerError("config_parent_symlink", f"symlink parent rejected: {current}")
+        if not stat.S_ISDIR(st.st_mode):
+            raise BrokerError("config_parent_type", f"directory required in config path: {current}")
+        if st.st_uid != expected_uid:
+            raise BrokerError("config_parent_owner", f"unexpected owner uid for config parent: {current}")
+        if expected_gid is not None and st.st_gid != expected_gid:
+            raise BrokerError("config_parent_group", f"unexpected owner gid for config parent: {current}")
+        if stat.S_IMODE(st.st_mode) & 0o022:
+            raise BrokerError("config_parent_writable", f"group/other-writable config parent rejected: {current}")
+        if current == stop:
+            break
+        parent = current.parent
+        if parent == current:
+            raise BrokerError("config_parent_scope", "trusted parent scope is not an ancestor of config path")
+        current = parent
+
+
+def _read_config_fd(fd: int, *, size_hint: int) -> bytes:
+    if size_hint < 0 or size_hint > _CONFIG_MAX_BYTES:
+        raise BrokerError("config_too_large", "broker config exceeds size limit")
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(fd, min(65536, _CONFIG_MAX_BYTES + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > _CONFIG_MAX_BYTES:
+            raise BrokerError("config_too_large", "broker config exceeds size limit")
+    return b"".join(chunks)
+
+
+def load_broker_config(
+    path: Path,
+    *,
+    expected_uid: Optional[int] = None,
+    expected_gid: Optional[int] = None,
+    require_trusted_parents: bool = False,
+) -> BrokerConfig:
+    """Open and parse broker config with fail-closed filesystem trust checks.
+
+    When ``require_trusted_parents`` is enabled, ``expected_uid`` is mandatory
+    and every containing directory through ``/`` must be owned by the expected
+    UID, optionally GID, and not writable by group/other. The config itself is
+    opened once with no-follow semantics, validated via ``fstat`` and read from
+    that same file descriptor so pathname replacement cannot swap the bytes.
+    """
+
+    path = Path(path)
+    if require_trusted_parents:
+        if expected_uid is None:
+            raise BrokerError("config_owner", "expected config owner required for trusted-parent mode")
+        _assert_trusted_parent_chain(
+            path,
+            expected_uid=expected_uid,
+            expected_gid=expected_gid,
+        )
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise BrokerError("config_missing", f"broker config missing: {path}") from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise BrokerError("config_symlink", "config path must not be a symlink") from exc
+        raise BrokerError("config_open", f"unable to open broker config: {path}") from exc
+
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise BrokerError("config_file_type", "broker config must be a regular file")
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & 0o022:
+            raise BrokerError("config_writable", "broker config must not be group/other writable")
+        if expected_uid is not None and st.st_uid != expected_uid:
+            raise BrokerError("config_owner", "broker config has unexpected owner uid")
+        if expected_gid is not None and st.st_gid != expected_gid:
+            raise BrokerError("config_group", "broker config has unexpected owner gid")
+        raw = _read_config_fd(fd, size_hint=st.st_size)
+    finally:
+        os.close(fd)
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BrokerError("config_encoding", "broker config must be UTF-8 JSON") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BrokerError("config_json", "broker config must contain valid JSON") from exc
     if not isinstance(data, dict):
         raise BrokerError("config_type", "config must be a JSON object")
     return BrokerConfig(data)
