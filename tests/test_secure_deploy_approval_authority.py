@@ -32,6 +32,7 @@ def _authority(tmp_path: Path, *, clock=None, allowed=frozenset({APPROVER_UID}))
     return BrokerApprovalAuthority(
         tmp_path / "authority",
         allowed_approver_uids=allowed,
+        expected_owner_uid=os.getuid(),
         clock=clock,
     )
 
@@ -225,6 +226,7 @@ def test_existing_unsafe_state_dir_is_rejected_not_repaired(tmp_path):
     authority = BrokerApprovalAuthority(
         state_root,
         allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
     )
 
     with pytest.raises(VerificationError) as exc_info:
@@ -237,6 +239,7 @@ def test_challenge_record_limit_bounds_untrusted_request_growth(tmp_path):
     authority = BrokerApprovalAuthority(
         tmp_path / "authority",
         allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
         max_challenge_records=1,
     )
     authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
@@ -267,3 +270,31 @@ def test_corrupt_broker_owned_record_fails_closed(tmp_path):
             plan_sha256=PLAN_SHA,
         )
     assert exc_info.value.code == "approval_authority_record"
+
+
+def test_expired_challenge_is_reclaimed_before_quota_check(tmp_path):
+    start = datetime(2026, 10, 2, 10, 0, tzinfo=timezone.utc)
+    current, clock = _clock(start)
+    authority = BrokerApprovalAuthority(
+        tmp_path / "authority",
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
+        clock=clock,
+        max_challenge_records=1,
+    )
+    first = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    current["value"] = start + timedelta(seconds=121)
+
+    second = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+
+    assert second["challenge_id"] != first["challenge_id"]
+    assert not (authority.challenges_dir / f'{first["challenge_id"]}.json').exists()
+    assert (authority.challenges_dir / f'{second["challenge_id"]}.json').is_file()
+
+
+def test_expected_owner_uid_is_required(tmp_path):
+    with pytest.raises(TypeError):
+        BrokerApprovalAuthority(
+            tmp_path / "authority",
+            allowed_approver_uids=frozenset({APPROVER_UID}),
+        )
