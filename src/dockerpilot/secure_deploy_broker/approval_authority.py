@@ -103,7 +103,11 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_ttl", "challenge TTL out of range")
         if approval_ttl_seconds <= 0 or approval_ttl_seconds > 3600:
             raise VerificationError("approval_authority_ttl", "approval TTL out of range")
-        if int(expected_owner_uid) < 0:
+        try:
+            owner_uid = int(expected_owner_uid)
+        except (TypeError, ValueError) as exc:
+            raise VerificationError("approval_authority_owner", "expected approval-authority owner UID required") from exc
+        if owner_uid < 0:
             raise VerificationError("approval_authority_owner", "expected approval-authority owner UID required")
         if max_challenge_records <= 0 or max_challenge_records > 10000:
             raise VerificationError("approval_authority_limit", "challenge record limit out of range")
@@ -114,7 +118,7 @@ class BrokerApprovalAuthority:
         self.clock = clock
         self.challenge_ttl_seconds = int(challenge_ttl_seconds)
         self.approval_ttl_seconds = int(approval_ttl_seconds)
-        self.expected_owner_uid = int(expected_owner_uid)
+        self.expected_owner_uid = owner_uid
         self.max_challenge_records = int(max_challenge_records)
         self.max_approval_records = int(max_approval_records)
         self._thread_lock = threading.RLock()
@@ -395,7 +399,7 @@ class BrokerApprovalAuthority:
                 raise VerificationError("approval_authority_state", "approval authority record must be regular file")
             if stat.S_IMODE(st.st_mode) & 0o077:
                 raise VerificationError("approval_authority_mode", "approval authority record must not grant group/other access")
-            if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
+            if st.st_uid != self.expected_owner_uid:
                 raise VerificationError("approval_authority_owner", "approval authority record owner mismatch")
             if st.st_size < 0 or st.st_size > MAX_RECORD_BYTES:
                 raise VerificationError("approval_authority_size", "approval authority record too large")
