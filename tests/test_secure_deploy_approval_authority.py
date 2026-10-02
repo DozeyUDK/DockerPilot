@@ -298,3 +298,52 @@ def test_expected_owner_uid_is_required(tmp_path):
             tmp_path / "authority",
             allowed_approver_uids=frozenset({APPROVER_UID}),
         )
+
+
+def test_approved_challenge_is_reclaimed_before_challenge_quota(tmp_path):
+    authority = BrokerApprovalAuthority(
+        tmp_path / "authority",
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
+        max_challenge_records=1,
+    )
+    first = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    authority.approve_challenge(
+        first["challenge_id"],
+        approver_uid=APPROVER_UID,
+        expected_plan_sha256=PLAN_SHA,
+    )
+
+    second = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+
+    assert second["challenge_id"] != first["challenge_id"]
+    assert not (authority.challenges_dir / f'{first["challenge_id"]}.json').exists()
+
+
+def test_expired_approval_is_reclaimed_before_approval_quota(tmp_path):
+    start = datetime(2026, 10, 2, 10, 0, tzinfo=timezone.utc)
+    current, clock = _clock(start)
+    authority = BrokerApprovalAuthority(
+        tmp_path / "authority",
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
+        clock=clock,
+        max_approval_records=1,
+    )
+    first_challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    first_approval = authority.approve_challenge(
+        first_challenge["challenge_id"],
+        approver_uid=APPROVER_UID,
+        expected_plan_sha256=PLAN_SHA,
+    )
+
+    current["value"] = start + timedelta(seconds=601)
+    second_challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    second_approval = authority.approve_challenge(
+        second_challenge["challenge_id"],
+        approver_uid=APPROVER_UID,
+        expected_plan_sha256=PLAN_SHA,
+    )
+
+    assert second_approval["approval_id"] != first_approval["approval_id"]
+    assert not (authority.approvals_dir / f'{first_approval["approval_id"]}.json').exists()
