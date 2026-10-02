@@ -93,7 +93,7 @@ class BrokerApprovalAuthority:
         clock: Optional[Callable[[], datetime]] = None,
         challenge_ttl_seconds: int = CHALLENGE_TTL_SECONDS,
         approval_ttl_seconds: int = APPROVAL_TTL_SECONDS,
-        expected_owner_uid: Optional[int] = None,
+        expected_owner_uid: int,
         max_challenge_records: int = MAX_CHALLENGE_RECORDS,
         max_approval_records: int = MAX_APPROVAL_RECORDS,
     ):
@@ -103,6 +103,8 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_ttl", "challenge TTL out of range")
         if approval_ttl_seconds <= 0 or approval_ttl_seconds > 3600:
             raise VerificationError("approval_authority_ttl", "approval TTL out of range")
+        if int(expected_owner_uid) < 0:
+            raise VerificationError("approval_authority_owner", "expected approval-authority owner UID required")
         if max_challenge_records <= 0 or max_challenge_records > 10000:
             raise VerificationError("approval_authority_limit", "challenge record limit out of range")
         if max_approval_records <= 0 or max_approval_records > 10000:
@@ -112,7 +114,7 @@ class BrokerApprovalAuthority:
         self.clock = clock
         self.challenge_ttl_seconds = int(challenge_ttl_seconds)
         self.approval_ttl_seconds = int(approval_ttl_seconds)
-        self.expected_owner_uid = expected_owner_uid
+        self.expected_owner_uid = int(expected_owner_uid)
         self.max_challenge_records = int(max_challenge_records)
         self.max_approval_records = int(max_approval_records)
         self._thread_lock = threading.RLock()
@@ -134,9 +136,10 @@ class BrokerApprovalAuthority:
         plan_sha256 = _validate_plan_sha(plan_sha256)
 
         def op() -> Dict[str, Any]:
+            now = _utcnow(self.clock)
+            self._reclaim_expired_challenges(now)
             if self._count_records(self.challenges_dir) >= self.max_challenge_records:
                 raise VerificationError("approval_authority_limit", "approval challenge record limit exceeded")
-            now = _utcnow(self.clock)
             record = {
                 "challenge_version": 1,
                 "challenge_id": "chal_" + secrets.token_hex(12),
@@ -320,10 +323,29 @@ class BrokerApprovalAuthority:
         st = os.lstat(path)
         if not stat.S_ISDIR(st.st_mode):
             raise VerificationError("approval_authority_state", "approval authority state path must be directory")
-        if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
+        if st.st_uid != self.expected_owner_uid:
             raise VerificationError("approval_authority_owner", "approval authority state owner mismatch")
         if stat.S_IMODE(st.st_mode) & 0o077:
             raise VerificationError("approval_authority_mode", "approval authority state directory must be mode 0700")
+
+    def _reclaim_expired_challenges(self, now: datetime) -> None:
+        changed = False
+        for path in self.challenges_dir.iterdir():
+            if path.is_symlink():
+                raise VerificationError("approval_authority_symlink", "approval authority record symlink rejected")
+            if not path.name.endswith(".json"):
+                continue
+            if not path.is_file():
+                raise VerificationError("approval_authority_state", "approval authority record must be regular file")
+            record = self._read_json(path)
+            expected_id = path.name.removesuffix(".json")
+            self._validate_challenge_record(record, expected_id=expected_id)
+            status = record["status"]
+            if status == "expired" or (status == "pending" and now >= _parse_ts(record["expires_at"])):
+                path.unlink()
+                changed = True
+        if changed:
+            _fsync_dir(self.challenges_dir)
 
     def _count_records(self, directory: Path) -> int:
         count = 0
@@ -346,7 +368,7 @@ class BrokerApprovalAuthority:
                 st = os.fstat(fd)
                 if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
                     raise VerificationError("approval_authority_mode", "approval authority lock must be regular mode 0600")
-                if self.expected_owner_uid is not None and st.st_uid != self.expected_owner_uid:
+                if st.st_uid != self.expected_owner_uid:
                     raise VerificationError("approval_authority_owner", "approval authority lock owner mismatch")
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 return fn()
