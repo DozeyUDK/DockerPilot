@@ -135,7 +135,11 @@ Mutate the final Compose file after broker DozeyGuard returns but before `docker
 
 Construct a new syntactically valid approval object for a policy-valid plan without completing the HTTP TOTP step-up flow.
 
-**Current expected result:** this is expected to expose the known provenance gap and should be classified `FAIL_ARCHITECTURE` until a broker-verifiable approval mechanism exists.
+**Current live-path expected result:** `FAIL_ARCHITECTURE` until the live broker stops treating client-supplied approval JSON as authority.
+
+PR #62 adds the broker-owned authority core and an AT-13-core regression: an arbitrary Extras-fabricated approval object/ID is rejected by the authority unless a broker-owned approval record exists. This does **not** turn the end-to-end AT-13 result green because the current dry-run/admission path has not yet been switched to that authority.
+
+The follow-up approver-channel PR must make end-to-end AT-13 `PASS` by deriving approver identity from a socket unavailable to `dockerpilot-extras` and requiring broker-owned approval state for execution authorization.
 
 **Invariant:** INV-09.
 
@@ -275,10 +279,10 @@ Create another target network whose subnet conflicts with the source network bei
 
 1. Keep all Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) merge-blocking for changes to AI-facing mutation surfaces.
 2. Keep AT-22, AT-23 and AT-08B as permanent regressions after PR #60, PR #61 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
-3. AT-13 approval forgery is now the highest-value unresolved trust-boundary test.
+3. Keep AT-13 as the highest-value unresolved trust-boundary test. PR #62 covers the authority-core half; the end-to-end case remains red until the dedicated approver channel and live broker lookup land.
 4. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
 5. Keep broker config trust changes isolated from approval provenance and broader broker capability work.
-6. Design approval provenance separately; do not combine it with agent-safe routing, artifact pinning or config trust in one large security PR.
+6. Follow `APPROVAL_PROVENANCE_V1.md`: broker-owned authority core first (#62), then dedicated approver transport/live enforcement (#63). Do not fold unrelated broker capabilities into either PR.
 
 ## Acceptance gate for the stronger project claim
 
