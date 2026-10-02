@@ -216,3 +216,54 @@ def test_symlink_or_mode_tamper_in_broker_ledger_is_rejected(tmp_path):
             plan_sha256=PLAN_SHA,
         )
     assert mode.value.code == "approval_authority_mode"
+
+
+def test_existing_unsafe_state_dir_is_rejected_not_repaired(tmp_path):
+    state_root = tmp_path / "authority"
+    state_root.mkdir()
+    state_root.chmod(0o777)
+    authority = BrokerApprovalAuthority(
+        state_root,
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+    )
+
+    with pytest.raises(VerificationError) as exc_info:
+        authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    assert exc_info.value.code == "approval_authority_mode"
+    assert state_root.stat().st_mode & 0o777 == 0o777
+
+
+def test_challenge_record_limit_bounds_untrusted_request_growth(tmp_path):
+    authority = BrokerApprovalAuthority(
+        tmp_path / "authority",
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        max_challenge_records=1,
+    )
+    authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+
+    with pytest.raises(VerificationError) as exc_info:
+        authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    assert exc_info.value.code == "approval_authority_limit"
+
+
+def test_corrupt_broker_owned_record_fails_closed(tmp_path):
+    authority = _authority(tmp_path)
+    challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+    approval = authority.approve_challenge(
+        challenge["challenge_id"],
+        approver_uid=APPROVER_UID,
+        expected_plan_sha256=PLAN_SHA,
+    )
+    approval_path = authority.approvals_dir / f'{approval["approval_id"]}.json'
+    corrupted = json.loads(approval_path.read_text(encoding="utf-8"))
+    corrupted["approval_version"] = 1
+    approval_path.write_text(json.dumps(corrupted), encoding="utf-8")
+    approval_path.chmod(0o600)
+
+    with pytest.raises(VerificationError) as exc_info:
+        authority.require_approval(
+            approval["approval_id"],
+            plan_id=PLAN_ID,
+            plan_sha256=PLAN_SHA,
+        )
+    assert exc_info.value.code == "approval_authority_record"
