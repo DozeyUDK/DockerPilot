@@ -54,6 +54,10 @@ If the product claims that human approval remains meaningful after AI/control-pl
 
 Current status: **target invariant, not yet satisfied against Extras RCE**.
 
+PR #62 introduces the broker-owned approval authority core: one-shot challenges, root-broker state, explicit approver UID allowlisting, plan/hash binding and TTL enforcement. It also codifies that a client-fabricated approval object is not evidence of broker authority.
+
+This is foundation only. INV-09 remains open until the live broker uses a dedicated approver channel that is inaccessible to `dockerpilot-extras`, derives approver identity from `SO_PEERCRED`, and authorizes execution from broker-owned approval state rather than client-supplied approval JSON. See `APPROVAL_PROVENANCE_V1.md`.
+
 ### INV-10 — Approval is bounded and replay-resistant
 
 Approval use MUST be time-bounded and replay semantics MUST be explicit. Nonces / execution claims MUST prevent an approval intended for one admitted execution from silently authorizing another security-distinct execution.
@@ -70,7 +74,7 @@ Current remediation in PR #60: the broker opens the DozeyGuard executable and po
 
 Current remediation in PR #61: when the installed broker runs as root, the runtime config must be an absolute root:root regular file that is not group/other writable, and every containing directory through `/` must be root-owned/root-group, non-symlink and not group/other writable. The config is opened once with no-follow/nonblocking semantics, metadata is checked with `fstat`, and JSON is read from that same descriptor, so pathname replacement after the verified open cannot swap the parsed bytes.
 
-PR #61 is considered enforcement only after its CI and AT-23 regression are green and it merges to `main`.
+PR #61 is merged on `main`; AT-23 remains a permanent regression for broker-config trust.
 
 ### INV-12 — Peer identity is necessary but not authorization
 
@@ -101,7 +105,7 @@ The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498
 - INV-05/06/07 are strongly represented in the fixed broker canary path.
 - INV-04 plan-expiry gap is addressed by PR #59 by including plan-level `expires_at` in `plan_sha256`; AT-08B must remain green before this status is considered enforced on `main`.
 - INV-08/10 are substantially implemented for the current broker admission ledger, subject to approval provenance limitations described by INV-09.
-- INV-09 is not satisfied against arbitrary Extras-process compromise.
+- INV-09 is not yet satisfied against arbitrary Extras-process compromise. PR #62 adds the broker-owned authority primitive and AT-13-core evidence; live enforcement remains gated on the dedicated approver channel and broker-owned approval lookup planned for #63.
 - INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
