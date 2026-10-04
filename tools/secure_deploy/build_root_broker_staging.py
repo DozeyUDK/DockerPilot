@@ -908,6 +908,8 @@ from pathlib import Path
 ALLOWED_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",
@@ -1085,6 +1087,8 @@ from pathlib import Path
 ALLOWED_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",
