@@ -19,6 +19,8 @@ from pathlib import Path
 INSTALLED_BROKER = "/usr/libexec/dockerpilot-secure-broker/broker"
 SERVICE_NAME = "dockerpilot-secure-broker.service"
 SOCKET_NAME = "dockerpilot-secure-broker.socket"
+APPROVER_SERVICE_NAME = "dockerpilot-secure-approver.service"
+APPROVER_SOCKET_NAME = "dockerpilot-secure-approver.socket"
 
 
 def rewrite_exec_start(service_text: str, staged_broker: Path) -> str:
@@ -64,8 +66,8 @@ def verify_staged_units(
     try:
         tmp = Path(tempfile.mkdtemp(prefix="dp-broker-systemd-verify-"))
         os.chmod(tmp, 0o700)
-        service_dst = tmp / SERVICE_NAME
-        socket_dst = tmp / SOCKET_NAME
+        service_dst = tmp / service_src.name
+        socket_dst = tmp / socket_src.name
         service_dst.write_text(rewritten, encoding="utf-8")
         os.chmod(service_dst, 0o600)
         shutil.copy2(socket_src, socket_dst)
@@ -92,34 +94,36 @@ def verify_staged_units(
 
 def verify_from_staging(staging: Path) -> int:
     bundle = staging / "bundle"
-    service = bundle / "etc/systemd/system" / SERVICE_NAME
-    socket_unit = bundle / "etc/systemd/system" / SOCKET_NAME
     broker = bundle / "usr/libexec/dockerpilot-secure-broker/broker"
-    proc = verify_staged_units(
-        service_src=service,
-        socket_src=socket_unit,
-        staged_broker=broker,
+    pairs = (
+        (SERVICE_NAME, SOCKET_NAME),
+        (APPROVER_SERVICE_NAME, APPROVER_SOCKET_NAME),
     )
-    sys.stdout.write(proc.stdout or "")
-    sys.stderr.write(proc.stderr or "")
-    if proc.returncode != 0:
-        print(
-            f"ERROR: systemd-analyze verify failed (exit {proc.returncode})",
-            file=sys.stderr,
+    for service_name, socket_name in pairs:
+        service = bundle / "etc/systemd/system" / service_name
+        socket_unit = bundle / "etc/systemd/system" / socket_name
+        proc = verify_staged_units(
+            service_src=service,
+            socket_src=socket_unit,
+            staged_broker=broker,
         )
-        return proc.returncode
-    # Source unit must remain install-path ExecStart (never rewritten on disk).
-    text = service.read_text(encoding="utf-8")
-    if f"ExecStart={INSTALLED_BROKER}" not in text:
-        print("ERROR: staged service ExecStart was mutated", file=sys.stderr)
-        return 2
-    if str(staging) in text and "ExecStart=" in text:
-        # ExecStart must not point into staging; incidental path mentions elsewhere are ok.
+        sys.stdout.write(proc.stdout or "")
+        sys.stderr.write(proc.stderr or "")
+        if proc.returncode != 0:
+            print(
+                f"ERROR: systemd-analyze verify failed for {service_name} (exit {proc.returncode})",
+                file=sys.stderr,
+            )
+            return proc.returncode
+        text = service.read_text(encoding="utf-8")
+        if f"ExecStart={INSTALLED_BROKER}" not in text:
+            print(f"ERROR: staged service ExecStart was mutated: {service_name}", file=sys.stderr)
+            return 2
         for line in text.splitlines():
             if line.startswith("ExecStart=") and str(staging) in line:
-                print("ERROR: staged service ExecStart points at staging", file=sys.stderr)
+                print(f"ERROR: staged service ExecStart points at staging: {service_name}", file=sys.stderr)
                 return 2
-    print("systemd-analyze verify (staged ExecStart rewrite): OK")
+    print("systemd-analyze verify (broker + approver staged ExecStart rewrite): OK")
     return 0
 
 
