@@ -20,6 +20,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "ping",
         "capabilities",
         "verify_plan",
+        "create_approval_challenge",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
@@ -181,11 +182,24 @@ def validate_request(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 def _validate_operation_shape(doc: Dict[str, Any]) -> None:
     op = doc["operation"]
-    if op in {"verify_plan", "dry_run"}:
+    if op == "verify_plan":
         if not isinstance(doc.get("plan"), dict):
             raise ProtocolError("plan_required", "plan object required")
-        if op == "dry_run" and not isinstance(doc.get("approval"), dict):
-            raise ProtocolError("approval_required", "approval object required")
+        return
+    if op == "create_approval_challenge":
+        if not isinstance(doc.get("plan"), dict):
+            raise ProtocolError("plan_required", "plan object required")
+        for forbidden in ("approval", "approval_id", "canary_execution_id", "template_id", "admission_bundle_sha256"):
+            if forbidden in doc:
+                raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for {op}")
+        return
+    if op == "dry_run":
+        if not isinstance(doc.get("plan"), dict):
+            raise ProtocolError("plan_required", "plan object required")
+        if not isinstance(doc.get("approval_id"), str):
+            raise ProtocolError("approval_required", "approval_id required")
+        if "approval" in doc:
+            raise ProtocolError("forbidden_field", "client-supplied approval object is not authoritative")
         return
     if op == "admit_canary_execution":
         if doc.get("template_id") != "dockerpilot-secure-canary-v1":
