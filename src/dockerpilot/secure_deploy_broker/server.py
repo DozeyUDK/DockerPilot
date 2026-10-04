@@ -320,6 +320,11 @@ class BrokerServer:
             }
         if op == "admit_canary_execution":
             self._assert_artifacts()
+            self._authority().require_approval(
+                str(req.get("approval_id")),
+                plan_id=str(req.get("plan_id")),
+                plan_sha256=str(req.get("plan_sha256")),
+            )
             admission = self._canary().admit(
                 plan_id=str(req.get("plan_id")),
                 plan_sha256=str(req.get("plan_sha256")),
@@ -355,6 +360,11 @@ class BrokerServer:
             }
         if op == "deploy_canary":
             self._assert_artifacts()
+            self._authority().require_approval(
+                str(req.get("approval_id")),
+                plan_id=str(req.get("plan_id")),
+                plan_sha256=str(req.get("plan_sha256")),
+            )
             result = self._canary().deploy(
                 plan_id=str(req.get("plan_id")),
                 plan_sha256=str(req.get("plan_sha256")),
