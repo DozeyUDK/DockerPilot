@@ -475,6 +475,8 @@ def test_manifest_hashes():
     rollback_text = (STAGING / "ROLLBACK_ROOT_BROKER_CANARY_WITH_SUDO.sh").read_text(encoding="utf-8")
     assert "assert_backup_dir_compatible" in rollback_text
     assert "EXPECTED_MANIFEST_SHA" in rollback_text
+    assert '"/etc/systemd/system/dockerpilot-secure-approver.service"' in rollback_text
+    assert '"/etc/systemd/system/dockerpilot-secure-approver.socket"' in rollback_text
 
 
 def test_corrupt_artifact_and_invalid_image_fail_before_mutation(tmp_path, monkeypatch):
