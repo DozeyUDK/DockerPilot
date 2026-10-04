@@ -82,6 +82,42 @@ def _validate_plan_sha(value: object) -> str:
     return value
 
 
+def validate_broker_approval_record(
+    record: Dict[str, Any],
+    *,
+    expected_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate a broker-owned approval v2 record independent of storage."""
+    if record.get("approval_version") != 2:
+        raise VerificationError("approval_authority_record", "unsupported broker approval version")
+    approval_id = _validate_id(record.get("approval_id"), field="approval_id")
+    if expected_id is not None and approval_id != expected_id:
+        raise VerificationError("approval_authority_record", "approval record ID mismatch")
+    _validate_id(record.get("challenge_id"), field="challenge_id")
+    _validate_id(record.get("plan_id"), field="plan_id")
+    _validate_plan_sha(record.get("plan_sha256"))
+    nonce = record.get("nonce")
+    if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
+        raise VerificationError("approval_authority_record", "invalid approval nonce")
+    _parse_ts(record.get("issued_at"))
+    _parse_ts(record.get("approved_at"))
+    _parse_ts(record.get("expires_at"))
+    if record.get("status") not in {"approved", "consumed", "expired", "revoked"}:
+        raise VerificationError("approval_authority_record", "invalid approval status")
+    provenance = record.get("provenance")
+    if not isinstance(provenance, dict) or set(provenance) != {"kind", "uid"}:
+        raise VerificationError("approval_authority_provenance", "broker approval provenance invalid")
+    if provenance.get("kind") != "unix_peer_uid":
+        raise VerificationError("approval_authority_provenance", "unsupported broker approval provenance")
+    try:
+        uid = int(provenance.get("uid"))
+    except (TypeError, ValueError) as exc:
+        raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
+    if uid < 0:
+        raise VerificationError("approval_authority_provenance", "broker approval UID invalid")
+    return record
+
+
 class BrokerApprovalAuthority:
     """Durable broker-owned challenge and approval ledger."""
 
@@ -273,33 +309,7 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_record", "invalid challenge status")
 
     def _validate_approval_record(self, record: Dict[str, Any], *, expected_id: Optional[str] = None) -> None:
-        if record.get("approval_version") != 2:
-            raise VerificationError("approval_authority_record", "unsupported broker approval version")
-        approval_id = _validate_id(record.get("approval_id"), field="approval_id")
-        if expected_id is not None and approval_id != expected_id:
-            raise VerificationError("approval_authority_record", "approval record ID mismatch")
-        _validate_id(record.get("challenge_id"), field="challenge_id")
-        _validate_id(record.get("plan_id"), field="plan_id")
-        _validate_plan_sha(record.get("plan_sha256"))
-        nonce = record.get("nonce")
-        if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
-            raise VerificationError("approval_authority_record", "invalid approval nonce")
-        _parse_ts(record.get("issued_at"))
-        _parse_ts(record.get("approved_at"))
-        _parse_ts(record.get("expires_at"))
-        if record.get("status") not in {"approved", "consumed", "expired", "revoked"}:
-            raise VerificationError("approval_authority_record", "invalid approval status")
-        provenance = record.get("provenance")
-        if not isinstance(provenance, dict) or set(provenance) != {"kind", "uid"}:
-            raise VerificationError("approval_authority_provenance", "broker approval provenance invalid")
-        if provenance.get("kind") != "unix_peer_uid":
-            raise VerificationError("approval_authority_provenance", "unsupported broker approval provenance")
-        try:
-            uid = int(provenance.get("uid"))
-        except (TypeError, ValueError) as exc:
-            raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
-        if uid < 0:
-            raise VerificationError("approval_authority_provenance", "broker approval UID invalid")
+        validate_broker_approval_record(record, expected_id=expected_id)
 
     def _prepare_state(self) -> None:
         if fcntl is None:
