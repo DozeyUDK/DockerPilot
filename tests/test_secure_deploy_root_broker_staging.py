@@ -552,6 +552,7 @@ def test_runtime_dir_umask_077_repair(tmp_path, monkeypatch):
     template = {
         "protocol_version": 1,
         "expected_peer_user": "dockerpilot-extras",
+        "allowed_approver_uids": [0],
         "socket_activation": True,
         "dozeyguard_path": "/x",
         "policy_path": "/y",
