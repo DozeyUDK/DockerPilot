@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -347,3 +349,44 @@ def test_expired_approval_is_reclaimed_before_approval_quota(tmp_path):
 
     assert second_approval["approval_id"] != first_approval["approval_id"]
     assert not (authority.approvals_dir / f'{first_approval["approval_id"]}.json').exists()
+
+
+def test_concurrent_first_use_initialization_is_race_tolerant(tmp_path, monkeypatch):
+    state_root = tmp_path / "authority"
+    authority_a = BrokerApprovalAuthority(
+        state_root,
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
+    )
+    authority_b = BrokerApprovalAuthority(
+        state_root,
+        allowed_approver_uids=frozenset({APPROVER_UID}),
+        expected_owner_uid=os.getuid(),
+    )
+
+    original_mkdir = Path.mkdir
+    targets = {
+        state_root: threading.Barrier(2),
+        state_root / "challenges": threading.Barrier(2),
+        state_root / "approvals": threading.Barrier(2),
+    }
+
+    def raced_mkdir(path, *args, **kwargs):
+        barrier = targets.get(Path(path))
+        if barrier is not None:
+            barrier.wait(timeout=5)
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", raced_mkdir)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(authority_a.create_challenge, plan_id=PLAN_ID, plan_sha256=PLAN_SHA),
+            pool.submit(authority_b.create_challenge, plan_id=PLAN_ID, plan_sha256=PLAN_SHA),
+        ]
+        records = [future.result(timeout=10) for future in futures]
+
+    assert len({record["challenge_id"] for record in records}) == 2
+    assert state_root.stat().st_mode & 0o777 == 0o700
+    assert authority_a.challenges_dir.stat().st_mode & 0o777 == 0o700
+    assert authority_a.approvals_dir.stat().st_mode & 0o777 == 0o700
