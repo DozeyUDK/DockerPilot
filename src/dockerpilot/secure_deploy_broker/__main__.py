@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    from dockerpilot.secure_deploy_broker.approval_authority import BrokerApprovalAuthority
     from dockerpilot.secure_deploy_broker.bundle_helpers import (
         normalize_spec_to_compose,
         plan_firewall_actions,
@@ -50,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
         expected_artifact_uid=expected_artifact_uid,
         expected_artifact_gid=expected_artifact_gid,
     )
+    authority = BrokerApprovalAuthority(
+        Path(cfg.state_root) / "approval_authority",
+        allowed_approver_uids=cfg.allowed_approver_uids,
+        expected_owner_uid=os.geteuid(),
+    )
     runtime = BrokerRuntimeConfig(
         socket_path=args.socket or cfg.socket_path,
         dozeyguard=dg,
@@ -66,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         canary_health_timeout_seconds=cfg.canary_health_timeout_seconds,
         canary_staged_bundle_ttl_seconds=cfg.canary_staged_bundle_ttl_seconds,
         canary_live_mode=cfg.canary_live_mode,
+        approval_authority=authority,
     )
     server = BrokerServer(
         runtime,
