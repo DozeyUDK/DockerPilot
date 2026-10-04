@@ -715,7 +715,8 @@ def test_frontend_source_guards_11d1():
     page = (ROOT / "DockerPilotExtras/frontend/src/pages/SecureDeploy.jsx").read_text(encoding="utf-8")
     api = (ROOT / "DockerPilotExtras/frontend/src/services/api.js").read_text(encoding="utf-8")
     assert "Verify with broker" in page
-    assert "Approve plan" in page
+    assert "Request approval challenge" in page
+    assert "Trusted local approval command" in page
     for banned in (">Apply<", "Deploy Now", "Execute", "/api/command/execute"):
         assert banned not in page
     assert "localStorage.setItem" not in page
