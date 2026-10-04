@@ -112,20 +112,40 @@ open after #62 by design.
 
 ## PR #63 scope: transport and enforcement
 
-The follow-up must:
+PR #63 implements the live transport/enforcement half:
 
-1. add the dedicated approver socket and systemd unit,
-2. label/separate activated broker sockets,
-3. reject `dockerpilot-extras` on the approver channel,
-4. derive approver identity from `SO_PEERCRED`,
-5. add challenge creation to the non-authorizing control grammar,
-6. route challenge approval only through the approver channel,
-7. change dry-run/admission/execution authorization to broker-owned
-   `approval_id`,
-8. make client-supplied approval JSON non-authoritative,
-9. move AT-13 from `FAIL_ARCHITECTURE` to `PASS`,
-10. preserve AT-14 through AT-17 plan binding, replay, TTL and revocation
-    semantics.
+1. the existing control socket remains available to `dockerpilot-extras`,
+2. a separate `approver.sock` is installed as `root:root 0600`,
+3. the approver service has no Docker socket access and only `AF_UNIX`,
+4. approver identity comes from Linux `SO_PEERCRED`, never request JSON,
+5. the production allowlist is root-owned config with `allowed_approver_uids=[0]`,
+6. control-plane challenge creation is non-authorizing and independently verifies
+   the plan first,
+7. `dry_run` accepts `approval_id` only and resolves the approval from the
+   broker-owned authority ledger,
+8. client-supplied approval JSON is explicitly rejected for `dry_run`,
+9. the broker-owned v2 approval is carried into the immutable canary admission
+   bundle for later admission/deploy replay checks,
+10. AT-13 exercises the live boundary: a fabricated approval object/ID fails,
+    while the same reserved approval ID succeeds only after the trusted
+    approver channel creates the broker-owned record.
+
+Operationally the initial trusted action is intentionally simple:
+
+```bash
+sudo /usr/libexec/dockerpilot-secure-broker/approve \
+  --challenge <challenge_id> \
+  --plan-sha256 <64-hex-plan-hash>
+```
+
+The root-only channel is a deliberate first implementation. It does not claim
+that the compromised Extras UI is an independent trustworthy plan-display
+channel. What the broker proves is narrower and explicit: a trusted local UID
+outside the Extras threat boundary approved the exact broker-verified
+`plan_sha256`.
+
+INV-09 / end-to-end AT-13 should be considered enforced only after #63 tests,
+CI, review and merge are green.
 
 ## Why not an HMAC key in Extras
 
