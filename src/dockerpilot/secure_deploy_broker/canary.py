@@ -30,6 +30,7 @@ from dockerpilot.secure_deploy.schemas import SchemaValidationError, load_schema
 from dockerpilot.secure_deploy.schemas import _validate as validate_schema
 
 from .approval import assert_approval_binds_plan, parse_ts, validate_approval_record
+from .approval_authority import validate_broker_approval_record
 from .errors import VerificationError
 from .verifier import BrokerDozeyguardConfig, verify_plan_independent
 
@@ -826,10 +827,10 @@ class CanaryManager:
         self._validate_plan_approval(plan, approval, require_approval=True)
         verification = verify_plan_independent(
             plan,
-            approval,
+            approval if approval.get("approval_version") != 2 else None,
             dozeyguard_config=dozeyguard_config,
             now=self.now(),
-            require_approval=True,
+            require_approval=approval.get("approval_version") != 2,
             run_dozeyguard=run_dozeyguard,
             normalize_spec_to_compose=normalize_spec_to_compose,
             plan_firewall_actions=plan_firewall_actions,
@@ -850,7 +851,15 @@ class CanaryManager:
             nonce_hash=nonce_hash,
             replay_key=replay_key,
             fields={
-                "actor": approval["actor"],
+                "actor": (
+                    approval.get("actor")
+                    or f"uid:{int((approval.get('provenance') or {}).get('uid'))}"
+                ),
+                "approver_uid": (
+                    int((approval.get("provenance") or {}).get("uid"))
+                    if approval.get("approval_version") == 2
+                    else None
+                ),
                 "approval_expires_at": approval["expires_at"],
                 "admitted_at": _iso(self.now()),
                 "broker_verification_sha256": verification.get("broker_verification_sha256"),
@@ -1124,14 +1133,33 @@ class CanaryManager:
             validate_deployment_plan(plan)
         except SchemaValidationError as exc:
             raise VerificationError("plan_schema", str(exc)) from exc
-        validate_approval_record(approval)
         recomputed = compute_plan_sha256(plan)
         if plan.get("plan_sha256") != recomputed:
             raise VerificationError("plan_hash_mismatch", "plan_sha256 mismatch")
+
+        if approval.get("approval_version") == 2:
+            validate_broker_approval_record(approval)
+            if approval.get("plan_id") != plan.get("plan_id"):
+                raise VerificationError("approval_plan_mismatch", "broker approval plan_id mismatch")
+            if approval.get("plan_sha256") != recomputed:
+                raise VerificationError("approval_hash_mismatch", "broker approval plan_sha256 mismatch")
+            if require_approval and approval.get("status") != APPROVED:
+                raise VerificationError("approval_status", "broker approval status must be approved")
+            if require_approval and self.now() >= parse_ts(str(approval["expires_at"])):
+                raise VerificationError("approval_expired", "broker approval expired")
+            return
+
+        validate_approval_record(approval)
         if approval.get("actor") != plan.get("actor"):
             raise VerificationError("approval_actor_mismatch", "approval actor mismatch")
         if require_approval:
-            assert_approval_binds_plan(approval, plan_id=str(plan["plan_id"]), plan_sha256=str(plan["plan_sha256"]), now=self.now(), require_status=APPROVED)
+            assert_approval_binds_plan(
+                approval,
+                plan_id=str(plan["plan_id"]),
+                plan_sha256=str(plan["plan_sha256"]),
+                now=self.now(),
+                require_status=APPROVED,
+            )
 
     def _looks_like_canary_plan(self, plan: Dict[str, Any]) -> bool:
         source_spec = plan.get("source_spec")
