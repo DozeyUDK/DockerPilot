@@ -52,11 +52,18 @@ For the corrected plan-hash semantics in PR #59, plan-level `expires_at` is incl
 
 If the product claims that human approval remains meaningful after AI/control-plane compromise, the broker MUST be able to verify approval provenance using trust material unavailable to the compromised control plane.
 
-Current status: **target invariant, not yet satisfied against Extras RCE**.
+Current status on `main`: **target invariant, not yet satisfied against Extras RCE**.
 
-PR #62 introduces the broker-owned approval authority core: one-shot challenges, root-broker state, explicit approver UID allowlisting, plan/hash binding and TTL enforcement. It also codifies that a client-fabricated approval object is not evidence of broker authority.
+PR #62 introduces the broker-owned approval authority core: one-shot challenges,
+root-broker state, explicit approver UID allowlisting, plan/hash binding and TTL
+enforcement. It also codifies that a client-fabricated approval object is not
+evidence of broker authority.
 
-This is foundation only. INV-09 remains open until the live broker uses a dedicated approver channel that is inaccessible to `dockerpilot-extras`, derives approver identity from `SO_PEERCRED`, and authorizes execution from broker-owned approval state rather than client-supplied approval JSON. See `APPROVAL_PROVENANCE_V1.md`.
+PR #63 is the live-enforcement candidate: a separate root-only approver socket
+derives identity from `SO_PEERCRED`; `dry_run` accepts only an `approval_id`
+and loads the authoritative v2 record from broker-owned state. A client-supplied
+approval JSON is rejected. Until #63 is green, reviewed and merged, INV-09
+remains open on `main`. See `APPROVAL_PROVENANCE_V1.md`.
 
 ### INV-10 — Approval is bounded and replay-resistant
 
@@ -78,7 +85,15 @@ PR #61 is merged on `main`; AT-23 remains a permanent regression for broker-conf
 
 ### INV-12 — Peer identity is necessary but not authorization
 
-Unix `SO_PEERCRED` / expected UID may authenticate the calling process domain, but MUST NOT by itself prove human authorization. Compromise of a process running under the expected UID is within the adversarial model.
+Unix `SO_PEERCRED` on the ordinary control socket / expected Extras UID may
+authenticate the calling process domain, but MUST NOT by itself prove human
+authorization. Compromise of the Extras process running under that UID is within
+the adversarial model.
+
+A separately permissioned approver socket may use `SO_PEERCRED` as approval
+provenance only when the allowed UID is explicitly outside the compromised
+control-plane boundary and the socket filesystem permissions prevent the Extras
+UID from reaching that channel.
 
 ### INV-13 — Failure before destructive finalization is non-destructive
 
@@ -105,7 +120,7 @@ The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498
 - INV-05/06/07 are strongly represented in the fixed broker canary path.
 - INV-04 plan-expiry gap is addressed by PR #59 by including plan-level `expires_at` in `plan_sha256`; AT-08B must remain green before this status is considered enforced on `main`.
 - INV-08/10 are substantially implemented for the current broker admission ledger, subject to approval provenance limitations described by INV-09.
-- INV-09 is not yet satisfied against arbitrary Extras-process compromise. PR #62 adds the broker-owned authority primitive and AT-13-core evidence; live enforcement remains gated on the dedicated approver channel and broker-owned approval lookup planned for #63.
+- INV-09 is not yet satisfied on `main` against arbitrary Extras-process compromise. PR #62 adds the authority primitive; PR #63 is the live-enforcement candidate with root-only approver socket, `SO_PEERCRED` provenance and broker-owned approval lookup.
 - INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
