@@ -1163,8 +1163,14 @@ def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression
             assert kwargs["execution_id"] == "exec_" + "a" * 24
             return {"status": "pass", "state": "removed", "replay": False, "execution_id": "exec_" + "a" * 24, "template_id": mods.TEMPLATE_ID, "project": "dockerpilot-secure-canary", "service": "web"}
 
+    authority, broker_approval = _broker_owned_approval(tmp_path, fix)
     server = BrokerServer(
-        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=fix.dg_config,
+            expected_peer_uid=os.getuid(),
+            approval_authority=authority,
+        ),
         run_dozeyguard=None,
         normalize_spec_to_compose=fix.normalize,
         plan_firewall_actions=fix.firewall,
@@ -1182,9 +1188,9 @@ def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression
     assert caps["canary_supported"] is True
     assert caps["canary_revocation_supported"] is True
     for resp in [
-        server._dispatch({**base, "operation": "admit_canary_execution", "template_id": mods.TEMPLATE_ID, "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
-        server._dispatch({**base, "operation": "revoke_canary_admission", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
-        server._dispatch({**base, "operation": "deploy_canary", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": fix.approval["approval_id"]}),
+        server._dispatch({**base, "operation": "admit_canary_execution", "template_id": mods.TEMPLATE_ID, "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": broker_approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
+        server._dispatch({**base, "operation": "revoke_canary_admission", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": broker_approval["approval_id"], "admission_bundle_sha256": "d" * 64}),
+        server._dispatch({**base, "operation": "deploy_canary", "plan_id": fix.plan["plan_id"], "plan_sha256": fix.plan["plan_sha256"], "approval_id": broker_approval["approval_id"]}),
         server._dispatch({**base, "operation": "remove_canary", "canary_execution_id": "exec_" + "a" * 24}),
     ]:
         mods.validate_response(resp)
