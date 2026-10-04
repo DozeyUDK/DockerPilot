@@ -1,0 +1,14 @@
+[Unit]
+Description=DockerPilot Secure Deploy trusted approver socket
+
+[Socket]
+ListenStream=/run/dockerpilot-secure-broker/approver.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0750
+RemoveOnStop=true
+Service=dockerpilot-secure-approver.service
+
+[Install]
+WantedBy=sockets.target
