@@ -304,25 +304,24 @@ class BrokerApprovalAuthority:
     def _prepare_state(self) -> None:
         if fcntl is None:
             raise VerificationError("approval_authority_platform", "approval authority requires POSIX file locking")
-        if self.state_root.exists() or self.state_root.is_symlink():
-            if self.state_root.is_symlink():
-                raise VerificationError("approval_authority_symlink", "approval authority state root symlink rejected")
-            self._assert_controlled_dir(self.state_root)
-        else:
-            try:
-                self.state_root.mkdir(mode=0o700)
-            except FileNotFoundError as exc:
-                raise VerificationError("approval_authority_parent", "approval authority parent directory missing") from exc
-            self._assert_controlled_dir(self.state_root)
+
+        # Initialization happens before the cross-process ledger lock exists, so
+        # first use must tolerate another broker process winning mkdir(). Always
+        # revalidate the resulting filesystem object after EEXIST/exist_ok.
+        try:
+            self.state_root.mkdir(mode=0o700, exist_ok=True)
+        except FileNotFoundError as exc:
+            raise VerificationError("approval_authority_parent", "approval authority parent directory missing") from exc
+        except OSError as exc:
+            raise VerificationError("approval_authority_state", "cannot initialize approval authority state root") from exc
+        self._assert_controlled_dir(self.state_root)
 
         for directory in (self.challenges_dir, self.approvals_dir):
-            if directory.exists() or directory.is_symlink():
-                if directory.is_symlink():
-                    raise VerificationError("approval_authority_symlink", "approval authority state directory symlink rejected")
-                self._assert_controlled_dir(directory)
-            else:
-                directory.mkdir(mode=0o700)
-                self._assert_controlled_dir(directory)
+            try:
+                directory.mkdir(mode=0o700, exist_ok=True)
+            except OSError as exc:
+                raise VerificationError("approval_authority_state", "cannot initialize approval authority state directory") from exc
+            self._assert_controlled_dir(directory)
 
     def _assert_controlled_dir(self, path: Path) -> None:
         st = os.lstat(path)
