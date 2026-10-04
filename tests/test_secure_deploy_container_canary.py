@@ -436,14 +436,41 @@ def test_admission_loads_broker_owned_bundle_and_binds_actor_ttl_nonce_audit(tmp
         _admit(manager, fix, approval=expired, bundle_sha=_bundle_sha(manager, fix, approval=expired))
 
 
+def _broker_owned_approval(tmp_path, fix):
+    from dockerpilot.secure_deploy_broker.approval_authority import BrokerApprovalAuthority
+
+    authority = BrokerApprovalAuthority(
+        tmp_path / "approval-authority",
+        allowed_approver_uids=frozenset({os.getuid()}),
+        expected_owner_uid=os.getuid(),
+        clock=fix.now,
+    )
+    challenge = authority.create_challenge(
+        plan_id=fix.plan["plan_id"],
+        plan_sha256=fix.plan["plan_sha256"],
+    )
+    approval = authority.approve_challenge(
+        challenge["challenge_id"],
+        approver_uid=os.getuid(),
+        expected_plan_sha256=fix.plan["plan_sha256"],
+    )
+    return authority, approval
+
+
 def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path):
     fix = _fixture(tmp_path)
     mods = fix.mods
     from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
 
     manager = _manager(fix, FakeRunner([]))
+    authority, broker_approval = _broker_owned_approval(tmp_path, fix)
     server = BrokerServer(
-        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=fix.dg_config,
+            expected_peer_uid=os.getuid(),
+            approval_authority=authority,
+        ),
         run_dozeyguard=None,
         normalize_spec_to_compose=fix.normalize,
         plan_firewall_actions=fix.firewall,
@@ -460,7 +487,7 @@ def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path
             **base,
             "operation": "dry_run",
             "plan": fix.plan,
-            "approval": fix.approval,
+            "approval_id": broker_approval["approval_id"],
         }
     )
 
@@ -469,7 +496,8 @@ def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path
     assert len(bundle_sha) == 64
     bundle = manager.ledger.load_admission_bundle(bundle_sha)
     assert bundle["plan"]["plan_id"] == fix.plan["plan_id"]
-    assert bundle["approval"]["approval_id"] == fix.approval["approval_id"]
+    assert bundle["approval"]["approval_id"] == broker_approval["approval_id"]
+    assert bundle["approval"]["approval_version"] == 2
 
     admit = server._dispatch(
         {
@@ -479,7 +507,7 @@ def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path
             "template_id": mods.TEMPLATE_ID,
             "plan_id": fix.plan["plan_id"],
             "plan_sha256": fix.plan["plan_sha256"],
-            "approval_id": fix.approval["approval_id"],
+            "approval_id": broker_approval["approval_id"],
             "admission_bundle_sha256": bundle_sha,
         }
     )
@@ -494,8 +522,14 @@ def test_failed_dry_run_creates_no_bundle(tmp_path):
     from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
 
     manager = _manager(fix, FakeRunner([]))
+    authority, broker_approval = _broker_owned_approval(tmp_path, fix)
     server = BrokerServer(
-        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=fix.dg_config,
+            expected_peer_uid=os.getuid(),
+            approval_authority=authority,
+        ),
         run_dozeyguard=None,
         normalize_spec_to_compose=fix.normalize,
         plan_firewall_actions=fix.firewall,
@@ -511,20 +545,26 @@ def test_failed_dry_run_creates_no_bundle(tmp_path):
                 "operation": "dry_run",
                 "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
                 "plan": bad_plan,
-                "approval": {**fix.approval, "plan_sha256": "0" * 64},
+                "approval_id": broker_approval["approval_id"],
             }
         )
     assert not list(manager.ledger.bundles_dir.glob("*.json"))
     assert not list(manager.ledger.executions_dir.glob("*.json"))
 
 
-def test_identical_dry_run_is_idempotent_and_conflict_does_not_overwrite(tmp_path):
+def test_identical_broker_owned_dry_run_is_idempotent_and_forged_id_rejected(tmp_path):
     fix = _fixture(tmp_path)
     from dockerpilot.secure_deploy_broker.server import BrokerRuntimeConfig, BrokerServer
 
     manager = _manager(fix, FakeRunner([]))
+    authority, broker_approval = _broker_owned_approval(tmp_path, fix)
     server = BrokerServer(
-        BrokerRuntimeConfig(socket_path=None, dozeyguard=fix.dg_config, expected_peer_uid=os.getuid()),
+        BrokerRuntimeConfig(
+            socket_path=None,
+            dozeyguard=fix.dg_config,
+            expected_peer_uid=os.getuid(),
+            approval_authority=authority,
+        ),
         run_dozeyguard=None,
         normalize_spec_to_compose=fix.normalize,
         plan_firewall_actions=fix.firewall,
@@ -536,14 +576,22 @@ def test_identical_dry_run_is_idempotent_and_conflict_does_not_overwrite(tmp_pat
         "operation": "dry_run",
         "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
         "plan": fix.plan,
-        "approval": fix.approval,
+        "approval_id": broker_approval["approval_id"],
     }
     first = server._dispatch(req)["verification"]["canary_admission_bundle_sha256"]
     second = server._dispatch({**req, "request_id": "breq_same_dry2"})["verification"]["canary_admission_bundle_sha256"]
     original_bundle = manager.ledger.load_admission_bundle(first)
-    changed_approval = {**fix.approval, "session_id_hash": "f" * 64}
-    third = server._dispatch({**req, "request_id": "breq_same_dry3", "approval": changed_approval})["verification"]["canary_admission_bundle_sha256"]
-    assert first == second == third
+
+    with pytest.raises(fix.mods.VerificationError, match="not found"):
+        server._dispatch(
+            {
+                **req,
+                "request_id": "breq_forged_id",
+                "approval_id": "appr_" + "f" * 24,
+            }
+        )
+
+    assert first == second
     assert len(list(manager.ledger.bundles_dir.glob("*.json"))) == 1
     assert len(list(manager.ledger.executions_dir.glob("*.json"))) == 1
     assert manager.ledger.load_admission_bundle(first) == original_bundle
