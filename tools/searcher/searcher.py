@@ -49,17 +49,12 @@ def _build_dumpcap_command(
     filter_str: Optional[str],
 ) -> list[str]:
     """Build a shell-free dumpcap command that streams classic pcap to stdout."""
-    command = [
-        dumpcap_path,
-        "-q",
-        "-P",
-        "-i",
-        interface or "any",
-        "-w",
-        "-",
-    ]
+    command = [dumpcap_path, "-q", "-P"]
+    if interface and interface.strip():
+        command.extend(["-i", interface.strip()])
     if filter_str and filter_str.strip():
         command.extend(["-f", filter_str.strip()])
+    command.extend(["-w", "-"])
     return command
 
 
@@ -76,6 +71,8 @@ class PacketSniffer:
         self.packet_buffer = deque(maxlen=1000)  # Buffer last 1000 packets
         self.capture_process: Optional[subprocess.Popen] = None
         self.capture_stderr_thread: Optional[threading.Thread] = None
+        self.capture_lock = threading.Lock()
+        self.capture_generation = 0
         
     def get_protocol(self, packet) -> str:
         """Extract protocol name from packet"""
@@ -172,7 +169,10 @@ class PacketSniffer:
     
     def start_sniffing(self, socketio: SocketIO):
         """Start packet capture through the dedicated dumpcap helper."""
-        if self.sniffing:
+        with self.capture_lock:
+            already_sniffing = self.sniffing
+
+        if already_sniffing:
             logger.warning("Sniffing already in progress, stopping first...")
             self.stop_sniffing(socketio)
             time.sleep(0.2)
@@ -188,7 +188,14 @@ class PacketSniffer:
             return
 
         command = _build_dumpcap_command(dumpcap_path, self.interface, self.filter_str)
-        self.sniffing = True
+        with self.capture_lock:
+            self.capture_generation += 1
+            generation = self.capture_generation
+            self.sniffing = True
+
+        def is_current_capture() -> bool:
+            with self.capture_lock:
+                return generation == self.capture_generation and self.sniffing
 
         def sniff_loop():
             process = None
@@ -198,20 +205,27 @@ class PacketSniffer:
             try:
                 logger.info(
                     "Starting packet capture through dumpcap on interface: %s",
-                    self.interface or "any",
+                    self.interface or "dumpcap default",
                 )
                 if self.filter_str:
                     logger.info("Using filter: %s", self.filter_str)
 
-                process = subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    shell=False,
-                    bufsize=0,
-                )
-                self.capture_process = process
+                # Hold the state lock across the final cancellation check and
+                # process creation. A stop issued before startup either wins
+                # before Popen (no helper is launched) or receives the newly
+                # assigned process and terminates it.
+                with self.capture_lock:
+                    if generation != self.capture_generation or not self.sniffing:
+                        return
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        shell=False,
+                        bufsize=0,
+                    )
+                    self.capture_process = process
 
                 def drain_stderr():
                     if process.stderr is None:
@@ -222,41 +236,43 @@ class PacketSniffer:
                             stderr_tail.append(line)
                             logger.debug("dumpcap: %s", line)
 
-                self.capture_stderr_thread = threading.Thread(
+                stderr_thread = threading.Thread(
                     target=drain_stderr,
                     daemon=True,
                     name="dockerpilot-searcher-dumpcap-stderr",
                 )
-                self.capture_stderr_thread.start()
+                with self.capture_lock:
+                    if generation == self.capture_generation:
+                        self.capture_stderr_thread = stderr_thread
+                stderr_thread.start()
 
                 if process.stdout is None:
                     raise RuntimeError("dumpcap stdout pipe was not created")
 
                 with PcapReader(process.stdout) as reader:
                     for packet in reader:
-                        if not self.sniffing:
+                        if not is_current_capture():
                             break
                         self.packet_callback(packet, socketio)
 
                 returncode = process.wait(timeout=2)
-                if self.sniffing and returncode != 0:
+                if is_current_capture() and returncode != 0:
                     detail = stderr_tail[-1] if stderr_tail else f"exit code {returncode}"
                     raise RuntimeError(f"dumpcap capture failed: {detail}")
 
             except (OSError, EOFError, RuntimeError) as exc:
-                if self.sniffing:
+                if is_current_capture():
                     emitted_error = True
                     message = str(exc)
                     logger.error("Packet capture failed: %s", message)
                     socketio.emit('status', {'status': 'error', 'message': message})
             except Exception as exc:
-                if self.sniffing:
+                if is_current_capture():
                     emitted_error = True
                     message = f"Packet capture failed: {exc}"
                     logger.error(message)
                     socketio.emit('status', {'status': 'error', 'message': message})
             finally:
-                self.sniffing = False
                 if process is not None and process.poll() is None:
                     process.terminate()
                     try:
@@ -264,9 +280,16 @@ class PacketSniffer:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=2)
-                self.capture_process = None
-                self.capture_stderr_thread = None
-                if not emitted_error:
+
+                with self.capture_lock:
+                    is_current = generation == self.capture_generation
+                    if self.capture_process is process:
+                        self.capture_process = None
+                    if is_current:
+                        self.sniffing = False
+                        self.capture_stderr_thread = None
+
+                if is_current and not emitted_error:
                     socketio.emit('status', {'status': 'stopped'})
 
         self.sniff_thread = threading.Thread(
@@ -280,11 +303,16 @@ class PacketSniffer:
 
     def stop_sniffing(self, socketio: SocketIO):
         """Stop packet capture and terminate the helper process."""
-        process = self.capture_process
-        if not self.sniffing and process is None:
-            return
+        with self.capture_lock:
+            process = self.capture_process
+            if not self.sniffing and process is None:
+                return
 
-        self.sniffing = False
+            self.capture_generation += 1
+            self.sniffing = False
+            self.capture_process = None
+            self.capture_stderr_thread = None
+
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -417,7 +445,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Capture on all interfaces through dumpcap
+  # Capture on dumpcap's default interface
   python3 tools/searcher/searcher.py
 
   # Capture on a specific interface
@@ -437,7 +465,7 @@ Security model:
         '-i', '--interface',
         type=str,
         default=None,
-        help='Network interface to sniff on (default: all interfaces)'
+        help='Network interface to sniff on (default: dumpcap-selected interface)'
     )
     
     parser.add_argument(
@@ -493,7 +521,7 @@ Security model:
         )
 
     logger.info(f"Starting web server on {args.host}:{args.port}")
-    logger.info(f"Interface: {args.interface or 'any'}")
+    logger.info(f"Interface: {args.interface or 'dumpcap default'}")
     logger.info(f"Filter: {args.filter or 'none'}")
     logger.info("Open http://{}:{} in your browser".format(args.host, args.port))
     
