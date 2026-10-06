@@ -65,6 +65,8 @@
               "capabilities",
               "verify_plan",
               "create_approval_challenge",
+              "get_approval",
+              "revoke_approval",
               "dry_run",
               "admit_canary_execution",
               "revoke_canary_admission",
@@ -321,6 +323,79 @@
           "enum": [
             "pending_external"
           ]
+        }
+      }
+    },
+    "approval_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "challenge_id",
+        "plan_id",
+        "plan_sha256",
+        "status",
+        "expires_at",
+        "provenance"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "challenge_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_external",
+            "approved",
+            "expired",
+            "revoked",
+            "consumed"
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 40
+        },
+        "provenance": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "uid"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unix_peer_uid"
+            },
+            "uid": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     }
