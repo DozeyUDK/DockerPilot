@@ -15,7 +15,7 @@ PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 DEFAULT_SOCKET = "/run/dockerpilot-secure-broker/broker.sock"
 DEFAULT_CLIENT_NAME = "dockerpilot-extras"
-DEFAULT_CLIENT_VERSION = "0.9.0-pre.2"
+DEFAULT_CLIENT_VERSION = "0.9.0-pre.3"
 DEFAULT_TIMEOUT = 90.0
 
 
