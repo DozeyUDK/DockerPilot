@@ -621,7 +621,7 @@ def test_unsupported_ops_still_rejected():
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": "breq_abcdefgh",
                 "operation": "apply",
-                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
             }
         )
 
