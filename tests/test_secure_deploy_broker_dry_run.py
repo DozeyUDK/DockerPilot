@@ -278,6 +278,50 @@ def test_http_approve_requires_step_up(authed_client):
     assert ok.get_json()["approval_mode"] == "external_broker"
 
 
+def test_http_external_approval_detail_and_revoke_use_broker_authority(authed_client, monkeypatch):
+    module, client, csrf = authed_client
+    plan, approval = _create_approved_plan(client, csrf)
+    approval_id = approval["approval_id"]
+    state = {
+        "approval_id": approval_id,
+        "challenge_id": approval["challenge_id"],
+        "plan_id": plan["plan_id"],
+        "plan_sha256": plan["plan_sha256"],
+        "status": "approved",
+        "expires_at": approval["expires_at"],
+        "provenance": {"kind": "unix_peer_uid", "uid": 0},
+    }
+    calls = []
+
+    def fake_get(external_id):
+        calls.append(("get", external_id))
+        return {"approval_authority": dict(state)}
+
+    def fake_revoke(external_id):
+        calls.append(("revoke", external_id))
+        revoked = dict(state)
+        revoked["status"] = "revoked"
+        return {"approval_authority": revoked}
+
+    monkeypatch.setattr(module._secure_deploy_broker, "get_approval", fake_get)
+    monkeypatch.setattr(module._secure_deploy_broker, "revoke_approval", fake_revoke)
+
+    detail = client.get(f"/api/secure-deploy/approvals/{approval_id}", headers=_headers(csrf))
+    assert detail.status_code == 200, detail.get_json()
+    assert detail.get_json()["approval_mode"] == "external_broker"
+    assert detail.get_json()["approval"]["status"] == "approved"
+
+    revoke = client.post(
+        f"/api/secure-deploy/approvals/{approval_id}/revoke",
+        json={"totp_code": _totp(now=time.time() + 30)},
+        headers=_headers(csrf),
+    )
+    assert revoke.status_code == 200, revoke.get_json()
+    assert revoke.get_json()["approval_mode"] == "external_broker"
+    assert revoke.get_json()["approval"]["status"] == "revoked"
+    assert calls == [("get", approval_id), ("revoke", approval_id)]
+
+
 def test_http_broker_dry_run_does_not_require_client_supplied_admission_bundle(authed_client, monkeypatch):
     module, client, csrf = authed_client
     plan, approval = _create_approved_plan(client, csrf)
@@ -388,6 +432,13 @@ def test_http_legacy_v1_revoke_remains_local_and_non_authoritative(authed_client
 
     revoke_calls = []
 
+    from backend.secure_deploy.errors import SecureDeployError
+
+    def not_broker_owned(_approval_id):
+        raise SecureDeployError("approval_authority_missing", "broker-owned approval record not found", 502)
+
+    monkeypatch.setattr(module._secure_deploy_broker, "revoke_approval", not_broker_owned)
+
     def unavailable_revoke(**kwargs):
         revoke_calls.append(kwargs)
         raise SecureDeployError("broker_unavailable", "broker socket missing", 503)
@@ -470,6 +521,13 @@ def test_broker_canary_dry_run(tmp_path, socket_enabled):
         forged["plan_sha256"] = compute_plan_sha256(forged)
         with pytest.raises(Exception):
             client.dry_run(forged, challenge["approval_id"])
+
+        state = client.get_approval(challenge["approval_id"])["approval_authority"]
+        assert state["status"] == "approved"
+        revoked = client.revoke_approval(challenge["approval_id"])["approval_authority"]
+        assert revoked["status"] == "revoked"
+        with pytest.raises(Exception):
+            client.dry_run(plan, challenge["approval_id"])
     finally:
         server.stop()
         assert not Path(sock_path).exists()
