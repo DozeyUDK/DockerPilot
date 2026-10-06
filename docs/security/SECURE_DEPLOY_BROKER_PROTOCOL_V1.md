@@ -12,13 +12,17 @@ Limits: max frame **2 MiB**; one request → one response; timeouts required.
 | `capabilities` | Lists supported ops; `apply_supported=false` |
 | `verify_plan` | Independent revalidation |
 | `create_approval_challenge` | Revalidate plan, then create a non-authorizing broker challenge |
+| `get_approval` | Read public status for a broker-owned approval/challenge reservation |
+| `revoke_approval` | Revoke broker-owned approval authority; safe for the control plane because it can only remove authority |
 | `dry_run` | Revalidate plan + resolve broker-owned approval by `approval_id` (does not apply) |
 | `admit_canary_execution` | Admit fixed canary from broker-owned staged bundle |
 | `revoke_canary_admission` | Revoke staged/admitted fixed canary |
 | `deploy_canary` | Execute fixed broker-owned canary path |
 | `remove_canary` | Cleanup fixed broker-owned canary |
 
-For `dry_run`, client-supplied `approval` JSON is forbidden. The control
+For `dry_run`, client-supplied `approval` JSON is forbidden. Approval detail and
+revocation are also resolved against the broker-owned ledger; Extras-local
+approval records are never authoritative for v2. The control
 client supplies only `approval_id`; the root broker loads the authoritative
 v2 record from its own approval ledger.
 
