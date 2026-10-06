@@ -677,7 +677,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
 
 ---
 
-- **Version**: 0.9.0-pre.2
+- **Version**: 0.9.0-pre.3
 - **Python**: 3.10+
 - **Docker**: 20.10+
 - **Components**: CLI package and optional `DockerPilotExtras` web panel
