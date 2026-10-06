@@ -27,18 +27,22 @@ def test_release_metadata_versions_stay_in_sync():
         frontend_lock = json.load(file_obj)
     with (root / "components" / "dozeyguard" / "Cargo.toml").open("rb") as file_obj:
         dozeyguard = tomllib.load(file_obj)
+    with (root / "components" / "dozeyguard" / "Cargo.lock").open("rb") as file_obj:
+        dozeyguard_lock = tomllib.load(file_obj)
 
     assert frontend["version"] == version
     assert frontend_lock["version"] == version
     assert frontend_lock["packages"][""]["version"] == version
     assert dozeyguard["package"]["version"] == version
+    locked_dozeyguard = next(package for package in dozeyguard_lock["package"] if package["name"] == "dozeyguard")
+    assert locked_dozeyguard["version"] == version
 
     readme = (root / "README.md").read_text(encoding="utf-8")
     extras_client = (root / "DockerPilotExtras" / "backend" / "secure_deploy" / "broker_client.py").read_text(encoding="utf-8")
     canary_client = (root / "tools" / "secure_deploy" / "broker_canary_client.py").read_text(encoding="utf-8")
 
     assert f"- **Version**: {version}" in readme
-    assert f'"{version}"' in extras_client
+    assert f'CLIENT_VERSION = os.environ.get("DOCKERPILOT_EXTRAS_VERSION", "{version}")' in extras_client
     assert f'DEFAULT_CLIENT_VERSION = "{version}"' in canary_client
 
 
