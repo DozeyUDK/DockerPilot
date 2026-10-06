@@ -514,6 +514,8 @@ raise SystemExit(main())
         "capabilities",
         "verify_plan",
         "create_approval_challenge",
+        "get_approval",
+        "revoke_approval",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
