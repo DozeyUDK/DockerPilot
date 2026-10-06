@@ -133,12 +133,11 @@ Mutate the final Compose file after broker DozeyGuard returns but before `docker
 
 ### AT-13 — fabricate approval inside compromised Extras
 
-Construct a new syntactically valid approval object for a policy-valid plan without completing the HTTP TOTP step-up flow.
+Construct a new syntactically valid approval object for a policy-valid plan without completing the trusted approver-channel flow.
 
-**Current result on `main`:** `FAIL_ARCHITECTURE` until the live broker stops treating client-supplied approval JSON as authority.
+**Current result on `main`:** `PASS` for the documented Extras-RCE threat model after PR #63.
 
-PR #62 adds the broker-owned authority core. PR #63 is the live-path remediation
-candidate and must make end-to-end AT-13 `PASS` with all of these properties:
+The permanent regression requires all of these properties:
 
 1. `dry_run` rejects a client-supplied approval object,
 2. a fabricated / nonexistent `approval_id` is rejected,
@@ -147,10 +146,12 @@ candidate and must make end-to-end AT-13 `PASS` with all of these properties:
    the root-owned allowlist,
 5. after the trusted approver creates the broker-owned v2 record, the exact
    `approval_id + plan_id + plan_sha256` is accepted,
-6. cross-plan/hash substitution still fails.
+6. cross-plan/hash substitution still fails,
+7. broker-owned approval lookup/revocation remains authoritative for v2 records.
 
-PR #63 is not considered a `PASS` until those regressions, the complete CI
-suite and review are green and the PR is merged.
+PR #62 provides the authority core and PR #63 provides the live transport and
+enforcement path. Keep AT-13 merge-blocking for future changes to approval,
+broker protocol or control-plane trust boundaries.
 
 **Invariant:** INV-09.
 
@@ -290,10 +291,10 @@ Create another target network whose subnet conflicts with the source network bei
 
 1. Keep all Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) merge-blocking for changes to AI-facing mutation surfaces.
 2. Keep AT-22, AT-23 and AT-08B as permanent regressions after PR #60, PR #61 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
-3. Keep AT-13 merge-blocking for PR #63. The authority-core half landed in #62; #63 must turn the live case green without reintroducing client approval authority.
+3. Keep AT-13 as a permanent merge-blocking regression after PR #62/#63; client-owned approval JSON must never become authoritative again.
 4. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
 5. Keep broker config trust changes isolated from approval provenance and broader broker capability work.
-6. Follow `APPROVAL_PROVENANCE_V1.md`: broker-owned authority core first (#62), then dedicated approver transport/live enforcement (#63). Do not fold unrelated broker capabilities into either PR.
+6. Treat `APPROVAL_PROVENANCE_V1.md` as the active trust-boundary contract for broker-owned v2 approvals.
 
 ## Acceptance gate for the stronger project claim
 
@@ -308,4 +309,4 @@ Any claim that broker-owned policy enforcement remains trustworthy against a com
 
 Any claim that an approved plan is immutable with respect to all execution-authorizing metadata also requires AT-08B to remain green under the corrected hash semantics.
 
-The stronger additional claim that a human approval remains authoritative after control-plane compromise requires Track C approval-provenance tests to be green as well.
+The stronger additional claim that a trusted local approval remains authoritative after Extras control-plane compromise is supported only while Track C stays green and the documented assumption holds that root and the allowlisted approver UID are not compromised.
