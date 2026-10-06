@@ -5,7 +5,13 @@
 
 set -e
 
-echo "🚀 Docker Pilot - Release Preparation"
+VERSION=$(awk -F'"' '/^version = "/ {print $2; exit}' pyproject.toml)
+if [ -z "$VERSION" ]; then
+    echo "Could not resolve DockerPilot version from pyproject.toml" >&2
+    exit 1
+fi
+
+echo "🚀 Docker Pilot - Release Preparation v$VERSION"
 echo "======================================"
 echo ""
 
@@ -94,8 +100,8 @@ echo ""
 echo "Next steps:"
 echo "  1. Review changes: git status"
 echo "  2. Add files: git add ."
-echo "  3. Commit: git commit -m 'Initial release: Docker Pilot v0.1.0'"
-echo "  4. Add remote: git remote add origin https://github.com/DozeyUDK/DockerPilot.git"
-echo "  5. Push: git push -u origin main"
+echo "  3. Commit: git commit -m 'chore(release): prepare DockerPilot v$VERSION'"
+echo "  4. Tag after review/merge: git tag -a v$VERSION -m 'DockerPilot v$VERSION'"
+echo "  5. Push the reviewed branch/tag through the normal release workflow"
 echo ""
 
