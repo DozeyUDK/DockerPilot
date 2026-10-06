@@ -89,7 +89,7 @@ class BrokerClient:
             2
             if reconnect
             and operation
-            in {"ping", "capabilities", "verify_plan", "create_approval_challenge", "dry_run", "admit_canary_execution", "revoke_canary_admission", "deploy_canary"}
+            in {"ping", "capabilities", "verify_plan", "create_approval_challenge", "get_approval", "revoke_approval", "dry_run", "admit_canary_execution", "revoke_canary_admission", "deploy_canary"}
             else 1
         )
         last_exc: Exception | None = None
@@ -128,6 +128,12 @@ class BrokerClient:
 
     def create_approval_challenge(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("create_approval_challenge", plan=plan, reconnect=True)
+
+    def get_approval(self, approval_id: str) -> Dict[str, Any]:
+        return self.request("get_approval", approval_id=approval_id, reconnect=True)
+
+    def revoke_approval(self, approval_id: str) -> Dict[str, Any]:
+        return self.request("revoke_approval", approval_id=approval_id, reconnect=True)
 
     def dry_run(self, plan: Dict[str, Any], approval_id: str) -> Dict[str, Any]:
         return self.request("dry_run", plan=plan, approval_id=approval_id, reconnect=True)
