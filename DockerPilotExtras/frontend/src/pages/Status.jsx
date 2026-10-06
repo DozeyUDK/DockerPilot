@@ -885,7 +885,7 @@ function Status() {
                         whiteSpace: 'pre',
                         fontFamily: 'inherit',
                         display: 'block',
-                        color: '#d4d4d4'
+                        color: 'var(--text-primary)'
                       }}
                     >
                       {item.text}
@@ -894,9 +894,13 @@ function Status() {
                 }
                 
                 // For other text, apply coloring
-                const color = item.type === 'command' ? '#4ec9b0' : 
-                             item.type === 'error' ? '#f48771' : 
-                             item.type === 'info' ? '#ce9178' : '#d4d4d4';
+                const color = item.type === 'command'
+                  ? (theme === 'dark' ? '#4ec9b0' : '#0f766e')
+                  : item.type === 'error'
+                    ? (theme === 'dark' ? '#f48771' : '#b42318')
+                    : item.type === 'info'
+                      ? (theme === 'dark' ? '#ce9178' : '#9a3412')
+                      : 'var(--text-primary)';
                 
                 return <span key={idx} style={{ color }}>{item.text}</span>;
               })}
