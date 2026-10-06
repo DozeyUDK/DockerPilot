@@ -581,7 +581,7 @@ def test_broker_rejects_forbidden_ops_and_frames(tmp_path):
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": "breq_abcdefgh",
                 "operation": "apply",
-                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
             }
         )
     with pytest.raises(ProtocolError):
@@ -591,7 +591,7 @@ def test_broker_rejects_forbidden_ops_and_frames(tmp_path):
                 "request_id": "breq_abcdefgh",
                 "operation": "ping",
                 "command": "id",
-                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
             }
         )
     huge = encode_frame({"ok": True})
@@ -650,7 +650,7 @@ def test_broker_error_envelope_preserves_rejected_operation(tmp_path, socket_ena
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": "breq_" + "a" * 12,
                 "operation": operation,
-                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
             }
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -674,7 +674,7 @@ def test_broker_error_envelope_preserves_rejected_operation(tmp_path, socket_ena
         missing = {
             "protocol_version": PROTOCOL_VERSION,
             "request_id": "breq_" + "b" * 12,
-            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
         }
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(5)
@@ -695,7 +695,7 @@ def test_broker_error_envelope_preserves_rejected_operation(tmp_path, socket_ena
                     "protocol_version": PROTOCOL_VERSION,
                     "request_id": "breq_" + "c" * 12,
                     "operation": bad_op,
-                    "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                    "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
                 },
             )
             bad_resp = recv_message(sock, timeout=5)
@@ -748,7 +748,7 @@ def test_broker_accept_loop_survives_client_disconnect_before_response():
         "protocol_version": PROTOCOL_VERSION,
         "request_id": "breq_" + "d" * 12,
         "operation": "ping",
-        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
     }
     first_client, first_server = socket.socketpair()
     second_client, second_server = socket.socketpair()

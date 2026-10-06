@@ -1,9 +1,15 @@
 # Docker Pilot - Release Preparation Script for Windows PowerShell
 # This script prepares the repository for GitHub release
 
+$versionMatch = Select-String -Path "pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+if (-not $versionMatch) {
+    throw "Could not resolve DockerPilot version from pyproject.toml"
+}
+$Version = $versionMatch.Matches[0].Groups[1].Value
+
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host " Docker Pilot - Release Preparation" -ForegroundColor Cyan
+Write-Host " Docker Pilot - Release Preparation v$Version" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -98,8 +104,8 @@ Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Review changes: git status" -ForegroundColor White
 Write-Host "  2. Add files: git add ." -ForegroundColor White
-Write-Host "  3. Commit: git commit -m 'Initial release: Docker Pilot v0.1.0'" -ForegroundColor White
-Write-Host "  4. Add remote: git remote add origin https://github.com/DozeyUDK/DockerPilot.git" -ForegroundColor White
-Write-Host "  5. Push: git push -u origin main" -ForegroundColor White
+Write-Host "  3. Commit: git commit -m 'chore(release): prepare DockerPilot v$Version'" -ForegroundColor White
+Write-Host "  4. Tag after review/merge: git tag -a v$Version -m 'DockerPilot v$Version'" -ForegroundColor White
+Write-Host "  5. Push the reviewed branch/tag through the normal release workflow" -ForegroundColor White
 Write-Host ""
 

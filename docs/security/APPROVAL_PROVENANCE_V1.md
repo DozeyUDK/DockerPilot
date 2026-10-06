@@ -1,8 +1,14 @@
 # Approval provenance v1
 
+## Current status
+
+Implemented on `main` by PR #62 (authority core) and PR #63 (live transport and
+enforcement). Broker-owned v2 approval authority is active for the documented
+Extras-RCE threat model.
+
 ## Goal
 
-Make a human/operator approval remain meaningful when the DockerPilot Extras
+Make a trusted local operator approval remain meaningful when the DockerPilot Extras
 process is fully compromised.
 
 The protected property is not "the approval JSON looks valid". The protected
@@ -31,15 +37,14 @@ The attacker does **not** initially have:
 - access to a Unix socket whose filesystem permissions exclude
   `dockerpilot-extras`.
 
-## Why the current approval is insufficient
+## Why the legacy v1 approval was insufficient
 
-The current Extras `ApprovalService` creates an `approved` record after the
-web step-up flow. The broker checks schema, status, TTL and
-`plan_id + plan_sha256`, but the broker has no independent proof that the
-record was produced by a human step-up rather than by compromised Extras code.
+The legacy Extras `ApprovalService` creates an `approved` record after the
+web step-up flow. That record remains local metadata for compatibility, but it
+is not authoritative for broker-owned v2 execution.
 
-Therefore a syntactically valid client-supplied approval object is not
-broker-verifiable provenance.
+A syntactically valid client-supplied approval object is therefore never treated
+as broker-verifiable provenance by the live v2 path.
 
 ## Chosen architecture
 
@@ -144,8 +149,9 @@ channel. What the broker proves is narrower and explicit: a trusted local UID
 outside the Extras threat boundary approved the exact broker-verified
 `plan_sha256`.
 
-INV-09 / end-to-end AT-13 should be considered enforced only after #63 tests,
-CI, review and merge are green.
+INV-09 / end-to-end AT-13 is considered enforced on `main` for this threat
+model after PR #63 merged with green CI and review. AT-13 remains a permanent
+regression gate.
 
 ## Why not an HMAC key in Extras
 
