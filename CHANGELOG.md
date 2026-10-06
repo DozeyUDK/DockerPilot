@@ -5,6 +5,39 @@ All notable changes to Docker Pilot will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Planned
+- Kubernetes integration
+- Docker Compose support
+- Multi-registry support
+- Advanced monitoring dashboards
+- Webhook notifications
+- Plugin system
+
+## [0.9.0-pre.3] - 2026-10-06
+
+### Added
+- Agent-safe mutation boundary for AI-facing DockerPilot usage
+- Broker-owned approval authority with one-shot challenges, root-owned state and approver UID allowlisting
+- Separate root-only approval socket using Linux `SO_PEERCRED` provenance
+- Broker-backed approval lookup/revocation and live approval-ID enforcement
+- Permanent adversarial regressions for plan identity, artifact pinning, broker config trust and approval provenance
+
+### Changed
+- Plan-level `expires_at` now participates in `plan_sha256`
+- Secure Deploy broker rechecks immutable plan expiry immediately before canary execution
+- Broker-owned DozeyGuard executable/policy are pinned by verified open file descriptors
+- Root broker config is validated through root-owned path-chain and same-FD parsing
+- DockerPilot, DockerPilotExtras frontend and DozeyGuard release metadata are aligned to `0.9.0-pre.3`
+
+### Fixed
+- Approval revocation behavior for legacy v1 records during broker outages
+- Approval authority lookup/revoke semantics for broker-owned v2 records
+- Canary deployment after plan expiry
+- CLI permission failures now render compact diagnostics while preserving non-zero exit status
+- Light-theme CLI output contrast in DockerPilotExtras
+
 ## [0.1.0] - 2024-01-XX
 
 ### Added
@@ -80,14 +113,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - General fixes and stabilization after the 0.1.0 baseline
-
-## [Unreleased]
-
-### Planned
-- Kubernetes integration
-- Docker Compose support
-- Multi-registry support
-- Advanced monitoring dashboards
-- Webhook notifications
-- Plugin system
 
