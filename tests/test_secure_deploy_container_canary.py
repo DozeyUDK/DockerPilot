@@ -739,6 +739,36 @@ def test_deploy_rechecks_approval_expiry_before_docker_commands(tmp_path):
     assert "canary_expired" in audit_text
 
 
+def test_deploy_rechecks_plan_expiry_before_docker_commands(tmp_path):
+    fix = _fixture(tmp_path)
+    base_now = fix.now()
+    clock = {"now": base_now}
+    fix.now = lambda: clock["now"]
+
+    plan_expires_at = base_now + timedelta(seconds=2)
+    fix.plan["expires_at"] = plan_expires_at.isoformat().replace("+00:00", "Z")
+    fix.plan["plan_sha256"] = fix.mods.compute_plan_sha256(fix.plan)
+    fix.approval["plan_sha256"] = fix.plan["plan_sha256"]
+
+    runner = FakeRunner([])
+    manager = _manager(fix, runner)
+    admitted = _admit(manager, fix)
+
+    # The staged bundle and approval are still live; only the immutable plan
+    # reaches its exact expiry boundary.
+    clock["now"] = plan_expires_at
+
+    with pytest.raises(fix.mods.VerificationError) as exc_info:
+        _deploy(manager, fix)
+
+    assert exc_info.value.code == "plan_expired"
+    expired = manager.ledger.get(admitted["execution_id"])
+    assert expired["state"] == "expired"
+    assert runner.calls == []
+    audit_text = (fix.policy.workdir / "audit.jsonl").read_text(encoding="utf-8")
+    assert "canary_plan_expired" in audit_text
+
+
 def test_revoke_before_admit_blocks_admit_and_is_idempotent(tmp_path):
     fix = _fixture(tmp_path)
     manager = _manager(fix, FakeRunner([]))
