@@ -192,7 +192,7 @@ The trust check does not validate every parent directory in the path and does no
 
 **Required direction:** make artifact trust race-resistant. At minimum, validate the entire relevant pathname chain as root-controlled and non-writable by the untrusted UID. Stronger designs should avoid check-then-reopen by pathname: open the verified artifact with no-follow semantics, validate identity/content on that open object, and execute/consume the same object or use an equivalent immutable/root-owned deployment location whose parent chain cannot be replaced by Extras. Add a deterministic adversarial race test that swaps the pathname after validation and before consumption.
 
-## Strategic conclusion
+## Historical strategic conclusion (audit base)
 
 The most defensible current security statement is:
 
@@ -211,7 +211,7 @@ The primary gaps blocking stronger claims are:
 
 These should be addressed before adding more deployment UX or broadening broker execution capabilities.
 
-## Recommended order of work
+## Historical recommended order of work (audit base)
 
 1. Define and enforce **agent-safe mode**: read-only legacy MCP/API surfaces, no direct Docker mutation, no generic command execution.
 2. Add adversarial tests proving no alternate mutation route exists in agent-safe mode.
