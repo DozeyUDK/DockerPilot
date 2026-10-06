@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Broker-owned DozeyGuard executable/policy are pinned by verified open file descriptors
 - Root broker config is validated through root-owned path-chain and same-FD parsing
 - DockerPilot, DockerPilotExtras frontend and DozeyGuard release metadata are aligned to `0.9.0-pre.3`
+- Removed the legacy passwordless-sudo helper and broad `NOPASSWD` backup guidance; privileged bind-mount fallback now documents scoped elevation only
 
 ### Fixed
 - Approval revocation behavior for legacy v1 records during broker outages
