@@ -251,6 +251,24 @@ class BrokerServer:
                     "protocol_version": PROTOCOL_VERSION,
                 },
             }
+        if op == "get_approval":
+            state = self._authority().get_approval_state(str(req.get("approval_id")))
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "operation": op,
+                "ok": True,
+                "approval_authority": state,
+            }
+        if op == "revoke_approval":
+            state = self._authority().revoke_approval(str(req.get("approval_id")))
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "operation": op,
+                "ok": True,
+                "approval_authority": state,
+            }
         if op in {"verify_plan", "create_approval_challenge", "dry_run"}:
             self._assert_artifacts()
             plan = req.get("plan")
