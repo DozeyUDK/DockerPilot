@@ -18,6 +18,7 @@ def _config(peer_uid: int) -> dict:
         "max_frame_bytes": 2097152,
         "request_timeout_seconds": 15,
         "expected_peer_uid": peer_uid,
+        "allowed_approver_uids": [os.getuid()],
         "dozeyguard_path": "/usr/libexec/dockerpilot-secure-broker/bin/dozeyguard",
         "policy_path": "/etc/dockerpilot-secure-broker/policy.toml",
         "expected_binary_sha256": "a" * 64,

@@ -45,6 +45,8 @@ DEST_PREFIX = {
 ALLOWED_INSTALL_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_INSTALL_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",
@@ -342,6 +344,35 @@ exec /usr/bin/python3 -I \\
         }
     )
 
+    approve_entry = libexec / "approve"
+    write_text(
+        approve_entry,
+        """#!/bin/sh
+set -eu
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH PYTHONHOME || true
+export PATH=/usr/bin:/bin
+exec /usr/bin/python3 -I \
+  /usr/libexec/dockerpilot-secure-broker/python/run_approve.py \
+  "$@"
+""",
+        0o755,
+    )
+    artifacts.append(
+        {
+            "source": "generated:approve",
+            "destination": f"{DEST_PREFIX['libexec']}/approve",
+            "staging_path": str(approve_entry.relative_to(STAGING)),
+            "sha256": sha256_file(approve_entry),
+            "owner": "root",
+            "group": "root",
+            "mode": "0o755",
+            "type": "file",
+            "required": True,
+            "rollback_action": "restore_or_remove",
+        }
+    )
+
     # Copy broker package (no Flask).
     pkg_src = ROOT / "src" / "dockerpilot" / "secure_deploy_broker"
     pkg_dst = libexec / "python" / "dockerpilot" / "secure_deploy_broker"
@@ -415,6 +446,20 @@ raise SystemExit(main())
         0o755,
     )
 
+    run_approve = libexec / "python" / "run_approve.py"
+    write_text(
+        run_approve,
+        """#!/usr/bin/env python3
+import os, sys
+os.environ['PYTHONNOUSERSITE']='1'
+ROOT = '/usr/libexec/dockerpilot-secure-broker/python'
+sys.path.insert(0, ROOT)
+from dockerpilot.secure_deploy_broker.approver_client import main
+raise SystemExit(main())
+""",
+        0o755,
+    )
+
     # Schemas
     for name in [
         "secure-deploy-broker-request-v1.schema.json",
@@ -468,6 +513,9 @@ raise SystemExit(main())
         "ping",
         "capabilities",
         "verify_plan",
+        "create_approval_challenge",
+        "get_approval",
+        "revoke_approval",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
@@ -481,6 +529,7 @@ raise SystemExit(main())
         "max_frame_bytes": 2097152,
         "request_timeout_seconds": 150,
         "expected_peer_user": "dockerpilot-extras",
+        "allowed_approver_uids": [0],
         "dozeyguard_path": f"{DEST_PREFIX['libexec']}/bin/dozeyguard",
         "policy_path": f"{DEST_PREFIX['etc']}/policy.toml",
         "expected_binary_sha256": binary_sha,
@@ -510,6 +559,7 @@ raise SystemExit(main())
     staging_config["schemas_root"] = str(libexec / "schemas")
     staging_config["state_root"] = str(var)
     staging_config["expected_peer_uid"] = os.getuid()
+    staging_config["allowed_approver_uids"] = [os.getuid()]
     staging_config["canary_image"] = (
         "docker.io/library/nginx@"
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -524,7 +574,12 @@ raise SystemExit(main())
     write_text(libexec / "VERSION", f"dozeyguard={version}\nbundle=11d2a\n", 0o644)
 
     # Systemd units into staging for install script.
-    for unit in ("dockerpilot-secure-broker.service", "dockerpilot-secure-broker.socket"):
+    for unit in (
+        "dockerpilot-secure-broker.service",
+        "dockerpilot-secure-broker.socket",
+        "dockerpilot-secure-approver.service",
+        "dockerpilot-secure-approver.socket",
+    ):
         src = ROOT / "deploy" / "systemd" / unit
         dst = BUNDLE / "etc" / "systemd" / "system" / unit
         item = copy_file(src, dst, 0o644)
@@ -568,7 +623,7 @@ raise SystemExit(main())
         if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(libexec).as_posix()
-        if path.name in {"broker", "run_broker.py"} or (
+        if path.name in {"broker", "approve", "run_broker.py", "run_approve.py"} or (
             path.name == "dozeyguard" and path.parent.name == "bin"
         ):
             mode = 0o755
@@ -582,7 +637,12 @@ raise SystemExit(main())
         rel = path.relative_to(etc).as_posix()
         _register_or_verify(path, f"{DEST_PREFIX['etc']}/{rel}", 0o644)
 
-    for unit in ("dockerpilot-secure-broker.service", "dockerpilot-secure-broker.socket"):
+    for unit in (
+        "dockerpilot-secure-broker.service",
+        "dockerpilot-secure-broker.socket",
+        "dockerpilot-secure-approver.service",
+        "dockerpilot-secure-approver.socket",
+    ):
         path = BUNDLE / "etc" / "systemd" / "system" / unit
         _register_or_verify(path, f"/etc/systemd/system/{unit}", 0o644)
 
@@ -761,6 +821,8 @@ from pathlib import Path
 ALLOWED_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",
@@ -848,6 +910,8 @@ from pathlib import Path
 ALLOWED_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",
@@ -966,7 +1030,9 @@ PY
 
 systemctl daemon-reload
 systemctl start dockerpilot-secure-broker.socket
+systemctl start dockerpilot-secure-approver.socket
 systemctl is-active dockerpilot-secure-broker.socket
+systemctl is-active dockerpilot-secure-approver.socket
 # Post-start: runtime dir + socket ownership/mode must match unit (0750 / 0660).
 python3 - <<'PY'
 import grp, importlib.util
@@ -982,7 +1048,8 @@ spec.loader.exec_module(helpers)
 gid = grp.getgrnam("dockerpilot-secure-broker").gr_gid
 helpers.ensure_runtime_dir(Path("/run/dockerpilot-secure-broker"), broker_gid=gid, fix=True)
 helpers.assert_socket_mode(Path("/run/dockerpilot-secure-broker/broker.sock"), broker_gid=gid)
-print("runtime dir + socket mode OK")
+helpers.assert_approver_socket_mode(Path("/run/dockerpilot-secure-broker/approver.sock"))
+print("runtime dir + control/approver socket modes OK")
 PY
 systemctl show dockerpilot-secure-broker.service -p CapabilityBoundingSet -p AmbientCapabilities
 # No systemctl enable in first canary.
@@ -1011,6 +1078,8 @@ export BACKUP_DIR
 EXPECTED_MANIFEST_SHA="__MANIFEST_SHA__"
 export EXPECTED_MANIFEST_SHA
 [[ "$(id -un)" == "root" ]] || { echo "must be root" >&2; exit 1; }
+systemctl stop dockerpilot-secure-approver.service 2>/dev/null || true
+systemctl stop dockerpilot-secure-approver.socket 2>/dev/null || true
 systemctl stop dockerpilot-secure-broker.service 2>/dev/null || true
 systemctl stop dockerpilot-secure-broker.socket 2>/dev/null || true
 python3 - <<'PY'
@@ -1020,6 +1089,8 @@ from pathlib import Path
 ALLOWED_EXACT = {
     "/etc/systemd/system/dockerpilot-secure-broker.service",
     "/etc/systemd/system/dockerpilot-secure-broker.socket",
+    "/etc/systemd/system/dockerpilot-secure-approver.service",
+    "/etc/systemd/system/dockerpilot-secure-approver.socket",
 }
 ALLOWED_PREFIXES = (
     "/usr/libexec/dockerpilot-secure-broker/",

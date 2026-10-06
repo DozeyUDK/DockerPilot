@@ -1,0 +1,51 @@
+[Unit]
+Description=DockerPilot Secure Deploy trusted approver
+Documentation=file:///usr/libexec/dockerpilot-secure-broker/docs/APPROVAL_PROVENANCE_V1.md
+Requires=dockerpilot-secure-approver.socket
+After=dockerpilot-secure-approver.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+ExecStart=/usr/libexec/dockerpilot-secure-broker/broker --approver --config /etc/dockerpilot-secure-broker/config.json
+Restart=on-failure
+RestartSec=2
+
+Environment=PYTHONNOUSERSITE=1
+Environment=DOCKERPILOT_BROKER_STRICT_ENV=1
+Environment=PATH=/usr/bin:/bin
+Environment=HOME=/
+Environment=LANG=C.UTF-8
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @reboot @swap @raw-io @debug @module
+
+InaccessiblePaths=/var/run/docker.sock /run/docker.sock
+ReadWritePaths=/var/lib/dockerpilot-secure-broker /run/dockerpilot-secure-broker
+ReadOnlyPaths=/usr/libexec/dockerpilot-secure-broker /etc/dockerpilot-secure-broker
+
+[Install]
+WantedBy=multi-user.target

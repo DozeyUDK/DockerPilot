@@ -12,7 +12,10 @@
     "ok"
   ],
   "properties": {
-    "protocol_version": { "type": "integer", "const": 1 },
+    "protocol_version": {
+      "type": "integer",
+      "const": 1
+    },
     "request_id": {
       "type": "string",
       "minLength": 8,
@@ -26,14 +29,27 @@
       "pattern": "^[a-z][a-z0-9_]{0,63}$",
       "description": "Requested operation. Success responses use supported ops only; error envelopes may echo a sanitized rejected name or 'unknown'."
     },
-    "ok": { "type": "boolean" },
+    "ok": {
+      "type": "boolean"
+    },
     "error": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "properties": {
-        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
       }
     },
     "capabilities": {
@@ -48,6 +64,9 @@
               "ping",
               "capabilities",
               "verify_plan",
+              "create_approval_challenge",
+              "get_approval",
+              "revoke_approval",
               "dry_run",
               "admit_canary_execution",
               "revoke_canary_admission",
@@ -56,10 +75,20 @@
             ]
           }
         },
-        "apply_supported": { "type": "boolean", "const": false },
-        "canary_supported": { "type": "boolean" },
-        "canary_revocation_supported": { "type": "boolean" },
-        "protocol_version": { "type": "integer", "const": 1 }
+        "apply_supported": {
+          "type": "boolean",
+          "const": false
+        },
+        "canary_supported": {
+          "type": "boolean"
+        },
+        "canary_revocation_supported": {
+          "type": "boolean"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 1
+        }
       }
     },
     "verification": {
@@ -68,7 +97,10 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["pass", "fail"]
+          "enum": [
+            "pass",
+            "fail"
+          ]
         },
         "broker_verification_sha256": {
           "type": "string",
@@ -79,27 +111,67 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "ok"],
+            "required": [
+              "name",
+              "ok"
+            ],
             "properties": {
-              "name": { "type": "string", "minLength": 1, "maxLength": 64 },
-              "ok": { "type": "boolean" },
-              "detail": { "type": "string", "maxLength": 256 }
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 256
+              }
             }
           }
         },
-        "plan_id": { "type": "string", "maxLength": 128 },
-        "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "dozeyguard_exit_code": { "type": "integer", "enum": [0, 1, 2] },
-        "blocking_findings": { "type": "integer", "minimum": 0 },
-        "dry_run": { "type": "boolean" },
-        "canary_admission_bundle_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
+        "plan_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dozeyguard_exit_code": {
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        },
+        "blocking_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "canary_admission_bundle_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     },
     "canary_admission": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "execution_id": {
           "type": "string",
           "pattern": "^exec_[A-Fa-f0-9]+$"
@@ -118,9 +190,21 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "status": { "type": "string", "enum": ["pass", "fail"] },
-        "state": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "replay": { "type": "boolean" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "replay": {
+          "type": "boolean"
+        },
         "execution_id": {
           "type": "string",
           "pattern": "^exec_[A-Fa-f0-9]+$"
@@ -137,20 +221,182 @@
           "type": "string",
           "const": "web"
         },
-        "compose_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
-        "plan_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
-        "broker_verification_sha256": {
-          "type": ["string", "null"],
+        "compose_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^[a-f0-9]{64}$"
         },
-        "health": { "type": ["object", "null"], "additionalProperties": true },
-        "cleanup": { "type": ["object", "null"], "additionalProperties": true },
+        "plan_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "broker_verification_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "health": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "cleanup": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "audit_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^audit_[A-Fa-f0-9]+$"
         },
-        "primary_error": { "type": ["object", "null"], "additionalProperties": true },
-        "error": { "type": ["object", "null"], "additionalProperties": true }
+        "primary_error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "approval_challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_id",
+        "approval_id",
+        "plan_id",
+        "plan_sha256",
+        "expires_at",
+        "status"
+      ],
+      "properties": {
+        "challenge_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_external"
+          ]
+        }
+      }
+    },
+    "approval_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "challenge_id",
+        "plan_id",
+        "plan_sha256",
+        "status",
+        "expires_at",
+        "provenance"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "challenge_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_external",
+            "approved",
+            "expired",
+            "revoked",
+            "consumed"
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 40
+        },
+        "provenance": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "uid"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unix_peer_uid"
+            },
+            "uid": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
       }
     }
   }

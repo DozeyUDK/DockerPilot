@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .approval_authority import BrokerApprovalAuthority
 from .canary import PROJECT, SERVICE, CanaryManager, CanaryPolicy, WORKDIR
 from .errors import BrokerError, ProtocolError, VerificationError
 from .integrity import assert_trusted_artifact
@@ -46,6 +47,7 @@ class BrokerRuntimeConfig:
     canary_health_timeout_seconds: int = 60
     canary_staged_bundle_ttl_seconds: int = 300
     canary_live_mode: bool = True
+    approval_authority: Optional[BrokerApprovalAuthority] = None
 
 
 class BrokerServer:
@@ -199,6 +201,12 @@ class BrokerServer:
             # broker thread must stay alive to accept later requests.
             return
 
+    def _authority(self) -> BrokerApprovalAuthority:
+        authority = self.config.approval_authority
+        if authority is None:
+            raise VerificationError("approval_authority_unconfigured", "broker approval authority is not configured")
+        return authority
+
     def _assert_artifacts(self) -> None:
         if self.config.expected_binary_sha256:
             assert_trusted_artifact(
@@ -243,27 +251,84 @@ class BrokerServer:
                     "protocol_version": PROTOCOL_VERSION,
                 },
             }
-        if op in {"verify_plan", "dry_run"}:
+        if op == "get_approval":
+            state = self._authority().get_approval_state(str(req.get("approval_id")))
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "operation": op,
+                "ok": True,
+                "approval_authority": state,
+            }
+        if op == "revoke_approval":
+            state = self._authority().revoke_approval(str(req.get("approval_id")))
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "operation": op,
+                "ok": True,
+                "approval_authority": state,
+            }
+        if op in {"verify_plan", "create_approval_challenge", "dry_run"}:
             self._assert_artifacts()
             plan = req.get("plan")
-            approval = req.get("approval")
             if not isinstance(plan, dict):
                 raise VerificationError("plan_required", "plan object required")
-            require_approval = op == "dry_run"
             verification = verify_plan_independent(
                 plan,
-                approval if isinstance(approval, dict) else None,
+                None,
                 dozeyguard_config=self.config.dozeyguard,
-                require_approval=require_approval,
+                require_approval=False,
                 run_dozeyguard=self._adapt_dozeyguard,
                 normalize_spec_to_compose=self._normalize,
                 plan_firewall_actions=self._firewall,
             )
-            verification["dry_run"] = op == "dry_run"
-            if op == "dry_run" and isinstance(approval, dict):
-                bundle_sha = self._canary_admission_bundle_sha(plan, approval)
-                if bundle_sha:
-                    verification["canary_admission_bundle_sha256"] = bundle_sha
+            if op == "verify_plan":
+                verification["dry_run"] = False
+                return {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": request_id,
+                    "operation": op,
+                    "ok": True,
+                    "verification": verification,
+                }
+            if op == "create_approval_challenge":
+                challenge = self._authority().create_challenge(
+                    plan_id=str(verification["plan_id"]),
+                    plan_sha256=str(verification["plan_sha256"]),
+                )
+                public_challenge = {
+                    "challenge_id": challenge["challenge_id"],
+                    "approval_id": challenge["approval_id"],
+                    "plan_id": challenge["plan_id"],
+                    "plan_sha256": challenge["plan_sha256"],
+                    "expires_at": challenge["expires_at"],
+                    "status": "pending_external",
+                }
+                return {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": request_id,
+                    "operation": op,
+                    "ok": True,
+                    "approval_challenge": public_challenge,
+                    "verification": verification,
+                }
+
+            approval_id = req.get("approval_id")
+            if not isinstance(approval_id, str):
+                raise VerificationError("approval_required", "approval_id required")
+            approval = self._authority().require_approval(
+                approval_id,
+                plan_id=str(verification["plan_id"]),
+                plan_sha256=str(verification["plan_sha256"]),
+            )
+            verification["stages"].append(
+                {"name": "approval_provenance", "ok": True, "detail": "broker-owned authority"}
+            )
+            verification["dry_run"] = True
+            bundle_sha = self._canary_admission_bundle_sha(plan, approval)
+            if bundle_sha:
+                verification["canary_admission_bundle_sha256"] = bundle_sha
             return {
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": request_id,
@@ -273,6 +338,11 @@ class BrokerServer:
             }
         if op == "admit_canary_execution":
             self._assert_artifacts()
+            self._authority().require_approval(
+                str(req.get("approval_id")),
+                plan_id=str(req.get("plan_id")),
+                plan_sha256=str(req.get("plan_sha256")),
+            )
             admission = self._canary().admit(
                 plan_id=str(req.get("plan_id")),
                 plan_sha256=str(req.get("plan_sha256")),
@@ -308,6 +378,11 @@ class BrokerServer:
             }
         if op == "deploy_canary":
             self._assert_artifacts()
+            self._authority().require_approval(
+                str(req.get("approval_id")),
+                plan_id=str(req.get("plan_id")),
+                plan_sha256=str(req.get("plan_sha256")),
+            )
             result = self._canary().deploy(
                 plan_id=str(req.get("plan_id")),
                 plan_sha256=str(req.get("plan_sha256")),

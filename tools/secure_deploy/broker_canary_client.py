@@ -42,6 +42,7 @@ def call(
     socket_path: str = DEFAULT_SOCKET,
     plan: Any = None,
     approval: Any = None,
+    approval_id: Optional[str] = None,
     client_name: str = DEFAULT_CLIENT_NAME,
     client_version: str = DEFAULT_CLIENT_VERSION,
     protocol_version: int = PROTOCOL_VERSION,
@@ -59,6 +60,8 @@ def call(
         req["plan"] = plan
     if approval is not None:
         req["approval"] = approval
+    if approval_id is not None:
+        req["approval_id"] = approval_id
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     sock.connect(socket_path)

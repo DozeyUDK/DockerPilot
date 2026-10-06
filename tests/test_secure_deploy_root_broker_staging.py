@@ -91,6 +91,7 @@ def test_config_unknown_field_and_path_traversal():
         "max_frame_bytes": 1024,
         "request_timeout_seconds": 5,
         "expected_peer_uid": 1000,
+        "allowed_approver_uids": [0],
         "dozeyguard_path": "/usr/libexec/dockerpilot-secure-broker/bin/dozeyguard",
         "policy_path": "/etc/dockerpilot-secure-broker/policy.toml",
         "expected_binary_sha256": "a" * 64,
@@ -111,6 +112,8 @@ def test_config_unknown_field_and_path_traversal():
             "ping",
             "capabilities",
             "verify_plan",
+            "get_approval",
+            "revoke_approval",
             "dry_run",
             "admit_canary_execution",
             "revoke_canary_admission",
@@ -407,6 +410,9 @@ def test_manifest_hashes():
         "ping",
         "capabilities",
         "verify_plan",
+        "create_approval_challenge",
+        "get_approval",
+        "revoke_approval",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
@@ -429,10 +435,17 @@ def test_manifest_hashes():
             dest = f"{prefix}/{path.relative_to(root).as_posix()}"
             assert dest in listed, f"missing from manifest: {dest}"
             assert listed[dest]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
-    for unit in ("dockerpilot-secure-broker.service", "dockerpilot-secure-broker.socket"):
+    for unit in (
+        "dockerpilot-secure-broker.service",
+        "dockerpilot-secure-broker.socket",
+        "dockerpilot-secure-approver.service",
+        "dockerpilot-secure-approver.socket",
+    ):
         dest = f"/etc/systemd/system/{unit}"
         assert dest in listed
     assert any(d.endswith("/python/run_broker.py") for d in listed)
+    assert any(d.endswith("/python/run_approve.py") for d in listed)
+    assert "/usr/libexec/dockerpilot-secure-broker/approve" in listed
     assert any("secure_deploy_broker/server.py" in d for d in listed)
     assert "/etc/dockerpilot-secure-broker/config.template.json" in listed
     assert "/etc/dockerpilot-secure-broker/config.json" not in listed
@@ -440,6 +453,7 @@ def test_manifest_hashes():
         (BUNDLE / "etc/dockerpilot-secure-broker/config.template.json").read_text(encoding="utf-8")
     )
     assert template["expected_peer_user"] == "dockerpilot-extras"
+    assert template["allowed_approver_uids"] == [0]
     assert "expected_peer_uid" not in template
     assert "997" not in json.dumps(template)
     assert template["request_timeout_seconds"] == 150
@@ -452,6 +466,8 @@ def test_manifest_hashes():
     assert "expected_peer_uid=997" not in install_text
     assert "pwd.getpwnam" in install_text or "getpwnam" in install_text
     assert "ensure_runtime_dir" in install_text
+    assert "dockerpilot-secure-approver.socket" in install_text
+    assert "assert_approver_socket_mode" in install_text
     assert 'Path("/run/dockerpilot-secure-broker").mkdir' not in install_text
     if "resolve_install_expect_user" not in install_text:
         pytest.skip("staging install script predates #11E operator/backup binding")
@@ -463,6 +479,8 @@ def test_manifest_hashes():
     rollback_text = (STAGING / "ROLLBACK_ROOT_BROKER_CANARY_WITH_SUDO.sh").read_text(encoding="utf-8")
     assert "assert_backup_dir_compatible" in rollback_text
     assert "EXPECTED_MANIFEST_SHA" in rollback_text
+    assert '"/etc/systemd/system/dockerpilot-secure-approver.service"' in rollback_text
+    assert '"/etc/systemd/system/dockerpilot-secure-approver.socket"' in rollback_text
 
 
 def test_corrupt_artifact_and_invalid_image_fail_before_mutation(tmp_path, monkeypatch):
@@ -540,6 +558,7 @@ def test_runtime_dir_umask_077_repair(tmp_path, monkeypatch):
     template = {
         "protocol_version": 1,
         "expected_peer_user": "dockerpilot-extras",
+        "allowed_approver_uids": [0],
         "socket_activation": True,
         "dozeyguard_path": "/x",
         "policy_path": "/y",
@@ -561,6 +580,8 @@ def test_runtime_dir_umask_077_repair(tmp_path, monkeypatch):
             "ping",
             "capabilities",
             "verify_plan",
+            "get_approval",
+            "revoke_approval",
             "dry_run",
             "admit_canary_execution",
             "revoke_canary_admission",

@@ -82,6 +82,42 @@ def _validate_plan_sha(value: object) -> str:
     return value
 
 
+def validate_broker_approval_record(
+    record: Dict[str, Any],
+    *,
+    expected_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate a broker-owned approval v2 record independent of storage."""
+    if record.get("approval_version") != 2:
+        raise VerificationError("approval_authority_record", "unsupported broker approval version")
+    approval_id = _validate_id(record.get("approval_id"), field="approval_id")
+    if expected_id is not None and approval_id != expected_id:
+        raise VerificationError("approval_authority_record", "approval record ID mismatch")
+    _validate_id(record.get("challenge_id"), field="challenge_id")
+    _validate_id(record.get("plan_id"), field="plan_id")
+    _validate_plan_sha(record.get("plan_sha256"))
+    nonce = record.get("nonce")
+    if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
+        raise VerificationError("approval_authority_record", "invalid approval nonce")
+    _parse_ts(record.get("issued_at"))
+    _parse_ts(record.get("approved_at"))
+    _parse_ts(record.get("expires_at"))
+    if record.get("status") not in {"approved", "consumed", "expired", "revoked"}:
+        raise VerificationError("approval_authority_record", "invalid approval status")
+    provenance = record.get("provenance")
+    if not isinstance(provenance, dict) or set(provenance) != {"kind", "uid"}:
+        raise VerificationError("approval_authority_provenance", "broker approval provenance invalid")
+    if provenance.get("kind") != "unix_peer_uid":
+        raise VerificationError("approval_authority_provenance", "unsupported broker approval provenance")
+    try:
+        uid = int(provenance.get("uid"))
+    except (TypeError, ValueError) as exc:
+        raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
+    if uid < 0:
+        raise VerificationError("approval_authority_provenance", "broker approval UID invalid")
+    return record
+
+
 class BrokerApprovalAuthority:
     """Durable broker-owned challenge and approval ledger."""
 
@@ -249,6 +285,117 @@ class BrokerApprovalAuthority:
 
         return self._with_lock(op)
 
+    def get_approval_state(self, approval_id: str) -> Dict[str, Any]:
+        approval_id = _validate_id(approval_id, field="approval_id")
+
+        def op() -> Dict[str, Any]:
+            try:
+                approval = self._read_json(self._approval_path(approval_id))
+            except VerificationError as exc:
+                if exc.code != "approval_authority_missing":
+                    raise
+                challenge = self._find_challenge_by_approval_id(approval_id)
+                now = _utcnow(self.clock)
+                status = challenge["status"]
+                if status == "pending" and now >= _parse_ts(challenge["expires_at"]):
+                    expired = dict(challenge)
+                    expired["status"] = "expired"
+                    self._write_json_replace(self._challenge_path(challenge["challenge_id"]), expired)
+                    challenge = expired
+                    status = "expired"
+                return {
+                    "approval_id": approval_id,
+                    "challenge_id": challenge["challenge_id"],
+                    "plan_id": challenge["plan_id"],
+                    "plan_sha256": challenge["plan_sha256"],
+                    "status": "pending_external" if status == "pending" else status,
+                    "expires_at": challenge["expires_at"],
+                    "provenance": None,
+                }
+
+            self._validate_approval_record(approval, expected_id=approval_id)
+            status = approval["status"]
+            if status == "approved" and _utcnow(self.clock) >= _parse_ts(approval["expires_at"]):
+                expired = dict(approval)
+                expired["status"] = "expired"
+                self._write_json_replace(self._approval_path(approval_id), expired)
+                approval = expired
+            return {
+                "approval_id": approval["approval_id"],
+                "challenge_id": approval["challenge_id"],
+                "plan_id": approval["plan_id"],
+                "plan_sha256": approval["plan_sha256"],
+                "status": approval["status"],
+                "expires_at": approval["expires_at"],
+                "provenance": dict(approval["provenance"]),
+            }
+
+        return self._with_lock(op)
+
+    def revoke_approval(self, approval_id: str) -> Dict[str, Any]:
+        approval_id = _validate_id(approval_id, field="approval_id")
+
+        def op() -> Dict[str, Any]:
+            try:
+                approval = self._read_json(self._approval_path(approval_id))
+            except VerificationError as exc:
+                if exc.code != "approval_authority_missing":
+                    raise
+                challenge = self._find_challenge_by_approval_id(approval_id)
+                if challenge["status"] == "pending":
+                    revoked = dict(challenge)
+                    revoked["status"] = "revoked"
+                    self._write_json_replace(self._challenge_path(challenge["challenge_id"]), revoked)
+                    challenge = revoked
+                return {
+                    "approval_id": approval_id,
+                    "challenge_id": challenge["challenge_id"],
+                    "plan_id": challenge["plan_id"],
+                    "plan_sha256": challenge["plan_sha256"],
+                    "status": challenge["status"],
+                    "expires_at": challenge["expires_at"],
+                    "provenance": None,
+                }
+
+            self._validate_approval_record(approval, expected_id=approval_id)
+            if approval["status"] == "approved":
+                revoked = dict(approval)
+                revoked["status"] = "revoked"
+                self._write_json_replace(self._approval_path(approval_id), revoked)
+                approval = revoked
+            return {
+                "approval_id": approval["approval_id"],
+                "challenge_id": approval["challenge_id"],
+                "plan_id": approval["plan_id"],
+                "plan_sha256": approval["plan_sha256"],
+                "status": approval["status"],
+                "expires_at": approval["expires_at"],
+                "provenance": dict(approval["provenance"]),
+            }
+
+        return self._with_lock(op)
+
+    def _find_challenge_by_approval_id(self, approval_id: str) -> Dict[str, Any]:
+        found: Optional[Dict[str, Any]] = None
+        for path in self.challenges_dir.iterdir():
+            if path.is_symlink():
+                raise VerificationError("approval_authority_symlink", "approval authority record symlink rejected")
+            if not path.name.endswith(".json"):
+                continue
+            if not path.is_file():
+                raise VerificationError("approval_authority_state", "approval authority record must be regular file")
+            record = self._read_json(path)
+            expected_id = path.name.removesuffix(".json")
+            self._validate_challenge_record(record, expected_id=expected_id)
+            if record.get("approval_id") != approval_id:
+                continue
+            if found is not None:
+                raise VerificationError("approval_authority_record", "duplicate approval reservation")
+            found = record
+        if found is None:
+            raise VerificationError("approval_authority_missing", "broker-owned approval record not found")
+        return found
+
     def _challenge_path(self, challenge_id: str) -> Path:
         return self.challenges_dir / f"{challenge_id}.json"
 
@@ -269,37 +416,11 @@ class BrokerApprovalAuthority:
             raise VerificationError("approval_authority_record", "invalid challenge nonce")
         _parse_ts(record.get("issued_at"))
         _parse_ts(record.get("expires_at"))
-        if record.get("status") not in {"pending", "approved", "expired"}:
+        if record.get("status") not in {"pending", "approved", "expired", "revoked"}:
             raise VerificationError("approval_authority_record", "invalid challenge status")
 
     def _validate_approval_record(self, record: Dict[str, Any], *, expected_id: Optional[str] = None) -> None:
-        if record.get("approval_version") != 2:
-            raise VerificationError("approval_authority_record", "unsupported broker approval version")
-        approval_id = _validate_id(record.get("approval_id"), field="approval_id")
-        if expected_id is not None and approval_id != expected_id:
-            raise VerificationError("approval_authority_record", "approval record ID mismatch")
-        _validate_id(record.get("challenge_id"), field="challenge_id")
-        _validate_id(record.get("plan_id"), field="plan_id")
-        _validate_plan_sha(record.get("plan_sha256"))
-        nonce = record.get("nonce")
-        if not isinstance(nonce, str) or len(nonce) < 16 or len(nonce) > 128:
-            raise VerificationError("approval_authority_record", "invalid approval nonce")
-        _parse_ts(record.get("issued_at"))
-        _parse_ts(record.get("approved_at"))
-        _parse_ts(record.get("expires_at"))
-        if record.get("status") not in {"approved", "consumed", "expired", "revoked"}:
-            raise VerificationError("approval_authority_record", "invalid approval status")
-        provenance = record.get("provenance")
-        if not isinstance(provenance, dict) or set(provenance) != {"kind", "uid"}:
-            raise VerificationError("approval_authority_provenance", "broker approval provenance invalid")
-        if provenance.get("kind") != "unix_peer_uid":
-            raise VerificationError("approval_authority_provenance", "unsupported broker approval provenance")
-        try:
-            uid = int(provenance.get("uid"))
-        except (TypeError, ValueError) as exc:
-            raise VerificationError("approval_authority_provenance", "broker approval UID invalid") from exc
-        if uid < 0:
-            raise VerificationError("approval_authority_provenance", "broker approval UID invalid")
+        validate_broker_approval_record(record, expected_id=expected_id)
 
     def _prepare_state(self) -> None:
         if fcntl is None:
@@ -352,7 +473,7 @@ class BrokerApprovalAuthority:
             # Once a challenge produced a durable broker-owned approval record,
             # the challenge itself no longer carries authority and may be
             # reclaimed. Pending challenges are retained only through their TTL.
-            if status in {"approved", "expired"} or (
+            if status in {"approved", "expired", "revoked"} or (
                 status == "pending" and now >= _parse_ts(record["expires_at"])
             ):
                 path.unlink()

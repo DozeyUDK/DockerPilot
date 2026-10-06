@@ -14,6 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PROD_SERVICE = ROOT / "deploy" / "systemd" / "dockerpilot-secure-broker.service"
 PROD_SOCKET = ROOT / "deploy" / "systemd" / "dockerpilot-secure-broker.socket"
+APPROVER_SERVICE = ROOT / "deploy" / "systemd" / "dockerpilot-secure-approver.service"
+APPROVER_SOCKET = ROOT / "deploy" / "systemd" / "dockerpilot-secure-approver.socket"
 PREVIEW_SERVICE = ROOT / "deploy" / "systemd" / "dockerpilot-secure-broker.service.example"
 EXTRAS_SERVICE = ROOT / "deploy" / "systemd" / "dockerpilot-extras.service.example"
 CANARY_WORKDIR = "/var/lib/dockerpilot-secure-broker/canary/dockerpilot-secure-canary"
@@ -84,6 +86,16 @@ def extras() -> dict[str, list[str]]:
     return _parse_unit(EXTRAS_SERVICE.read_text(encoding="utf-8"))
 
 
+@pytest.fixture(scope="module")
+def approver_service() -> dict[str, list[str]]:
+    return _parse_unit(APPROVER_SERVICE.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def approver_socket() -> dict[str, list[str]]:
+    return _parse_unit(APPROVER_SOCKET.read_text(encoding="utf-8"))
+
+
 def test_canary_unit_rejects_private_network(prod: dict[str, list[str]], prod_text: str):
     values = {v.strip().lower() for v in _values(prod, "Service", "PrivateNetwork")}
     assert "true" not in values
@@ -147,6 +159,30 @@ def test_socket_activation_contract(prod: dict[str, list[str]], socket_unit: dic
     assert _joined(socket_unit, "Socket", "RemoveOnStop").lower() == "true"
 
 
+def test_approver_socket_is_root_only(approver_socket: dict[str, list[str]]):
+    assert _joined(approver_socket, "Socket", "ListenStream") == "/run/dockerpilot-secure-broker/approver.sock"
+    assert _joined(approver_socket, "Socket", "SocketUser") == "root"
+    assert _joined(approver_socket, "Socket", "SocketGroup") == "root"
+    assert _joined(approver_socket, "Socket", "SocketMode") == "0600"
+    assert _joined(approver_socket, "Socket", "Service") == "dockerpilot-secure-approver.service"
+    assert _joined(approver_socket, "Socket", "RemoveOnStop").lower() == "true"
+
+
+def test_approver_service_has_no_docker_or_network_authority(
+    approver_service: dict[str, list[str]],
+):
+    assert _joined(approver_service, "Service", "User") == "root"
+    assert _joined(approver_service, "Service", "Group") == "root"
+    assert "--approver" in _joined(approver_service, "Service", "ExecStart")
+    assert _tokens(approver_service, "Service", "RestrictAddressFamilies") == {"AF_UNIX"}
+    assert "any" in {v.strip().lower() for v in _values(approver_service, "Service", "IPAddressDeny")}
+    inaccessible = _paths(approver_service, "Service", "InaccessiblePaths")
+    assert "/var/run/docker.sock" in inaccessible
+    assert "/run/docker.sock" in inaccessible
+    assert any(v.strip() == "" for v in _values(approver_service, "Service", "CapabilityBoundingSet"))
+    assert any(v.strip() == "" for v in _values(approver_service, "Service", "AmbientCapabilities"))
+
+
 def test_preview_only_unit_keeps_strict_hardening(preview: dict[str, list[str]]):
     families = _tokens(preview, "Service", "RestrictAddressFamilies")
     assert families == {"AF_UNIX"}
@@ -192,7 +228,12 @@ def test_builder_copies_approved_systemd_templates_verbatim(tmp_path):
     builder.build_dozeyguard = lambda: (fake_bin, ROOT)
     try:
         builder.main()
-        for unit in ("dockerpilot-secure-broker.service", "dockerpilot-secure-broker.socket"):
+        for unit in (
+            "dockerpilot-secure-broker.service",
+            "dockerpilot-secure-broker.socket",
+            "dockerpilot-secure-approver.service",
+            "dockerpilot-secure-approver.socket",
+        ):
             staged = builder.BUNDLE / "etc" / "systemd" / "system" / unit
             approved = ROOT / "deploy" / "systemd" / unit
             assert staged.is_file()

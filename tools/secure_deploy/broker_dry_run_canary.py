@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Root broker dry_run canary — run as dockerpilot-extras only (no system mutation).
+"""Root broker dry_run canary for broker-owned approval provenance.
 
-Approval consumption model (from docs/tests/code — not guessed):
-- Broker dry_run validates approval binding only (status approved, plan_id,
-  plan_sha256, not expired). It does NOT consume approval.
-- Consume is Extras ApprovalService for future apply (#11D.2).
-- Broker does NOT bind actor/nonce to the plan (only schema presence).
+Phase 1 (run as dockerpilot-extras) creates a non-authorizing challenge.
+A trusted operator approves it through the root-only approver socket.
+Phase 2 reruns this tool with --approval-id and proves dry_run authorization is
+resolved from broker-owned state rather than client-supplied approval JSON.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import secrets
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 _TOOLS = Path(__file__).resolve().parent
 if str(_TOOLS) not in sys.path:
@@ -31,50 +28,20 @@ from broker_canary_client import (  # noqa: E402
 
 DEFAULT_PLAN = Path("/tmp/dockerpilot-verify-plan-canary.json")
 DEFAULT_OUT = Path("/tmp/broker_dry_run_canary_results.json")
-APPROVAL_TTL_MINUTES = 10
-
-
-def _iso(dt: datetime) -> str:
-    return dt.isoformat().replace("+00:00", "Z")
-
-
-def make_approval(
-    plan: Dict[str, Any],
-    *,
-    status: str = "approved",
-    plan_id: Optional[str] = None,
-    plan_sha256: Optional[str] = None,
-    actor: Optional[str] = None,
-    nonce: Optional[str] = None,
-    expires_at: Optional[str] = None,
-    approved_at: Optional[str] = None,
-) -> Dict[str, Any]:
-    now = datetime.now(timezone.utc)
-    plan_expires = datetime.fromisoformat(str(plan["expires_at"]).replace("Z", "+00:00"))
-    expires = now + timedelta(minutes=APPROVAL_TTL_MINUTES)
-    if expires > plan_expires:
-        expires = plan_expires
-    return {
-        "approval_version": 1,
-        "approval_id": "appr_" + secrets.token_hex(12),
-        "plan_id": plan_id if plan_id is not None else plan["plan_id"],
-        "plan_sha256": plan_sha256 if plan_sha256 is not None else plan["plan_sha256"],
-        "actor": actor if actor is not None else str(plan.get("actor") or "canary"),
-        "nonce": nonce if nonce is not None else secrets.token_urlsafe(16),
-        "issued_at": _iso(now),
-        "approved_at": approved_at if approved_at is not None else _iso(now),
-        "expires_at": expires_at if expires_at is not None else _iso(expires),
-        "session_id_hash": secrets.token_hex(32),
-        "status": status,
-    }
+DEFAULT_APPROVE = "/usr/libexec/dockerpilot-secure-broker/approve"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Root broker dry_run canary (extras UID only)")
+    p = argparse.ArgumentParser(description="Root broker dry_run provenance canary")
     p.add_argument("--plan", type=Path, default=DEFAULT_PLAN, help="DeploymentPlan JSON path")
     p.add_argument("--output", type=Path, default=DEFAULT_OUT, help="Results JSON path")
-    p.add_argument("--socket", default=DEFAULT_SOCKET, help="Broker Unix socket path")
+    p.add_argument("--socket", default=DEFAULT_SOCKET, help="Broker control Unix socket path")
     p.add_argument("--client-version", default=DEFAULT_CLIENT_VERSION, help="client.version field")
+    p.add_argument(
+        "--approval-id",
+        default=None,
+        help="Broker-owned approval ID returned/reserved by the challenge from phase 1",
+    )
     return p.parse_args(argv)
 
 
@@ -93,88 +60,84 @@ def main(argv: list[str] | None = None) -> int:
             **kwargs,
         )
 
-    approval = make_approval(plan)
-    positive = _call("dry_run", plan=plan, approval=approval)
-    print("POSITIVE", json.dumps(positive, indent=2, sort_keys=True), flush=True)
+    if not args.approval_id:
+        response = _call("create_approval_challenge", plan=plan)
+        challenge = response.get("approval_challenge") or {}
+        results = {
+            "phase": "challenge",
+            "whoami": {"uid": os.getuid(), "gid": os.getgid()},
+            "response": response,
+            "challenge": challenge,
+            "plan_id": plan.get("plan_id"),
+            "plan_sha256": plan.get("plan_sha256"),
+        }
+        args.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if response.get("ok") and challenge.get("challenge_id") and challenge.get("approval_id"):
+            command = (
+                f"sudo {DEFAULT_APPROVE} "
+                f"--challenge {challenge['challenge_id']} "
+                f"--plan-sha256 {plan['plan_sha256']}"
+            )
+            print("CHALLENGE", json.dumps(challenge, sort_keys=True), flush=True)
+            print("APPROVE_WITH", command, flush=True)
+            print(
+                "THEN_RERUN",
+                f"{sys.argv[0]} --plan {args.plan} --output {args.output} "
+                f"--socket {args.socket} --approval-id {challenge['approval_id']}",
+                flush=True,
+            )
+            return 0
+        return 2
 
-    replay = _call("dry_run", plan=plan, approval=approval)
-    print(
-        "REPLAY",
-        json.dumps(
-            {
-                "ok": replay.get("ok"),
-                "code": err_code(replay),
-                "status": (replay.get("verification") or {}).get("status"),
-            },
-            sort_keys=True,
+    positive = _call("dry_run", plan=plan, approval_id=args.approval_id)
+    replay = _call("dry_run", plan=plan, approval_id=args.approval_id)
+    negatives: Dict[str, Any] = {
+        "missing_approval_id": _call("dry_run", plan=plan),
+        "fabricated_approval_id": _call(
+            "dry_run",
+            plan=plan,
+            approval_id="appr_" + ("f" * 24),
         ),
-        flush=True,
-    )
+    }
 
-    mutated = dict(approval)
-    mutated["actor"] = str(approval["actor"]) + "_mutated"
-    mutated["nonce"] = secrets.token_urlsafe(16)
-    actor_nonce = _call("dry_run", plan=plan, approval=mutated)
-    print(
-        "ACTOR_NONCE_MUTATION",
-        json.dumps(
-            {
-                "ok": actor_nonce.get("ok"),
-                "code": err_code(actor_nonce),
-                "note": "broker assert_approval_binds_plan does not check actor/nonce",
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
-
-    negatives: Dict[str, Any] = {}
-    negatives["missing_approval"] = _call("dry_run", plan=plan)
-    negatives["wrong_plan_hash"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, plan_sha256="a" * 64)
-    )
-    negatives["wrong_plan_id"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, plan_id="plan_deadbeefdeadbeef")
-    )
-    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
-    negatives["expired_approval"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, expires_at=past, approved_at=past)
-    )
-    negatives["bad_status_consumed"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, status="consumed")
-    )
-    negatives["bad_status_pending"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, status="pending")
-    )
-    negatives["bad_status_revoked"] = _call(
-        "dry_run", plan=plan, approval=make_approval(plan, status="revoked")
+    # An Extras-compromised caller may still put arbitrary JSON on the wire, but
+    # the protocol must reject it as non-authoritative.
+    forged_v1 = {
+        "approval_version": 1,
+        "approval_id": args.approval_id,
+        "plan_id": plan["plan_id"],
+        "plan_sha256": plan["plan_sha256"],
+        "actor": "forged",
+        "nonce": "forgednonce123456",
+        "issued_at": plan["created_at"],
+        "approved_at": plan["created_at"],
+        "expires_at": plan["expires_at"],
+        "session_id_hash": "a" * 64,
+        "status": "approved",
+    }
+    negatives["fabricated_approval_object"] = _call(
+        "dry_run",
+        plan=plan,
+        approval_id=args.approval_id,
+        approval=forged_v1,
     )
 
     plan_mtime_after = args.plan.stat().st_mtime_ns
     plan_after = json.loads(args.plan.read_text(encoding="utf-8"))
-    v = positive.get("verification") or {}
+    verification = positive.get("verification") or {}
     results = {
+        "phase": "authorized_dry_run",
         "whoami": {"uid": os.getuid(), "gid": os.getgid()},
-        "approval_used": {
-            "approval_id": approval["approval_id"],
-            "status": approval["status"],
-            "expires_at": approval["expires_at"],
-            "plan_id": approval["plan_id"],
-            "plan_sha256": approval["plan_sha256"],
-            "actor": approval["actor"],
-        },
+        "approval_id": args.approval_id,
         "positive": positive,
         "replay": replay,
-        "actor_nonce_mutation": actor_nonce,
         "negatives": negatives,
         "plan_file_mtime_unchanged": plan_mtime_before == plan_mtime_after,
         "plan_sha256_unchanged": plan_sha_before == plan_after.get("plan_sha256"),
-        "plan_id": plan.get("plan_id"),
-        "plan_sha256": plan.get("plan_sha256"),
-        "approval_consumption_model": "validate_only_not_consumed",
-        "actor_nonce_bound_by_broker": False,
+        "approval_authority": "broker_owned_external_approver",
     }
     args.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     print("NEGATIVES_SUMMARY", flush=True)
     for name, resp in negatives.items():
         print(
@@ -186,19 +149,25 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "positive_ok": positive.get("ok"),
-                "status": v.get("status"),
-                "dry_run": v.get("dry_run"),
-                "stages": [s.get("name") for s in (v.get("stages") or [])],
-                "broker_verification_sha256": v.get("broker_verification_sha256"),
+                "status": verification.get("status"),
+                "dry_run": verification.get("dry_run"),
+                "stages": [s.get("name") for s in (verification.get("stages") or [])],
                 "replay_ok": replay.get("ok"),
-                "actor_nonce_ok": actor_nonce.get("ok"),
+                "fabricated_id_code": err_code(negatives["fabricated_approval_id"]),
+                "fabricated_object_code": err_code(negatives["fabricated_approval_object"]),
             },
             sort_keys=True,
         ),
         flush=True,
     )
     print("WROTE", args.output, flush=True)
-    return 0 if positive.get("ok") else 2
+
+    provenance_stage = any(
+        stage.get("name") == "approval_provenance" and stage.get("ok") is True
+        for stage in (verification.get("stages") or [])
+    )
+    negatives_fail = all(resp.get("ok") is not True for resp in negatives.values())
+    return 0 if positive.get("ok") is True and provenance_stage and negatives_fail else 2
 
 
 if __name__ == "__main__":

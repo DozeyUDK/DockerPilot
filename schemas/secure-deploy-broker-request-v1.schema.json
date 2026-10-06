@@ -12,7 +12,10 @@
     "client"
   ],
   "properties": {
-    "protocol_version": { "type": "integer", "const": 1 },
+    "protocol_version": {
+      "type": "integer",
+      "const": 1
+    },
     "request_id": {
       "type": "string",
       "minLength": 8,
@@ -25,6 +28,9 @@
         "ping",
         "capabilities",
         "verify_plan",
+        "create_approval_challenge",
+        "get_approval",
+        "revoke_approval",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
@@ -38,14 +44,20 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9_-]+$"
     },
-    "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "approval_id": {
       "type": "string",
       "minLength": 8,
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9_-]+$"
     },
-    "admission_bundle_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "admission_bundle_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "template_id": {
       "type": "string",
       "const": "dockerpilot-secure-canary-v1"
@@ -56,15 +68,31 @@
       "maxLength": 128,
       "pattern": "^exec_[A-Fa-f0-9]+$"
     },
-    "plan": { "type": "object", "additionalProperties": true },
-    "approval": { "type": "object", "additionalProperties": true },
+    "plan": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "client": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version"],
+      "required": [
+        "name",
+        "version"
+      ],
       "properties": {
-        "name": { "type": "string", "const": "dockerpilot-extras" },
-        "version": { "type": "string", "minLength": 1, "maxLength": 32 }
+        "name": {
+          "type": "string",
+          "const": "dockerpilot-extras"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        }
       }
     }
   }

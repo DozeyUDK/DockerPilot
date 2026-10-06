@@ -85,6 +85,52 @@ def test_at13_fabricated_extras_approval_has_no_broker_authority(tmp_path):
     assert exc_info.value.code == "approval_authority_missing"
 
 
+def test_broker_owned_approval_lookup_and_revoke(tmp_path):
+    authority = _authority(tmp_path)
+    challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+
+    pending = authority.get_approval_state(challenge["approval_id"])
+    assert pending["status"] == "pending_external"
+    assert pending["provenance"] is None
+
+    approval = authority.approve_challenge(
+        challenge["challenge_id"],
+        approver_uid=APPROVER_UID,
+        expected_plan_sha256=PLAN_SHA,
+    )
+    active = authority.get_approval_state(approval["approval_id"])
+    assert active["status"] == "approved"
+    assert active["provenance"] == {"kind": "unix_peer_uid", "uid": APPROVER_UID}
+
+    revoked = authority.revoke_approval(approval["approval_id"])
+    assert revoked["status"] == "revoked"
+
+    with pytest.raises(VerificationError) as exc_info:
+        authority.require_approval(
+            approval["approval_id"],
+            plan_id=PLAN_ID,
+            plan_sha256=PLAN_SHA,
+        )
+    assert exc_info.value.code == "approval_authority_status"
+
+
+def test_pending_challenge_can_be_revoked_before_approval(tmp_path):
+    authority = _authority(tmp_path)
+    challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)
+
+    revoked = authority.revoke_approval(challenge["approval_id"])
+    assert revoked["status"] == "revoked"
+    assert revoked["provenance"] is None
+
+    with pytest.raises(VerificationError) as exc_info:
+        authority.approve_challenge(
+            challenge["challenge_id"],
+            approver_uid=APPROVER_UID,
+            expected_plan_sha256=PLAN_SHA,
+        )
+    assert exc_info.value.code == "approval_challenge_status"
+
+
 def test_unauthorized_approver_uid_is_rejected(tmp_path):
     authority = _authority(tmp_path)
     challenge = authority.create_challenge(plan_id=PLAN_ID, plan_sha256=PLAN_SHA)

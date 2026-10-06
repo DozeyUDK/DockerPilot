@@ -202,7 +202,10 @@ function SecureDeploy() {
       })
       setTotpCode('')
       setApproval(data.approval)
-      setMessage({ type: 'success', text: `Approved ${data.approval.approval_id}` })
+      setMessage({
+        type: 'success',
+        text: `Approval challenge ${data.approval.challenge_id} created. Approve it through the trusted local approver channel.`
+      })
     } catch (err) {
       setMessage({
         type: 'error',
@@ -458,10 +461,17 @@ function SecureDeploy() {
                 <div>
                   <strong>Approval</strong>
                   <pre>{JSON.stringify({
+                    challenge_id: approval.challenge_id,
                     approval_id: approval.approval_id,
                     status: approval.status,
                     expires_at: approval.expires_at
                   }, null, 2)}</pre>
+                  {approval.challenge_id && (
+                    <>
+                      <strong>Trusted local approval command</strong>
+                      <pre>{`sudo /usr/libexec/dockerpilot-secure-broker/approve --challenge ${approval.challenge_id} --plan-sha256 ${preview.plan?.plan_sha256}`}</pre>
+                    </>
+                  )}
                 </div>
               )}
               {brokerResult && (
@@ -471,7 +481,7 @@ function SecureDeploy() {
                 </div>
               )}
               <div className="form-field">
-                <label htmlFor="secure-deploy-totp">Step-up TOTP (approve / revoke)</label>
+                <label htmlFor="secure-deploy-totp">Step-up TOTP (request challenge / legacy revoke)</label>
                 <input
                   className="form-control"
                   id="secure-deploy-totp"
@@ -492,7 +502,7 @@ function SecureDeploy() {
         <button type="button" className="btn form-button" disabled={busy} onClick={validate}>Validate</button>
         <button type="button" className="btn btn-primary form-button" disabled={busy} onClick={generatePreview}>Generate preview</button>
         <button type="button" className="btn form-button" disabled={!preview?.plan} onClick={downloadPlan}>Download redacted plan</button>
-        <button type="button" className="btn form-button" disabled={busy || !preview?.plan} onClick={approvePlan}>Approve plan</button>
+        <button type="button" className="btn form-button" disabled={busy || !preview?.plan} onClick={approvePlan}>Request approval challenge</button>
         <button type="button" className="btn form-button" disabled={busy || !approval?.approval_id} onClick={verifyWithBroker}>Verify with broker (dry-run)</button>
       </div>
     </div>

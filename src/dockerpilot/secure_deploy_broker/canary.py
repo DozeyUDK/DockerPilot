@@ -30,6 +30,7 @@ from dockerpilot.secure_deploy.schemas import SchemaValidationError, load_schema
 from dockerpilot.secure_deploy.schemas import _validate as validate_schema
 
 from .approval import assert_approval_binds_plan, parse_ts, validate_approval_record
+from .approval_authority import validate_broker_approval_record
 from .errors import VerificationError
 from .verifier import BrokerDozeyguardConfig, verify_plan_independent
 
@@ -826,10 +827,10 @@ class CanaryManager:
         self._validate_plan_approval(plan, approval, require_approval=True)
         verification = verify_plan_independent(
             plan,
-            approval,
+            approval if approval.get("approval_version") != 2 else None,
             dozeyguard_config=dozeyguard_config,
             now=self.now(),
-            require_approval=True,
+            require_approval=approval.get("approval_version") != 2,
             run_dozeyguard=run_dozeyguard,
             normalize_spec_to_compose=normalize_spec_to_compose,
             plan_firewall_actions=plan_firewall_actions,
@@ -850,7 +851,15 @@ class CanaryManager:
             nonce_hash=nonce_hash,
             replay_key=replay_key,
             fields={
-                "actor": approval["actor"],
+                "actor": (
+                    approval.get("actor")
+                    or f"uid:{int((approval.get('provenance') or {}).get('uid'))}"
+                ),
+                "approver_uid": (
+                    int((approval.get("provenance") or {}).get("uid"))
+                    if approval.get("approval_version") == 2
+                    else None
+                ),
                 "approval_expires_at": approval["expires_at"],
                 "admitted_at": _iso(self.now()),
                 "broker_verification_sha256": verification.get("broker_verification_sha256"),
@@ -1048,6 +1057,28 @@ class CanaryManager:
             expired["audit_id"] = audit_id
             self.ledger.replace(expired)
             raise VerificationError("approval_expired", "approval expired")
+        if self._record_plan_expired(record):
+            expired = dict(record)
+            expired["state"] = EXPIRED
+            expired["finished_at"] = _iso(self.now())
+            expired = self.ledger.replace(expired, expected_state=APPROVED)
+            if expired.get("state") != EXPIRED:
+                return self._result(expired, replay=True)
+            audit_id = self.ledger.append_audit(
+                {
+                    "event": "canary_plan_expired",
+                    "execution_id": expired["execution_id"],
+                    "plan_id": expired["plan_id"],
+                    "plan_sha256": expired["plan_sha256"],
+                    "approval_id": expired["approval_id"],
+                    "approval_nonce_hash": expired["approval_nonce_hash"],
+                    "admission_bundle_sha256": expired["admission_bundle_sha256"],
+                    "template_id": expired["template_id"],
+                }
+            )
+            expired["audit_id"] = audit_id
+            self.ledger.replace(expired)
+            raise VerificationError("plan_expired", "deployment plan expired")
         if not self.port_checker(self.policy.host, self.policy.port):
             raise VerificationError("canary_port_occupied", "canary localhost port is occupied")
         record = dict(record)
@@ -1124,14 +1155,33 @@ class CanaryManager:
             validate_deployment_plan(plan)
         except SchemaValidationError as exc:
             raise VerificationError("plan_schema", str(exc)) from exc
-        validate_approval_record(approval)
         recomputed = compute_plan_sha256(plan)
         if plan.get("plan_sha256") != recomputed:
             raise VerificationError("plan_hash_mismatch", "plan_sha256 mismatch")
+
+        if approval.get("approval_version") == 2:
+            validate_broker_approval_record(approval)
+            if approval.get("plan_id") != plan.get("plan_id"):
+                raise VerificationError("approval_plan_mismatch", "broker approval plan_id mismatch")
+            if approval.get("plan_sha256") != recomputed:
+                raise VerificationError("approval_hash_mismatch", "broker approval plan_sha256 mismatch")
+            if require_approval and approval.get("status") != APPROVED:
+                raise VerificationError("approval_status", "broker approval status must be approved")
+            if require_approval and self.now() >= parse_ts(str(approval["expires_at"])):
+                raise VerificationError("approval_expired", "broker approval expired")
+            return
+
+        validate_approval_record(approval)
         if approval.get("actor") != plan.get("actor"):
             raise VerificationError("approval_actor_mismatch", "approval actor mismatch")
         if require_approval:
-            assert_approval_binds_plan(approval, plan_id=str(plan["plan_id"]), plan_sha256=str(plan["plan_sha256"]), now=self.now(), require_status=APPROVED)
+            assert_approval_binds_plan(
+                approval,
+                plan_id=str(plan["plan_id"]),
+                plan_sha256=str(plan["plan_sha256"]),
+                now=self.now(),
+                require_status=APPROVED,
+            )
 
     def _looks_like_canary_plan(self, plan: Dict[str, Any]) -> bool:
         source_spec = plan.get("source_spec")
@@ -1146,6 +1196,49 @@ class CanaryManager:
         except VerificationError:
             return False
         return image.get("reference") == reference and image.get("digest") == digest
+
+    def _bound_plan_from_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        bundle_sha256 = str(record.get("admission_bundle_sha256") or "")
+        if not _SHA_RE.fullmatch(bundle_sha256):
+            raise VerificationError("canary_bundle_binding", "execution admission bundle hash invalid")
+        bundle = self.ledger.load_admission_bundle(bundle_sha256)
+        if (
+            bundle.get("template_id") != record.get("template_id")
+            or bundle.get("plan_id") != record.get("plan_id")
+            or bundle.get("plan_sha256") != record.get("plan_sha256")
+            or bundle.get("approval_id") != record.get("approval_id")
+        ):
+            raise VerificationError("canary_bundle_binding", "execution record does not match immutable admission bundle")
+
+        plan = bundle.get("plan")
+        approval = bundle.get("approval")
+        if not isinstance(plan, dict) or not isinstance(approval, dict):
+            raise VerificationError("canary_bundle_binding", "immutable admission bundle plan/approval missing")
+        try:
+            validate_deployment_plan(plan)
+        except SchemaValidationError as exc:
+            raise VerificationError("plan_schema", str(exc)) from exc
+        if (
+            plan.get("plan_id") != record.get("plan_id")
+            or plan.get("plan_sha256") != record.get("plan_sha256")
+            or compute_plan_sha256(plan) != record.get("plan_sha256")
+        ):
+            raise VerificationError("canary_bundle_binding", "immutable plan does not match execution record")
+        if (
+            approval.get("approval_id") != record.get("approval_id")
+            or approval.get("plan_id") != record.get("plan_id")
+            or approval.get("plan_sha256") != record.get("plan_sha256")
+        ):
+            raise VerificationError("canary_bundle_binding", "immutable approval does not match execution record")
+        return plan
+
+    def _record_plan_expired(self, record: Dict[str, Any]) -> bool:
+        plan = self._bound_plan_from_record(record)
+        try:
+            expires = parse_ts(str(plan["expires_at"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VerificationError("plan_expired", "plan expiry invalid") from exc
+        return self.now() >= expires
 
     def _record_approval_expired(self, record: Dict[str, Any]) -> bool:
         try:

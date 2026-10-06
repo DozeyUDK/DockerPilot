@@ -26,6 +26,7 @@ ALLOWED_CONFIG_KEYS = frozenset(
         "max_frame_bytes",
         "request_timeout_seconds",
         "expected_peer_uid",
+        "allowed_approver_uids",
         "dozeyguard_path",
         "policy_path",
         "expected_binary_sha256",
@@ -81,6 +82,19 @@ class BrokerConfig:
             raise BrokerError("config_peer_uid", "expected_peer_uid must be an integer") from exc
         if self.expected_peer_uid < 0:
             raise BrokerError("config_peer_uid", "expected_peer_uid must be >= 0")
+        raw_approvers = raw.get("allowed_approver_uids")
+        if not isinstance(raw_approvers, list) or not raw_approvers:
+            raise BrokerError("config_approver_uids", "allowed_approver_uids must be a non-empty list")
+        approver_uids: set[int] = set()
+        for value in raw_approvers:
+            try:
+                uid = int(value)
+            except (TypeError, ValueError) as exc:
+                raise BrokerError("config_approver_uids", "allowed_approver_uids must contain integers") from exc
+            if uid < 0:
+                raise BrokerError("config_approver_uids", "allowed_approver_uids must be >= 0")
+            approver_uids.add(uid)
+        self.allowed_approver_uids: FrozenSet[int] = frozenset(approver_uids)
         for key in ("dozeyguard_path", "policy_path", "schemas_root", "state_root"):
             if key not in raw or not isinstance(raw[key], str) or not raw[key]:
                 raise BrokerError("config_path", f"{key} required")

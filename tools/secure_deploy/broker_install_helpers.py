@@ -157,6 +157,9 @@ def materialize_runtime_config(template: Mapping[str, Any], *, peer_uid: int) ->
     raw = json.dumps(template, sort_keys=True)
     if '"expected_peer_uid"' in raw:
         raise ValueError("config template must not contain expected_peer_uid")
+    approver_uids = data.get("allowed_approver_uids")
+    if approver_uids != [0]:
+        raise ValueError("production template allowed_approver_uids must be exactly [0]")
     allowed_ops = set(data.get("allowed_operations") or [])
     if allowed_ops & CANARY_OPERATIONS:
         try:
@@ -217,6 +220,18 @@ def ensure_runtime_dir(
             raise RuntimeError(
                 f"failed to repair {run_dir} to {owner_uid}:{broker_gid} 0750"
             )
+
+
+def assert_approver_socket_mode(sock_path: Path) -> None:
+    if not sock_path.exists() or sock_path.is_symlink():
+        raise RuntimeError(f"approver socket missing/invalid: {sock_path}")
+    st = sock_path.stat()
+    mode = stat.S_IMODE(st.st_mode)
+    if st.st_uid != 0 or st.st_gid != 0 or mode != 0o600:
+        raise RuntimeError(
+            f"{sock_path} has uid={st.st_uid} gid={st.st_gid} mode={oct(mode)}; "
+            "want root:root 0o600"
+        )
 
 
 def assert_socket_mode(sock_path: Path, *, broker_gid: int) -> None:

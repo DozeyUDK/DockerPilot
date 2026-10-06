@@ -135,11 +135,22 @@ Mutate the final Compose file after broker DozeyGuard returns but before `docker
 
 Construct a new syntactically valid approval object for a policy-valid plan without completing the HTTP TOTP step-up flow.
 
-**Current live-path expected result:** `FAIL_ARCHITECTURE` until the live broker stops treating client-supplied approval JSON as authority.
+**Current result on `main`:** `FAIL_ARCHITECTURE` until the live broker stops treating client-supplied approval JSON as authority.
 
-PR #62 adds the broker-owned authority core and an AT-13-core regression: an arbitrary Extras-fabricated approval object/ID is rejected by the authority unless a broker-owned approval record exists. This does **not** turn the end-to-end AT-13 result green because the current dry-run/admission path has not yet been switched to that authority.
+PR #62 adds the broker-owned authority core. PR #63 is the live-path remediation
+candidate and must make end-to-end AT-13 `PASS` with all of these properties:
 
-The follow-up approver-channel PR must make end-to-end AT-13 `PASS` by deriving approver identity from a socket unavailable to `dockerpilot-extras` and requiring broker-owned approval state for execution authorization.
+1. `dry_run` rejects a client-supplied approval object,
+2. a fabricated / nonexistent `approval_id` is rejected,
+3. challenge creation alone grants no authority,
+4. the approver channel derives UID from `SO_PEERCRED` and rejects a UID outside
+   the root-owned allowlist,
+5. after the trusted approver creates the broker-owned v2 record, the exact
+   `approval_id + plan_id + plan_sha256` is accepted,
+6. cross-plan/hash substitution still fails.
+
+PR #63 is not considered a `PASS` until those regressions, the complete CI
+suite and review are green and the PR is merged.
 
 **Invariant:** INV-09.
 
@@ -279,7 +290,7 @@ Create another target network whose subnet conflicts with the source network bei
 
 1. Keep all Track A scenarios (AT-01 through AT-07, including AT-03B, AT-04B and AT-06B) merge-blocking for changes to AI-facing mutation surfaces.
 2. Keep AT-22, AT-23 and AT-08B as permanent regressions after PR #60, PR #61 and PR #59 respectively; they must never revert to expected-red tests for compatibility convenience.
-3. Keep AT-13 as the highest-value unresolved trust-boundary test. PR #62 covers the authority-core half; the end-to-end case remains red until the dedicated approver channel and live broker lookup land.
+3. Keep AT-13 merge-blocking for PR #63. The authority-core half landed in #62; #63 must turn the live case green without reintroducing client approval authority.
 4. Run existing broker/canary tests as baseline for the remaining Track B through Track F cases and fill only uncovered cases.
 5. Keep broker config trust changes isolated from approval provenance and broader broker capability work.
 6. Follow `APPROVAL_PROVENANCE_V1.md`: broker-owned authority core first (#62), then dedicated approver transport/live enforcement (#63). Do not fold unrelated broker capabilities into either PR.

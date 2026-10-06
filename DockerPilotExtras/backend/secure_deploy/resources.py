@@ -157,16 +157,16 @@ def create_secure_deploy_resources(
                         "plan_sha256 confirmation mismatch — confirm displayed hash",
                         code="plan_hash_confirm",
                     )
-                record = approval_service.approve_plan(
-                    stored,
-                    actor=get_actor(),
-                    session_hash=get_session_hash(),
-                )
+                broker_resp = broker_client.create_approval_challenge(plan)
+                challenge = broker_resp.get("approval_challenge") or {}
+                if not isinstance(challenge, dict) or not challenge.get("approval_id"):
+                    raise SecureDeployError("broker_challenge", "broker did not return approval challenge", 502)
                 return _envelope(
                     {
                         "success": True,
-                        "approval": redact_for_log(record),
+                        "approval": redact_for_log(challenge),
                         "plan_sha256": plan.get("plan_sha256"),
+                        "approval_mode": "external_broker",
                     },
                     201,
                 )
@@ -177,8 +177,35 @@ def create_secure_deploy_resources(
         def get(self, approval_id: str):
             try:
                 require_secure_deploy_access()
-                record = approval_service.get(approval_id)
-                return _envelope({"success": True, "approval": redact_for_log(record)})
+                try:
+                    broker_resp = broker_client.get_approval(approval_id)
+                    record = broker_resp.get("approval_authority") or {}
+                    return _envelope(
+                        {
+                            "success": True,
+                            "approval": redact_for_log(record),
+                            "approval_mode": "external_broker",
+                        }
+                    )
+                except SecureDeployError as exc:
+                    if exc.code == "approval_authority_missing":
+                        record = approval_service.get(approval_id)
+                    elif exc.code == "broker_unavailable":
+                        try:
+                            record = approval_service.get(approval_id)
+                        except SecureDeployError as local_exc:
+                            if local_exc.code == "not_found":
+                                raise exc
+                            raise
+                    else:
+                        raise
+                return _envelope(
+                    {
+                        "success": True,
+                        "approval": redact_for_log(record),
+                        "approval_mode": "legacy_local",
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 return _handle(exc)
 
@@ -188,8 +215,43 @@ def create_secure_deploy_resources(
                 require_secure_deploy_access()
                 data = _parse_json()
                 _require_step_up(data)
+
+                # Broker-owned v2 approvals are authoritative in the root ledger.
+                # Revocation therefore goes to that ledger first. A compromised
+                # Extras process can at worst revoke authority (availability loss);
+                # it cannot create or reactivate an approval.
+                try:
+                    broker_resp = broker_client.revoke_approval(approval_id)
+                    record = broker_resp.get("approval_authority") or {}
+                    return _envelope(
+                        {
+                            "success": True,
+                            "revocation_complete": True,
+                            "approval": redact_for_log(record),
+                            "approval_mode": "external_broker",
+                            "broker_revocation": {"status": record.get("status")},
+                        }
+                    )
+                except SecureDeployError as exc:
+                    if exc.code == "approval_authority_missing":
+                        current = approval_service.get(approval_id)
+                    elif exc.code == "broker_unavailable":
+                        # Preserve pre-v2 behavior for approvals already present
+                        # in the legacy local store. If this ID is not local,
+                        # keep the broker outage visible because a v2 approval
+                        # cannot be safely revoked without the root authority.
+                        try:
+                            current = approval_service.get(approval_id)
+                        except SecureDeployError as local_exc:
+                            if local_exc.code == "not_found":
+                                raise exc
+                            raise
+                    else:
+                        raise
+
+                # Legacy v1 approvals remain local metadata. Preserve the old
+                # canary-admission revocation behavior only for those records.
                 actor = get_actor()
-                current = approval_service.get(approval_id)
                 bundle_sha = current.get("canary_admission_bundle_sha256")
                 broker_revocation = None
                 if isinstance(bundle_sha, str) and bundle_sha:
@@ -213,6 +275,7 @@ def create_secure_deploy_resources(
                                 "success": True,
                                 "revocation_complete": False,
                                 "approval": redact_for_log(pending),
+                                "approval_mode": "legacy_local",
                                 "local_revocation": {"status": pending.get("status")},
                                 "broker_revocation": {
                                     "status": "pending",
@@ -233,6 +296,7 @@ def create_secure_deploy_resources(
                         "success": True,
                         "revocation_complete": True,
                         "approval": redact_for_log(record),
+                        "approval_mode": "legacy_local",
                         "local_revocation": {"status": record.get("status")},
                         "broker_revocation": broker_revocation,
                     }
@@ -250,13 +314,9 @@ def create_secure_deploy_resources(
                     raise SecureDeployError("invalid_json", "approval_id required", 400)
                 stored = service.get_plan(plan_id)
                 plan = stored.get("plan") or {}
-                approval = approval_service.get(approval_id)
-                if approval.get("plan_id") != plan_id:
-                    raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
-                if approval.get("status") != "approved":
-                    raise ValidationFailedError("approval not active", code="approval_status")
-                # Dry-run does not consume approval.
-                resp = broker_client.dry_run(plan, approval)
+                # Client-side/local approval state is not authoritative. The broker
+                # resolves approval_id from its own root-owned authority ledger.
+                resp = broker_client.dry_run(plan, approval_id)
                 verification = resp.get("verification") or {}
                 summary = {
                     "status": verification.get("status"),
@@ -271,14 +331,6 @@ def create_secure_deploy_resources(
                         for s in (verification.get("stages") or [])
                     ],
                 }
-                bundle_sha = verification.get("canary_admission_bundle_sha256")
-                if isinstance(bundle_sha, str):
-                    approval_service.bind_canary_admission_bundle(
-                        approval_id,
-                        plan_id=plan_id,
-                        plan_sha256=str(plan.get("plan_sha256") or ""),
-                        admission_bundle_sha256=bundle_sha,
-                    )
                 return _envelope({"success": True, "verification": summary})
             except Exception as exc:  # noqa: BLE001
                 return _handle(exc)
@@ -296,15 +348,6 @@ def create_secure_deploy_resources(
                     raise SecureDeployError("invalid_json", "admission_bundle_sha256 required", 400)
                 stored = service.get_plan(plan_id)
                 plan = stored.get("plan") or {}
-                approval = approval_service.get(approval_id)
-                if approval.get("plan_id") != plan_id:
-                    raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
-                if approval.get("plan_sha256") != plan.get("plan_sha256"):
-                    raise ValidationFailedError("approval hash mismatch", code="approval_plan_mismatch")
-                if approval.get("actor") != get_actor():
-                    raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
-                if approval.get("status") != "approved":
-                    raise ValidationFailedError("approval not active", code="approval_status")
                 resp = broker_client.admit_canary_execution(
                     plan_id=plan_id,
                     plan_sha256=str(plan.get("plan_sha256") or ""),
@@ -325,15 +368,6 @@ def create_secure_deploy_resources(
                     raise SecureDeployError("invalid_json", "approval_id required", 400)
                 stored = service.get_plan(plan_id)
                 plan = stored.get("plan") or {}
-                approval = approval_service.get(approval_id)
-                if approval.get("plan_id") != plan_id:
-                    raise ValidationFailedError("approval not bound to plan", code="approval_plan_mismatch")
-                if approval.get("plan_sha256") != plan.get("plan_sha256"):
-                    raise ValidationFailedError("approval hash mismatch", code="approval_plan_mismatch")
-                if approval.get("actor") != get_actor():
-                    raise ForbiddenError(code="actor_mismatch", message="actor mismatch")
-                if approval.get("status") != "approved":
-                    raise ValidationFailedError("approval not active", code="approval_status")
                 resp = broker_client.deploy_canary(
                     plan_id=plan_id,
                     plan_sha256=str(plan.get("plan_sha256") or ""),
