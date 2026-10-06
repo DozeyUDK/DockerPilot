@@ -188,9 +188,17 @@ def create_secure_deploy_resources(
                         }
                     )
                 except SecureDeployError as exc:
-                    if exc.code != "approval_authority_missing":
+                    if exc.code == "approval_authority_missing":
+                        record = approval_service.get(approval_id)
+                    elif exc.code == "broker_unavailable":
+                        try:
+                            record = approval_service.get(approval_id)
+                        except SecureDeployError as local_exc:
+                            if local_exc.code == "not_found":
+                                raise exc
+                            raise
+                    else:
                         raise
-                record = approval_service.get(approval_id)
                 return _envelope(
                     {
                         "success": True,
@@ -225,13 +233,25 @@ def create_secure_deploy_resources(
                         }
                     )
                 except SecureDeployError as exc:
-                    if exc.code != "approval_authority_missing":
+                    if exc.code == "approval_authority_missing":
+                        current = approval_service.get(approval_id)
+                    elif exc.code == "broker_unavailable":
+                        # Preserve pre-v2 behavior for approvals already present
+                        # in the legacy local store. If this ID is not local,
+                        # keep the broker outage visible because a v2 approval
+                        # cannot be safely revoked without the root authority.
+                        try:
+                            current = approval_service.get(approval_id)
+                        except SecureDeployError as local_exc:
+                            if local_exc.code == "not_found":
+                                raise exc
+                            raise
+                    else:
                         raise
 
                 # Legacy v1 approvals remain local metadata. Preserve the old
                 # canary-admission revocation behavior only for those records.
                 actor = get_actor()
-                current = approval_service.get(approval_id)
                 bundle_sha = current.get("canary_admission_bundle_sha256")
                 broker_revocation = None
                 if isinstance(bundle_sha, str) and bundle_sha:
