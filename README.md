@@ -646,6 +646,7 @@ Detailed documentation for specific features:
 - **[Health Checks Configuration](docs/guides/HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
 - **[DockerPilotExtras Web Panel](DockerPilotExtras/README.md)** - CI/CD workbench, environments, status, storage, and API reference
 - **[MCP Integration](docs/mcp.md)** - Connecting DockerPilot to AI assistants and stdio tools
+- **[Release Process](docs/RELEASING.md)** - Version synchronization, CI gates, tagging and UAT release policy
 - **[Secure Deploy Threat Model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md)** - Security boundaries for privileged deployment operations
 - **[Network Searcher Tool](tools/searcher/README.md)** - Optional packet sniffer helper
 
