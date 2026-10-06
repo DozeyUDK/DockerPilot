@@ -13,6 +13,12 @@ structured findings (DG001–DG026). It is used by:
 It does **not** talk to the Docker daemon, open `docker.sock`, call the Docker
 API, apply firewall rules, or materialize secrets.
 
+## Versioning
+
+DozeyGuard follows the DockerPilot monorepo release version. The current release
+train is `0.9.0-pre.3`. Its machine-readable JSON `contract_version` is
+versioned independently and remains contract v1 unless the report schema changes.
+
 ## Contract
 
 - **Input:** Compose-JSON (or Compose YAML where supported by the CLI) via
