@@ -1,6 +1,11 @@
 """Tests for DockerPilot CLI bootstrap behavior."""
 
+import runpy
+
+import pytest
+
 import dockerpilot.main as main_module
+import dockerpilot.pilot as pilot_module
 
 
 def test_help_does_not_initialize_dockerpilot(monkeypatch):
@@ -67,3 +72,26 @@ def test_permission_error_from_command_execution_is_also_clean(monkeypatch, caps
     assert f"Path: {path}" in captured.err
     assert "Permission denied" in captured.err
     assert "Traceback" not in captured.err
+
+
+
+def test_python_m_dockerpilot_main_propagates_permission_exit(monkeypatch):
+    class FailingPilot:
+        def __init__(self, *args, **kwargs):
+            raise PermissionError(13, "Permission denied", "/tmp/docker_pilot.log")
+
+    monkeypatch.setattr(pilot_module, "DockerPilotEnhanced", FailingPilot)
+
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("dockerpilot.main", run_name="__main__")
+
+    assert exc_info.value.code == 1
+
+
+def test_python_m_dockerpilot_propagates_main_return(monkeypatch):
+    monkeypatch.setattr(main_module, "main", lambda argv=None: 1)
+
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("dockerpilot", run_name="__main__")
+
+    assert exc_info.value.code == 1
