@@ -21,6 +21,8 @@ SUPPORTED_OPERATIONS = frozenset(
         "capabilities",
         "verify_plan",
         "create_approval_challenge",
+        "get_approval",
+        "revoke_approval",
         "dry_run",
         "admit_canary_execution",
         "revoke_canary_admission",
@@ -190,6 +192,13 @@ def _validate_operation_shape(doc: Dict[str, Any]) -> None:
         if not isinstance(doc.get("plan"), dict):
             raise ProtocolError("plan_required", "plan object required")
         for forbidden in ("approval", "approval_id", "canary_execution_id", "template_id", "admission_bundle_sha256"):
+            if forbidden in doc:
+                raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for {op}")
+        return
+    if op in {"get_approval", "revoke_approval"}:
+        if not isinstance(doc.get("approval_id"), str):
+            raise ProtocolError("approval_required", "approval_id required")
+        for forbidden in ("plan", "approval", "plan_id", "plan_sha256", "canary_execution_id", "template_id", "admission_bundle_sha256"):
             if forbidden in doc:
                 raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for {op}")
         return
