@@ -99,6 +99,59 @@ def test_run_sudo_command_refuses_missing_password():
         backup_archive.run_sudo_command(host, ["true"])
 
 
+def test_run_sudo_command_places_stdin_option_before_command_and_keeps_password_out_of_argv(monkeypatch):
+    seen = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **_kwargs):
+            seen["argv"] = argv
+
+        def communicate(self, input=None, timeout=None):
+            seen["input"] = input
+            seen["timeout"] = timeout
+            return b"", b""
+
+        def kill(self):
+            seen["killed"] = True
+
+    monkeypatch.setattr(backup_archive.subprocess, "Popen", FakeProcess)
+
+    host = SimpleNamespace(
+        _get_sudo_password=lambda: "super-secret",
+        logger=_Logger(),
+    )
+
+    result = backup_archive.run_sudo_command(
+        host,
+        ["chown", "1000:1000", "/tmp/archive.tar.gz"],
+        timeout=7,
+    )
+
+    assert seen["argv"] == [
+        "sudo",
+        "-S",
+        "--",
+        "chown",
+        "1000:1000",
+        "/tmp/archive.tar.gz",
+    ]
+    assert seen["input"] == b"super-secret\n"
+    assert seen["timeout"] == 7
+    assert all("super-secret" not in str(arg) for arg in seen["argv"])
+    assert result.args == seen["argv"]
+    assert result.returncode == 0
+
+
+def test_backup_archive_uses_shared_sudo_argv_builder_for_both_sudo_paths():
+    source = Path(backup_archive.__file__).read_text(encoding="utf-8")
+
+    assert source.count("_build_sudo_stdin_command(") >= 3
+    assert "sudo_cmd + ['-S']" not in source
+    assert "sudo_cmd = ['sudo', '-S'] + tar_cmd" not in source
+
+
 def test_backup_restore_facade_delegates_archive_runtime(monkeypatch, tmp_path):
     host = BackupRestoreMixin.__new__(BackupRestoreMixin)
     calls = []
