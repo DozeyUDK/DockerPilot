@@ -6,6 +6,21 @@ from .cli.parser import build_cli_parser
 from .pilot import DockerPilotEnhanced, LogLevel
 
 
+def _render_permission_error(exc: PermissionError) -> str:
+    """Render expected filesystem permission failures without a Python traceback."""
+    path = exc.filename or exc.filename2 or "<unknown>"
+    reason = exc.strerror or str(exc) or "Permission denied"
+    errno_detail = f" (errno {exc.errno})" if exc.errno is not None else ""
+    return "\n".join(
+        [
+            "DockerPilot could not access a required path.",
+            f"  Path: {path}",
+            f"  Reason: {reason}{errno_detail}",
+            "  Hint: check the owner/group and read/write permissions for the current user.",
+        ]
+    )
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
 
@@ -25,8 +40,12 @@ def main(argv=None):
     except Exception:
         log_level_enum = LogLevel.INFO
 
-    pilot = DockerPilotEnhanced(config_file=known_args.config, log_level=log_level_enum)
-    pilot.run_cli()
+    try:
+        pilot = DockerPilotEnhanced(config_file=known_args.config, log_level=log_level_enum)
+        pilot.run_cli()
+    except PermissionError as exc:
+        print(_render_permission_error(exc), file=sys.stderr)
+        return 1
 
 if __name__ == "__main__":
     main()
