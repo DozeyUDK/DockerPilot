@@ -138,28 +138,6 @@
         .error-message.show {
             display: block;
         }
-        .sudo-prompt {
-            padding: 15px;
-            margin: 10px;
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            border-radius: 4px;
-            display: none;
-        }
-        .sudo-prompt.show {
-            display: block;
-        }
-        .sudo-prompt input[type="password"] {
-            width: 100%;
-            padding: 8px;
-            margin: 10px 0;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-        }
-        .sudo-prompt button {
-            margin-right: 5px;
-        }
     </style>
 </head>
 <body>
@@ -191,18 +169,6 @@
             </div>
         </div>
         <div class="error-message" id="errorMessage"></div>
-        <div class="sudo-prompt" id="sudoPrompt">
-            <strong>🔐 Sudo Password Required</strong>
-            <p>This operation requires root privileges. Enter your sudo password:</p>
-            <input type="password" id="sudoPassword" placeholder="Enter sudo password" autocomplete="off">
-            <div>
-                <button class="btn-primary" onclick="submitSudoPassword()">Submit</button>
-                <button class="btn-danger" onclick="cancelSudoPassword()">Cancel</button>
-            </div>
-            <small style="color: #6c757d; margin-top: 10px; display: block;">
-                Password is transmitted securely and only used to elevate privileges. It is not stored or logged.
-            </small>
-        </div>
         <div class="controls">
             <button class="btn-primary" onclick="startSniffing()">Start</button>
             <button class="btn-danger" onclick="stopSniffing()">Stop</button>
