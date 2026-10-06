@@ -507,11 +507,15 @@ pre {
 }
 
 .status-cli-prompt {
-  color: #4ec9b0;
+  color: #0f766e;
   font-family: Consolas, Monaco, "Courier New", monospace;
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+:root[data-theme="dark"] .status-cli-prompt {
+  color: #4ec9b0;
 }
 
 @media (max-width: 768px) {
