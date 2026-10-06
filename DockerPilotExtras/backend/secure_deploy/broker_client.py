@@ -21,7 +21,7 @@ from .store import new_id
 DEFAULT_TIMEOUT = 15.0
 CANARY_EXECUTION_TIMEOUT = 150.0
 CLIENT_NAME = "dockerpilot-extras"
-CLIENT_VERSION = os.environ.get("DOCKERPILOT_EXTRAS_VERSION", "0.9.0-pre.2")
+CLIENT_VERSION = os.environ.get("DOCKERPILOT_EXTRAS_VERSION", "0.9.0-pre.3")
 ALLOWED_REQUEST_FIELDS = frozenset(
     {
         "plan_id",
