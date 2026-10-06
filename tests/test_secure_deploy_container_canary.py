@@ -291,7 +291,7 @@ def test_request_schema_accepts_only_closed_canary_operations(tmp_path):
     base = {
         "protocol_version": mods.PROTOCOL_VERSION,
         "request_id": "breq_canary001",
-        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
     }
     mods.validate_request(
         {
@@ -479,7 +479,7 @@ def test_broker_dry_run_stages_canary_admission_bundle_for_closed_admit(tmp_path
     base = {
         "protocol_version": 1,
         "request_id": "breq_stage_bundle",
-        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
     }
 
     dry = server._dispatch(
@@ -543,7 +543,7 @@ def test_failed_dry_run_creates_no_bundle(tmp_path):
                 "protocol_version": 1,
                 "request_id": "breq_bad_dry",
                 "operation": "dry_run",
-                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+                "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
                 "plan": bad_plan,
                 "approval_id": broker_approval["approval_id"],
             }
@@ -574,7 +574,7 @@ def test_identical_broker_owned_dry_run_is_idempotent_and_forged_id_rejected(tmp
         "protocol_version": 1,
         "request_id": "breq_same_dry",
         "operation": "dry_run",
-        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+        "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
         "plan": fix.plan,
         "approval_id": broker_approval["approval_id"],
     }
@@ -1206,7 +1206,7 @@ def test_broker_server_dispatches_closed_canary_operations_and_legacy_regression
         plan_firewall_actions=fix.firewall,
         canary_manager=FakeManager(),
     )
-    base = {"protocol_version": 1, "request_id": "breq_dispatch1", "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"}}
+    base = {"protocol_version": 1, "request_id": "breq_dispatch1", "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"}}
     for resp in (
         server._dispatch({**base, "operation": "ping"}),
         server._dispatch({**base, "operation": "capabilities"}),
@@ -1247,7 +1247,7 @@ def test_old_preview_allowed_operations_do_not_enable_canary_or_revoke(tmp_path)
             "protocol_version": 1,
             "request_id": "breq_old_caps1",
             "operation": "capabilities",
-            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.2"},
+            "client": {"name": "dockerpilot-extras", "version": "0.9.0-pre.3"},
         }
     )["capabilities"]
     assert caps["apply_supported"] is False
