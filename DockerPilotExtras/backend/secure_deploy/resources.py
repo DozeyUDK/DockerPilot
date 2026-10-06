@@ -177,8 +177,27 @@ def create_secure_deploy_resources(
         def get(self, approval_id: str):
             try:
                 require_secure_deploy_access()
+                try:
+                    broker_resp = broker_client.get_approval(approval_id)
+                    record = broker_resp.get("approval_authority") or {}
+                    return _envelope(
+                        {
+                            "success": True,
+                            "approval": redact_for_log(record),
+                            "approval_mode": "external_broker",
+                        }
+                    )
+                except SecureDeployError as exc:
+                    if exc.code != "approval_authority_missing":
+                        raise
                 record = approval_service.get(approval_id)
-                return _envelope({"success": True, "approval": redact_for_log(record)})
+                return _envelope(
+                    {
+                        "success": True,
+                        "approval": redact_for_log(record),
+                        "approval_mode": "legacy_local",
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 return _handle(exc)
 
@@ -188,6 +207,29 @@ def create_secure_deploy_resources(
                 require_secure_deploy_access()
                 data = _parse_json()
                 _require_step_up(data)
+
+                # Broker-owned v2 approvals are authoritative in the root ledger.
+                # Revocation therefore goes to that ledger first. A compromised
+                # Extras process can at worst revoke authority (availability loss);
+                # it cannot create or reactivate an approval.
+                try:
+                    broker_resp = broker_client.revoke_approval(approval_id)
+                    record = broker_resp.get("approval_authority") or {}
+                    return _envelope(
+                        {
+                            "success": True,
+                            "revocation_complete": True,
+                            "approval": redact_for_log(record),
+                            "approval_mode": "external_broker",
+                            "broker_revocation": {"status": record.get("status")},
+                        }
+                    )
+                except SecureDeployError as exc:
+                    if exc.code != "approval_authority_missing":
+                        raise
+
+                # Legacy v1 approvals remain local metadata. Preserve the old
+                # canary-admission revocation behavior only for those records.
                 actor = get_actor()
                 current = approval_service.get(approval_id)
                 bundle_sha = current.get("canary_admission_bundle_sha256")
@@ -213,6 +255,7 @@ def create_secure_deploy_resources(
                                 "success": True,
                                 "revocation_complete": False,
                                 "approval": redact_for_log(pending),
+                                "approval_mode": "legacy_local",
                                 "local_revocation": {"status": pending.get("status")},
                                 "broker_revocation": {
                                     "status": "pending",
@@ -233,6 +276,7 @@ def create_secure_deploy_resources(
                         "success": True,
                         "revocation_complete": True,
                         "approval": redact_for_log(record),
+                        "approval_mode": "legacy_local",
                         "local_revocation": {"status": record.get("status")},
                         "broker_revocation": broker_revocation,
                     }
