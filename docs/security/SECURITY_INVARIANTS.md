@@ -52,18 +52,20 @@ For the corrected plan-hash semantics in PR #59, plan-level `expires_at` is incl
 
 If the product claims that human approval remains meaningful after AI/control-plane compromise, the broker MUST be able to verify approval provenance using trust material unavailable to the compromised control plane.
 
-Current status on `main`: **target invariant, not yet satisfied against Extras RCE**.
+Current status on `main`: **satisfied for the documented local approver threat
+model after PR #63**. The broker-owned v2 approval path no longer treats
+Extras-owned approval JSON as authority.
 
-PR #62 introduces the broker-owned approval authority core: one-shot challenges,
+PR #62 introduced the broker-owned approval authority core: one-shot challenges,
 root-broker state, explicit approver UID allowlisting, plan/hash binding and TTL
-enforcement. It also codifies that a client-fabricated approval object is not
-evidence of broker authority.
+enforcement. PR #63 completed the live path with a separate root-only approver
+socket, Linux `SO_PEERCRED` identity, broker-owned approval lookup/revocation and
+`approval_id`-only authorization for live dry-run/admit/deploy.
 
-PR #63 is the live-enforcement candidate: a separate root-only approver socket
-derives identity from `SO_PEERCRED`; `dry_run` accepts only an `approval_id`
-and loads the authoritative v2 record from broker-owned state. A client-supplied
-approval JSON is rejected. Until #63 is green, reviewed and merged, INV-09
-remains open on `main`. See `APPROVAL_PROVENANCE_V1.md`.
+This property is intentionally scoped: it protects against compromise of the
+`dockerpilot-extras` UID, not compromise of root or an allowlisted approver UID,
+and it does not claim the compromised Extras UI is an independent trustworthy
+plan-display channel. See `APPROVAL_PROVENANCE_V1.md`.
 
 ### INV-10 — Approval is bounded and replay-resistant
 
@@ -118,9 +120,9 @@ The system SHOULD emit bounded records containing plan hash, policy result ident
 The original audit snapshot was taken at `main@8668e9945a76265c19f3c981304efc498911a08d`. Subsequent focused remediation PRs should be read together with that snapshot rather than treating the historical status bullets as immutable current state.
 
 - INV-05/06/07 are strongly represented in the fixed broker canary path.
-- INV-04 plan-expiry gap is addressed by PR #59 by including plan-level `expires_at` in `plan_sha256`; AT-08B must remain green before this status is considered enforced on `main`.
-- INV-08/10 are substantially implemented for the current broker admission ledger, subject to approval provenance limitations described by INV-09.
-- INV-09 is not yet satisfied on `main` against arbitrary Extras-process compromise. PR #62 adds the authority primitive; PR #63 is the live-enforcement candidate with root-only approver socket, `SO_PEERCRED` provenance and broker-owned approval lookup.
+- INV-04 plan-expiry identity is enforced by PR #59, and the live canary path also rechecks the immutable plan expiry immediately before Docker execution. AT-08B and the deploy-time expiry regression are permanent gates.
+- INV-08/10 are substantially implemented for the current broker admission ledger, including bounded approval TTLs, revocation and replay controls.
+- INV-09 is enforced on `main` for the documented Extras-RCE threat model after PR #63: the root-owned approver channel uses `SO_PEERCRED`, live authorization accepts `approval_id` only, and broker-owned v2 records remain authoritative.
 - INV-01 is addressed by PR #57 for the explicit agent-safe profile; repository-wide direct mutation remains available outside that profile by design.
 - INV-02 is violated as a *human-approval interpretation* if MCP `confirm=true` is described as human confirmation; it is acceptable only as a caller acknowledgement flag.
 - INV-03 depends on deployment profile; direct MCP Docker access means it is not a universal repository-wide invariant today.
