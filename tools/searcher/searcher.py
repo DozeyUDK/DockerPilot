@@ -430,7 +430,8 @@ Security model:
   The Flask/Socket.IO process stays unprivileged and never accepts a sudo
   password. Packet access is delegated to dumpcap, which must be configured
   by the operating system for non-root capture.
-        """    )
+        """
+    )
     
     parser.add_argument(
         '-i', '--interface',
