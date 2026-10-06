@@ -25,13 +25,26 @@ This is a static code audit. It is not yet a host-level penetration test of the 
 
 ## Post-audit remediation status
 
-The finding sections below are preserved as the evidence recorded at the original audit base. Current implementation status should be read together with the focused remediation PRs:
+The finding sections below are preserved as evidence from the original audit base; several findings have since been remediated on `main`. Current security claims must be scoped to the explicit agent-safe profile and the fixed broker canary contract.
 
-- **F-01 / INV-01:** agent-safe mutation isolation merged in PR #57 (`ace7b3498faa6749185d03a00e4d76f051de6e2b`).
-- **F-06 / INV-04:** plan-level `expires_at` is bound into `plan_sha256` after PR #59 (`345f646b0abe0b83a38c57046f393b8d5fbae9f3`).
+- **F-01 / INV-01:** agent-safe mutation isolation merged in PR #57 (`ace7b3498faa6749185d03a00e4d76f051de6e2b`). Direct mutation remains available outside the agent-safe profile by design.
+- **F-06 / INV-04:** plan-level `expires_at` is bound into `plan_sha256` after PR #59 (`345f646b0abe0b83a38c57046f393b8d5fbae9f3`), and the live canary path now rechecks immutable plan expiry immediately before Docker execution.
 - **F-07 / INV-11:** verified open-file-descriptor pinning for the broker-owned DozeyGuard binary/policy and the AT-22 atomic-replacement regression merged in PR #60 (`c76bbf995a4eaa1c94fe29975484a6f5af5bce3c`).
-- **F-04 / AT-23:** PR #61 adds root-owner/mode/parent-chain checks and same-FD parsing for the root broker runtime config. This remediation is effective only after #61 merges and its CI/AT-23 regressions remain green.
-- **F-02 / INV-09:** approval provenance under arbitrary Extras RCE remains unresolved.
+- **F-04 / AT-23:** root-owner/mode/parent-chain checks and same-FD parsing for root broker runtime config merged in PR #61.
+- **F-02 / INV-09:** broker-owned approval authority core merged in PR #62 and live approver-channel enforcement merged in PR #63. Client-supplied approval JSON is no longer authority for v2; `approval_id` resolves broker-owned state with `SO_PEERCRED` approver provenance.
+
+## Current main conclusion
+
+As of the PR #63 merge on `main`, the original audit blockers F-01, F-02, F-04,
+F-06 and F-07 have focused remediations with permanent regression coverage.
+
+This does **not** turn the whole repository into a universal production-safe
+mutation plane. The stronger claims remain profile- and capability-dependent:
+the root broker intentionally has Docker-socket authority, direct DockerPilot
+mutation paths still exist outside agent-safe mode, the trusted approval model
+does not survive compromise of root or an allowlisted approver UID, and the
+reviewed live execution grammar is still the fixed canary contract rather than
+an arbitrary application deploy API.
 
 ## Trust domains found in code
 
