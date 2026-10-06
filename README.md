@@ -641,8 +641,7 @@ Detailed documentation for specific features:
 - **[Multiple Containers Operations](docs/multi-container.md)** - Managing multiple containers at once
 - **[Environment Promotion Guide](docs/guides/GRAFANA_PROMOTION_GUIDE.md)** - Promoting containers between environments
 - **[Blue-Green Data Migration](docs/guides/blue-green-data-migration.md)** - Data migration during deployments
-- **[Sudo Setup](docs/guides/SUDO_SETUP.md)** - Configuring permissions for backups
-- **[Sudo Passwordless Setup](docs/guides/SUDO_PASSWORDLESS_SETUP.md)** - Running backup flows without interactive sudo
+- **[Sudo and Backup Permissions](docs/guides/SUDO_SETUP.md)** - Docker access, privileged bind-mount fallback and scoped elevation
 - **[Health Checks Configuration](docs/guides/HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
 - **[DockerPilotExtras Web Panel](DockerPilotExtras/README.md)** - CI/CD workbench, environments, status, storage, and API reference
 - **[MCP Integration](docs/mcp.md)** - Connecting DockerPilot to AI assistants and stdio tools

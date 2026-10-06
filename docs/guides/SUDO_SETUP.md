@@ -1,106 +1,91 @@
-# DockerPilot - Sudo Configuration for Backups
+# DockerPilot - Sudo and Backup Permissions
 
-## Problem
-DockerPilot during container data backup may encounter permission issues with:
-- Docker volumes (`/var/lib/docker/volumes/`)
-- System bind mounts (`/root/`, `/var/lib/docker/`)
-- Files owned by other users
+DockerPilot does not require a global passwordless-sudo configuration.
 
-## Solution
+The old `setup_passwordless_sudo.sh` helper and broad `NOPASSWD` rules are no
+longer part of the supported setup. In particular, do not grant DockerPilot a
+generic passwordless `docker run`, `tar`, or `chown` rule.
 
-### 1. Docker Volumes Backup (WITHOUT SUDO!)
+## Docker volumes
 
-DockerPilot uses **Docker API** to backup volumes, which **does not require sudo**:
+Named Docker volumes are backed up through a temporary helper container:
 
 ```bash
 docker run --rm \
   -v volume_name:/volume:ro \
   -v /backup_dir:/backup \
   alpine:latest \
-  sh -c 'tar -czf /backup/file.tar.gz -C /volume . && chown $(id -u):$(id -g) /backup/file.tar.gz'
+  sh -c 'tar -czf /backup/file.tar.gz -C /volume .'
 ```
 
-**Benefits:**
-- ✅ Does not require sudo
-- ✅ Container runs as root and has access to data
-- ✅ Automatic backup file ownership fix
-- ✅ Safe (volume mounted as read-only)
+This path does **not** invoke `sudo`. It does require access to the Docker
+daemon, which is a privileged capability in its own right.
 
-### 2. Bind Mounts Backup (OPTIONALLY SUDO)
+Docker daemon access must not be added to the agent-safe DockerPilotExtras
+profile merely to enable backups. The agent-safe profile intentionally keeps
+direct Docker authority outside the AI-facing process.
 
-For bind mounts requiring permissions, DockerPilot automatically uses sudo:
+## Bind mounts
 
-```bash
-sudo tar -czf /backup/file.tar.gz -C /source/parent source_name
-sudo chown $(id -u):$(id -g) /backup/file.tar.gz
-```
+Normal readable bind mounts are archived without sudo.
 
-### 3. Sudo Configuration (Optional)
+A bind mount may require elevation when its source is under a privileged host
+path such as:
 
-If you want DockerPilot to work without asking for sudo password, add to `/etc/sudoers.d/dockerpilot`:
+- `/root/...`
+- `/var/lib/docker/...`
+- another path the current process cannot read
 
-```bash
-# Create configuration file
-sudo visudo -f /etc/sudoers.d/dockerpilot
-```
+For this fallback DockerPilot uses `tar` with a scoped sudo credential for the
+current operation. If no sudo credential is available, the privileged fallback
+fails instead of relying on a persistent passwordless sudo rule.
 
-Add the following lines (replace `username` with your username):
+After an elevated archive is created, DockerPilot may use `chown` to return the
+backup file to the invoking user's UID/GID.
 
-```
-# DockerPilot - backup operations
-username ALL=(root) NOPASSWD: /bin/tar
-username ALL=(root) NOPASSWD: /bin/chown
-```
+## DockerPilotExtras elevation
 
-**NOTE:** This is optional! DockerPilot will work without this, but may ask for sudo password when backing up some bind mounts.
+DockerPilotExtras does not persist sudo passwords in the browser session.
+Privileged legacy operations use short-lived, one-time server-side elevation
+credentials scoped to the current execution.
 
-### 4. Alternative - Add User to Docker Group
+Secure Deploy is separate from this legacy backup fallback. The
+`dockerpilot-extras` service account in the agent-safe/Secure Deploy profile
+must not receive general sudo or Docker-socket access.
 
-If you don't have Docker access without sudo yet:
+## Recommended setup
 
-```bash
-sudo usermod -aG docker $USER
-newgrp docker
-```
+For a normal local CLI installation:
 
-After this, log out and log back in or run `newgrp docker`.
+1. Give the operator the Docker access that is intentionally required for the
+   local DockerPilot workflow.
+2. Keep backup destinations writable by that operator.
+3. Prefer named Docker volumes or readable bind mounts where possible.
+4. For an exceptional privileged bind mount, provide elevation only for that
+   execution or perform the backup manually as an administrator.
+5. Do not create a broad `/etc/sudoers.d/dockerpilot` `NOPASSWD` policy.
 
 ## Testing
 
-Test volume backup without sudo:
+A named volume can be tested without sudo:
 
 ```bash
-# Test backup of minikube volume
 docker run --rm \
   -v minikube:/volume:ro \
   -v /tmp:/backup \
   alpine:latest \
-  sh -c 'tar -czf /backup/test.tar.gz -C /volume . && chown $(id -u):$(id -g) /backup/test.tar.gz'
+  sh -c 'tar -czf /backup/dockerpilot-test.tar.gz -C /volume .'
 
-# Check ownership
-ls -lh /tmp/test.tar.gz
-
-# Remove test
-rm /tmp/test.tar.gz
+ls -lh /tmp/dockerpilot-test.tar.gz
+rm /tmp/dockerpilot-test.tar.gz
 ```
 
-## Summary
+If `docker run` itself is denied, fix the intended Docker access model rather
+than wrapping Docker in a passwordless sudo rule.
 
-- **Docker volumes**: Backup uses `docker run` - **DOES NOT REQUIRE SUDO**
-- **Bind mounts**: 
-  - Regular paths: backup without sudo
-  - Privileged paths: backup with sudo (may ask for password)
-- **System bind mounts** (`/lib/modules`, `/proc`, etc.): **AUTOMATICALLY SKIPPED**
-- **Backup errors**: Do not interrupt deployment - continue with warning
+## Security note
 
-## Security
-
-DockerPilot uses sudo **only** for:
-- `tar` operations (creating archive)
-- `chown` operations (fixing ownership)
-
-Sudo is **NOT** used for:
-- Docker API access
-- Creating/removing containers
-- Image management
-- Docker volumes backup (uses `docker run`)
+Membership in the `docker` group and unrestricted access to `docker.sock`
+are effectively host-privileged capabilities. They are acceptable only for a
+trusted local operator profile where that authority is intended; they are not
+part of the agent-safe threat model.
