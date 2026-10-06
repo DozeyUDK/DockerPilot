@@ -46,3 +46,24 @@ def test_searcher_frontend_has_no_sudo_credential_flow():
     ):
         assert marker not in html
         assert marker not in javascript
+
+
+def test_searcher_leaves_default_interface_selection_to_dumpcap():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+
+    assert 'interface or "any"' not in source
+    assert 'command.extend(["-i", interface.strip()])' in source
+    assert "if interface and interface.strip():" in source
+    assert "default: dumpcap-selected interface" in source
+
+
+def test_searcher_stop_race_is_guarded_before_dumpcap_popen():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+
+    assert "self.capture_lock = threading.Lock()" in source
+    assert "self.capture_generation = 0" in source
+    assert "generation != self.capture_generation or not self.sniffing" in source
+    assert source.index("generation != self.capture_generation or not self.sniffing") < source.index(
+        "process = subprocess.Popen("
+    )
+    assert "self.capture_generation += 1" in source
