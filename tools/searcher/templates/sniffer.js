@@ -16,48 +16,23 @@ socket.on('packet', (data) => {
 socket.on('status', (data) => {
     const statusEl = document.getElementById('status');
     const errorEl = document.getElementById('errorMessage');
-    const sudoPrompt = document.getElementById('sudoPrompt');
-    
+
     if (data.status === 'started') {
         statusEl.textContent = 'Sniffing...';
         statusEl.className = 'status active';
         isSniffing = true;
         errorEl.classList.remove('show');
-        sudoPrompt.classList.remove('show');
     } else if (data.status === 'error') {
         statusEl.textContent = 'Error';
         statusEl.className = 'status error';
         isSniffing = false;
         errorEl.textContent = 'Error: ' + (data.message || 'Unknown error');
-        if (data.message && data.message.includes('Operation not permitted')) {
-            errorEl.textContent = 'Error: Operation not permitted. Root privileges required.';
-            sudoPrompt.classList.add('show');
-        } else {
-            sudoPrompt.classList.remove('show');
-        }
         errorEl.classList.add('show');
-    } else if (data.status === 'sudo_required') {
-        sudoPrompt.classList.add('show');
-        document.getElementById('sudoPassword').focus();
-    } else if (data.status === 'sudo_success') {
-        sudoPrompt.classList.remove('show');
-        document.getElementById('sudoPassword').value = '';
-        // Automatically retry starting
-        setTimeout(() => {
-            socket.emit('start_sniffing');
-        }, 500);
-    } else if (data.status === 'sudo_failed') {
-        sudoPrompt.classList.add('show');
-        errorEl.textContent = 'Error: Invalid sudo password. Please try again.';
-        errorEl.classList.add('show');
-        document.getElementById('sudoPassword').value = '';
-        document.getElementById('sudoPassword').focus();
     } else {
         statusEl.textContent = 'Stopped';
         statusEl.className = 'status stopped';
         isSniffing = false;
         errorEl.classList.remove('show');
-        sudoPrompt.classList.remove('show');
     }
 });
 
@@ -66,7 +41,7 @@ function addPacket(data) {
     const list = document.getElementById('packetList');
     const item = document.createElement('div');
     item.className = 'packet-item';
-    
+
     const protocolClass = `protocol-${data.protocol.toLowerCase()}`;
     item.innerHTML = `
         <div class="packet-header">
@@ -75,14 +50,13 @@ function addPacket(data) {
         </div>
         <div>Size: ${data.size} bytes | ${data.details}</div>
     `;
-    
+
     list.insertBefore(item, list.firstChild);
-    
-    // Keep only last 1000 packets
+
     while (list.children.length > 1000) {
         list.removeChild(list.lastChild);
     }
-    
+
     document.getElementById('totalPackets').textContent = packetCount;
 }
 
@@ -120,7 +94,6 @@ function clearPackets() {
 function applyFilter() {
     const filter = document.getElementById('filterInput').value;
     if (isSniffing) {
-        // If sniffing, stop first, then restart with new filter
         socket.emit('stop_sniffing');
         setTimeout(() => {
             socket.emit('set_filter', { filter: filter });
@@ -132,30 +105,3 @@ function applyFilter() {
         socket.emit('set_filter', { filter: filter });
     }
 }
-
-function submitSudoPassword() {
-    const password = document.getElementById('sudoPassword').value;
-    if (!password) {
-        alert('Please enter your sudo password');
-        return;
-    }
-    socket.emit('sudo_password', { password: password });
-}
-
-function cancelSudoPassword() {
-    document.getElementById('sudoPassword').value = '';
-    document.getElementById('sudoPrompt').classList.remove('show');
-    socket.emit('cancel_sudo');
-}
-
-// Allow Enter key to submit password
-document.addEventListener('DOMContentLoaded', () => {
-    const passwordInput = document.getElementById('sudoPassword');
-    if (passwordInput) {
-        passwordInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                submitSudoPassword();
-            }
-        });
-    }
-});
