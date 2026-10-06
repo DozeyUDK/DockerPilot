@@ -1057,6 +1057,28 @@ class CanaryManager:
             expired["audit_id"] = audit_id
             self.ledger.replace(expired)
             raise VerificationError("approval_expired", "approval expired")
+        if self._record_plan_expired(record):
+            expired = dict(record)
+            expired["state"] = EXPIRED
+            expired["finished_at"] = _iso(self.now())
+            expired = self.ledger.replace(expired, expected_state=APPROVED)
+            if expired.get("state") != EXPIRED:
+                return self._result(expired, replay=True)
+            audit_id = self.ledger.append_audit(
+                {
+                    "event": "canary_plan_expired",
+                    "execution_id": expired["execution_id"],
+                    "plan_id": expired["plan_id"],
+                    "plan_sha256": expired["plan_sha256"],
+                    "approval_id": expired["approval_id"],
+                    "approval_nonce_hash": expired["approval_nonce_hash"],
+                    "admission_bundle_sha256": expired["admission_bundle_sha256"],
+                    "template_id": expired["template_id"],
+                }
+            )
+            expired["audit_id"] = audit_id
+            self.ledger.replace(expired)
+            raise VerificationError("plan_expired", "deployment plan expired")
         if not self.port_checker(self.policy.host, self.policy.port):
             raise VerificationError("canary_port_occupied", "canary localhost port is occupied")
         record = dict(record)
@@ -1174,6 +1196,49 @@ class CanaryManager:
         except VerificationError:
             return False
         return image.get("reference") == reference and image.get("digest") == digest
+
+    def _bound_plan_from_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        bundle_sha256 = str(record.get("admission_bundle_sha256") or "")
+        if not _SHA_RE.fullmatch(bundle_sha256):
+            raise VerificationError("canary_bundle_binding", "execution admission bundle hash invalid")
+        bundle = self.ledger.load_admission_bundle(bundle_sha256)
+        if (
+            bundle.get("template_id") != record.get("template_id")
+            or bundle.get("plan_id") != record.get("plan_id")
+            or bundle.get("plan_sha256") != record.get("plan_sha256")
+            or bundle.get("approval_id") != record.get("approval_id")
+        ):
+            raise VerificationError("canary_bundle_binding", "execution record does not match immutable admission bundle")
+
+        plan = bundle.get("plan")
+        approval = bundle.get("approval")
+        if not isinstance(plan, dict) or not isinstance(approval, dict):
+            raise VerificationError("canary_bundle_binding", "immutable admission bundle plan/approval missing")
+        try:
+            validate_deployment_plan(plan)
+        except SchemaValidationError as exc:
+            raise VerificationError("plan_schema", str(exc)) from exc
+        if (
+            plan.get("plan_id") != record.get("plan_id")
+            or plan.get("plan_sha256") != record.get("plan_sha256")
+            or compute_plan_sha256(plan) != record.get("plan_sha256")
+        ):
+            raise VerificationError("canary_bundle_binding", "immutable plan does not match execution record")
+        if (
+            approval.get("approval_id") != record.get("approval_id")
+            or approval.get("plan_id") != record.get("plan_id")
+            or approval.get("plan_sha256") != record.get("plan_sha256")
+        ):
+            raise VerificationError("canary_bundle_binding", "immutable approval does not match execution record")
+        return plan
+
+    def _record_plan_expired(self, record: Dict[str, Any]) -> bool:
+        plan = self._bound_plan_from_record(record)
+        try:
+            expires = parse_ts(str(plan["expires_at"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VerificationError("plan_expired", "plan expiry invalid") from exc
+        return self.now() >= expires
 
     def _record_approval_expired(self, record: Dict[str, Any]) -> bool:
         try:
