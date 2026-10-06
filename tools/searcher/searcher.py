@@ -7,7 +7,7 @@ Captures network packets and displays them in real-time via Flask-SocketIO web i
 import argparse
 import logging
 import os
-import sys
+import shutil
 import subprocess
 import threading
 import time
@@ -16,10 +16,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from scapy.all import sniff, IP, TCP, UDP, ICMP, ARP, Ether
+from scapy.all import PcapReader, IP, TCP, UDP, ICMP, ARP
 from flask import Flask, render_template_string, send_from_directory
 from flask_socketio import SocketIO
-import json
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +38,31 @@ def _load_sniffer_html_template() -> str:
 DEFAULT_TEMPLATE = _load_sniffer_html_template()
 
 
+def _resolve_dumpcap() -> Optional[str]:
+    """Return the configured packet-capture helper binary, if installed."""
+    return shutil.which("dumpcap")
+
+
+def _build_dumpcap_command(
+    dumpcap_path: str,
+    interface: Optional[str],
+    filter_str: Optional[str],
+) -> list[str]:
+    """Build a shell-free dumpcap command that streams classic pcap to stdout."""
+    command = [
+        dumpcap_path,
+        "-q",
+        "-P",
+        "-i",
+        interface or "any",
+        "-w",
+        "-",
+    ]
+    if filter_str and filter_str.strip():
+        command.extend(["-f", filter_str.strip()])
+    return command
+
+
 class PacketSniffer:
     """Network packet sniffer with filtering and statistics"""
     
@@ -50,8 +74,8 @@ class PacketSniffer:
         self.packet_count = 0
         self.stats = {'TCP': 0, 'UDP': 0, 'ICMP': 0, 'ARP': 0, 'Other': 0}
         self.packet_buffer = deque(maxlen=1000)  # Buffer last 1000 packets
-        self.sudo_password: Optional[str] = None
-        self.has_capabilities = False
+        self.capture_process: Optional[subprocess.Popen] = None
+        self.capture_stderr_thread: Optional[threading.Thread] = None
         
     def get_protocol(self, packet) -> str:
         """Extract protocol name from packet"""
@@ -146,168 +170,132 @@ class PacketSniffer:
         except Exception as e:
             logger.error(f"Error processing packet: {e}")
     
-    def set_sudo_password(self, password: str) -> bool:
-        """Set sudo password and try to elevate privileges"""
-        self.sudo_password = password
-        
-        # First, verify the password is correct by trying a simple sudo command
-        try:
-            verify_result = subprocess.run(
-                ['sudo', '-S', '-v'],
-                input=password.encode(),
-                capture_output=True,
-                timeout=5
-            )
-            
-            if verify_result.returncode != 0:
-                error = verify_result.stderr.decode() if verify_result.stderr else "Unknown error"
-                if "Sorry, try again" in error or "incorrect password" in error.lower():
-                    logger.warning("Invalid sudo password")
-                    self.sudo_password = None
-                    return False
-            
-            # Password is valid, now try to set capabilities
-            # Resolve symlinks to get the real Python executable
-            python_path = sys.executable
-            real_python_path = os.path.realpath(python_path)
-            
-            logger.info(f"Attempting to set capabilities on: {real_python_path}")
-            
-            # Try setting capabilities on the real path
-            result = subprocess.run(
-                ['sudo', '-S', 'setcap', 'cap_net_raw,cap_net_admin=eip', real_python_path],
-                input=password.encode(),
-                capture_output=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                logger.info("Successfully set capabilities on Python interpreter")
-                self.has_capabilities = True
-                # Clear password from memory after use
-                self.sudo_password = None
-                return True
-            else:
-                error = result.stderr.decode() if result.stderr else "Unknown error"
-                logger.warning(f"Failed to set capabilities: {error}")
-                
-                # Try alternative: set capabilities on common Python paths
-                alternative_paths = [
-                    '/usr/bin/python3',
-                    '/usr/local/bin/python3',
-                    '/bin/python3',
-                ]
-                
-                for alt_path in alternative_paths:
-                    if os.path.exists(alt_path) and alt_path != real_python_path:
-                        real_alt_path = os.path.realpath(alt_path)
-                        if real_alt_path != real_python_path:
-                            logger.info(f"Trying alternative path: {real_alt_path}")
-                            alt_result = subprocess.run(
-                                ['sudo', '-S', 'setcap', 'cap_net_raw,cap_net_admin=eip', real_alt_path],
-                                input=password.encode(),
-                                capture_output=True,
-                                timeout=5
-                            )
-                            if alt_result.returncode == 0:
-                                logger.info(f"Successfully set capabilities on alternative Python: {real_alt_path}")
-                                logger.warning("Note: You may need to use the Python at this path for capabilities to work")
-                                self.has_capabilities = True
-                                self.sudo_password = None
-                                return True
-                
-                # If all attempts failed, password is valid but setcap doesn't work
-                # This might be due to filesystem restrictions or Python being in a location
-                # where capabilities can't be set (like NFS, or Python being a script wrapper)
-                logger.warning("Could not set capabilities on any Python executable")
-                logger.info("This might be due to:")
-                logger.info("  - Python being a script wrapper (not a binary)")
-                logger.info("  - Filesystem not supporting capabilities")
-                logger.info("  - Python being on a network filesystem")
-                logger.info("Please run the script with: sudo python3 tools/searcher/searcher.py")
-                
-                # Clear password since we can't use it effectively
-                self.sudo_password = None
-                self.has_capabilities = False
-                return True  # Password was valid, but we can't use it
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Timeout while verifying sudo password")
-            self.sudo_password = None
-            return False
-        except Exception as e:
-            logger.error(f"Error setting capabilities: {e}")
-            self.sudo_password = None
-            return False
-    
     def start_sniffing(self, socketio: SocketIO):
-        """Start packet sniffing in a separate thread"""
+        """Start packet capture through the dedicated dumpcap helper."""
         if self.sniffing:
             logger.warning("Sniffing already in progress, stopping first...")
             self.stop_sniffing(socketio)
-            time.sleep(0.5)  # Give it time to stop
-        
+            time.sleep(0.2)
+
+        dumpcap_path = _resolve_dumpcap()
+        if not dumpcap_path:
+            message = (
+                "dumpcap is not installed. Install Wireshark/dumpcap and configure "
+                "non-root packet-capture permissions for the operator."
+            )
+            logger.error(message)
+            socketio.emit('status', {'status': 'error', 'message': message})
+            return
+
+        command = _build_dumpcap_command(dumpcap_path, self.interface, self.filter_str)
         self.sniffing = True
-        
+
         def sniff_loop():
+            process = None
+            stderr_tail = deque(maxlen=20)
+            emitted_error = False
+
             try:
-                logger.info(f"Starting packet capture on interface: {self.interface or 'all'}")
-                if self.filter_str:
-                    logger.info(f"Using filter: {self.filter_str}")
-                
-                # Check if we have required privileges
-                if os.geteuid() != 0 and not self.has_capabilities:
-                    error_msg = "Operation not permitted. Root privileges required."
-                    if self.sudo_password:
-                        error_msg += " Setcap failed. Please restart the script with: sudo python3 tools/searcher/searcher.py"
-                    logger.error(error_msg)
-                    self.sniffing = False
-                    socketio.emit('status', {'status': 'error', 'message': error_msg})
-                    # Clear password since we can't use it
-                    self.sudo_password = None
-                    return
-                
-                sniff(
-                    prn=lambda pkt: self.packet_callback(pkt, socketio),
-                    store=0,
-                    iface=self.interface,
-                    filter=self.filter_str,
-                    stop_filter=lambda x: not self.sniffing
+                logger.info(
+                    "Starting packet capture through dumpcap on interface: %s",
+                    self.interface or "any",
                 )
-            except PermissionError as e:
-                error_msg = "Operation not permitted. Root privileges required."
-                logger.error(error_msg)
+                if self.filter_str:
+                    logger.info("Using filter: %s", self.filter_str)
+
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                    bufsize=0,
+                )
+                self.capture_process = process
+
+                def drain_stderr():
+                    if process.stderr is None:
+                        return
+                    for raw_line in iter(process.stderr.readline, b''):
+                        line = raw_line.decode('utf-8', errors='replace').strip()
+                        if line:
+                            stderr_tail.append(line)
+                            logger.debug("dumpcap: %s", line)
+
+                self.capture_stderr_thread = threading.Thread(
+                    target=drain_stderr,
+                    daemon=True,
+                    name="dockerpilot-searcher-dumpcap-stderr",
+                )
+                self.capture_stderr_thread.start()
+
+                if process.stdout is None:
+                    raise RuntimeError("dumpcap stdout pipe was not created")
+
+                with PcapReader(process.stdout) as reader:
+                    for packet in reader:
+                        if not self.sniffing:
+                            break
+                        self.packet_callback(packet, socketio)
+
+                returncode = process.wait(timeout=2)
+                if self.sniffing and returncode != 0:
+                    detail = stderr_tail[-1] if stderr_tail else f"exit code {returncode}"
+                    raise RuntimeError(f"dumpcap capture failed: {detail}")
+
+            except (OSError, EOFError, RuntimeError) as exc:
+                if self.sniffing:
+                    emitted_error = True
+                    message = str(exc)
+                    logger.error("Packet capture failed: %s", message)
+                    socketio.emit('status', {'status': 'error', 'message': message})
+            except Exception as exc:
+                if self.sniffing:
+                    emitted_error = True
+                    message = f"Packet capture failed: {exc}"
+                    logger.error(message)
+                    socketio.emit('status', {'status': 'error', 'message': message})
+            finally:
                 self.sniffing = False
-                socketio.emit('status', {'status': 'error', 'message': error_msg})
-            except OSError as e:
-                if "Operation not permitted" in str(e) or e.errno == 1:
-                    error_msg = "Operation not permitted. Root privileges required."
-                    logger.error(error_msg)
-                    self.sniffing = False
-                    socketio.emit('status', {'status': 'error', 'message': error_msg})
-                else:
-                    logger.error(f"OS Error in sniffing thread: {e}")
-                    self.sniffing = False
-                    socketio.emit('status', {'status': 'error', 'message': str(e)})
-            except Exception as e:
-                logger.error(f"Error in sniffing thread: {e}")
-                self.sniffing = False
-                socketio.emit('status', {'status': 'error', 'message': str(e)})
-        
-        self.sniff_thread = threading.Thread(target=sniff_loop, daemon=True)
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                self.capture_process = None
+                self.capture_stderr_thread = None
+                if not emitted_error:
+                    socketio.emit('status', {'status': 'stopped'})
+
+        self.sniff_thread = threading.Thread(
+            target=sniff_loop,
+            daemon=True,
+            name="dockerpilot-searcher-capture",
+        )
         self.sniff_thread.start()
         socketio.emit('status', {'status': 'started'})
         logger.info("Sniffing started")
-    
+
     def stop_sniffing(self, socketio: SocketIO):
-        """Stop packet sniffing"""
-        if not self.sniffing:
+        """Stop packet capture and terminate the helper process."""
+        process = self.capture_process
+        if not self.sniffing and process is None:
             return
-        
+
         self.sniffing = False
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+
         socketio.emit('status', {'status': 'stopped'})
         logger.info("Sniffing stopped")
-    
+
     def set_filter(self, filter_str: Optional[str]):
         """Update packet filter"""
         old_filter = self.filter_str
@@ -331,7 +319,6 @@ sniffer: Optional[PacketSniffer] = None
 app = Flask(__name__)
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
     async_mode="threading",
     logger=False,
     engineio_logger=False
@@ -370,13 +357,8 @@ def handle_disconnect():
 
 @socketio.on('start_sniffing')
 def handle_start_sniffing():
-    """Handle start sniffing request"""
+    """Handle start sniffing request."""
     if sniffer:
-        # Check if we need sudo privileges
-        if os.geteuid() != 0 and not sniffer.has_capabilities:
-            # Request sudo password
-            socketio.emit('status', {'status': 'sudo_required'})
-            return
         sniffer.start_sniffing(socketio)
 
 
@@ -395,50 +377,34 @@ def handle_set_filter(data):
         sniffer.set_filter(filter_str if filter_str else None)
 
 
-@socketio.on('sudo_password')
-def handle_sudo_password(data):
-    """Handle sudo password submission"""
-    if not sniffer:
-        return
-    
-    password = data.get('password', '').strip()
-    if not password:
-        socketio.emit('status', {'status': 'sudo_failed', 'message': 'Password cannot be empty'})
-        return
-    
-    # Try to set capabilities with the password
-    success = sniffer.set_sudo_password(password)
-    
-    if success:
-        if sniffer.has_capabilities:
-            logger.info("Sudo password accepted, capabilities set successfully")
-            socketio.emit('status', {'status': 'sudo_success'})
-        else:
-            # Password is valid but setcap failed - we'll need to use alternative method
-            logger.info("Sudo password accepted, but setcap failed. Will use alternative method.")
-            # Store password for later use (will be cleared after use)
-            socketio.emit('status', {'status': 'sudo_success', 'message': 'Password accepted, but capabilities could not be set. Please restart the script with: sudo python3 tools/searcher/searcher.py'})
-    else:
-        logger.warning("Invalid sudo password")
-        socketio.emit('status', {'status': 'sudo_failed', 'message': 'Invalid password'})
-
-
-@socketio.on('cancel_sudo')
-def handle_cancel_sudo():
-    """Handle sudo password cancellation"""
-    logger.info("Sudo password entry cancelled")
-    if sniffer:
-        sniffer.sudo_password = None
-    socketio.emit('status', {'status': 'stopped'})
-
-
-def check_permissions():
-    """Check if script has required permissions for packet capture"""
-    if os.geteuid() != 0:
-        logger.warning("⚠️  WARNING: Not running as root. Packet capture may fail.")
-        logger.warning("   Run with: sudo python3 tools/searcher/searcher.py")
-        logger.warning("   Or set capabilities: sudo setcap cap_net_raw,cap_net_admin=eip $(which python3)")
+def check_capture_helper() -> bool:
+    """Verify that dumpcap is installed and usable by the unprivileged operator."""
+    dumpcap_path = _resolve_dumpcap()
+    if not dumpcap_path:
+        logger.error(
+            "dumpcap is required. Install Wireshark/dumpcap and configure "
+            "non-root packet-capture permissions."
+        )
         return False
+
+    try:
+        result = subprocess.run(
+            [dumpcap_path, "-D"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.error("Unable to validate dumpcap: %s", exc)
+        return False
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "dumpcap returned an error").strip()
+        logger.error("dumpcap is not usable by this account: %s", detail)
+        return False
+
     return True
 
 
@@ -451,25 +417,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Sniff on all interfaces (requires sudo)
-  sudo python3 tools/searcher/searcher.py
+  # Capture on all interfaces through dumpcap
+  python3 tools/searcher/searcher.py
 
-  # Sniff on specific interface
-  sudo python3 tools/searcher/searcher.py -i eth0
+  # Capture on a specific interface
+  python3 tools/searcher/searcher.py -i eth0
 
-  # Sniff with filter (TCP only)
-  sudo python3 tools/searcher/searcher.py -f "tcp"
+  # Capture with a BPF filter
+  python3 tools/searcher/searcher.py -f "tcp"
 
-  # Sniff on specific port
-  sudo python3 tools/searcher/searcher.py -f "port 80"
-
-  # Sniff from specific IP
-  sudo python3 tools/searcher/searcher.py -f "host 192.168.1.1"
-
-Note: This script requires root privileges for packet capture.
-      Run with 'sudo' or set capabilities on Python interpreter.
-        """
-    )
+Security model:
+  The Flask/Socket.IO process stays unprivileged and never accepts a sudo
+  password. Packet access is delegated to dumpcap, which must be configured
+  by the operating system for non-root capture.
+        """    )
     
     parser.add_argument(
         '-i', '--interface',
@@ -488,8 +449,8 @@ Note: This script requires root privileges for packet capture.
     parser.add_argument(
         '-H', '--host',
         type=str,
-        default='0.0.0.0',
-        help='Host to bind the web server to (default: 0.0.0.0)'
+        default='127.0.0.1',
+        help='Host to bind the web server to (default: 127.0.0.1; use another address explicitly)'
     )
     
     parser.add_argument(
@@ -510,18 +471,30 @@ Note: This script requires root privileges for packet capture.
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Check permissions
-    has_permissions = check_permissions()
-    
+    if hasattr(os, 'geteuid') and os.geteuid() == 0:
+        logger.error(
+            "Refusing to run the Searcher web process as root. Configure dumpcap "
+            "for non-root capture instead."
+        )
+        return 2
+
+    if not check_capture_helper():
+        return 2
+
     # Initialize sniffer
     sniffer = PacketSniffer(interface=args.interface, filter_str=args.filter)
-    
+
+    if args.host not in {'127.0.0.1', 'localhost', '::1'}:
+        logger.warning(
+            "Searcher is explicitly bound to a non-loopback address (%s). "
+            "No application authentication is provided; protect access externally.",
+            args.host,
+        )
+
     logger.info(f"Starting web server on {args.host}:{args.port}")
-    logger.info(f"Interface: {args.interface or 'all'}")
+    logger.info(f"Interface: {args.interface or 'any'}")
     logger.info(f"Filter: {args.filter or 'none'}")
-    if not has_permissions:
-        logger.warning("⚠️  Running without root privileges - packet capture will fail!")
-    logger.info("Open http://{}:{} in your browser".format(args.host if args.host != '0.0.0.0' else 'localhost', args.port))
+    logger.info("Open http://{}:{} in your browser".format(args.host, args.port))
     
     try:
         socketio.run(app, host=args.host, port=args.port, debug=args.debug)
@@ -529,7 +502,8 @@ Note: This script requires root privileges for packet capture.
         logger.info("Shutting down...")
         if sniffer:
             sniffer.stop_sniffing(socketio)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
