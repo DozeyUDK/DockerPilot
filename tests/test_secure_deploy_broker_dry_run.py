@@ -322,6 +322,34 @@ def test_http_external_approval_detail_and_revoke_use_broker_authority(authed_cl
     assert calls == [("get", approval_id), ("revoke", approval_id)]
 
 
+def test_http_legacy_v1_detail_survives_broker_outage(authed_client, monkeypatch):
+    module, client, csrf = authed_client
+    from backend.secure_deploy.errors import SecureDeployError
+
+    spec = json.loads(PASS_SPEC.read_text(encoding="utf-8"))
+    plan_resp = client.post("/api/secure-deploy/plan", json={"spec": spec}, headers=_headers(csrf))
+    assert plan_resp.status_code == 201
+    plan = plan_resp.get_json()["plan"]
+    stored = module._secure_deploy_service.get_plan(plan["plan_id"])
+    approval = module._secure_deploy_approvals.approve_plan(
+        stored,
+        actor="admin",
+        session_hash="f" * 64,
+    )
+
+    def unavailable_get(_approval_id):
+        raise SecureDeployError("broker_unavailable", "broker socket missing", 503)
+
+    monkeypatch.setattr(module._secure_deploy_broker, "get_approval", unavailable_get)
+    detail = client.get(
+        f"/api/secure-deploy/approvals/{approval['approval_id']}",
+        headers=_headers(csrf),
+    )
+    assert detail.status_code == 200, detail.get_json()
+    assert detail.get_json()["approval_mode"] == "legacy_local"
+    assert detail.get_json()["approval"]["approval_version"] == 1
+
+
 def test_http_broker_dry_run_does_not_require_client_supplied_admission_bundle(authed_client, monkeypatch):
     module, client, csrf = authed_client
     plan, approval = _create_approved_plan(client, csrf)
@@ -431,13 +459,15 @@ def test_http_legacy_v1_revoke_remains_local_and_non_authoritative(authed_client
     )
 
     revoke_calls = []
+    authority_probe_calls = []
 
     from backend.secure_deploy.errors import SecureDeployError
 
-    def not_broker_owned(_approval_id):
-        raise SecureDeployError("approval_authority_missing", "broker-owned approval record not found", 502)
+    def authority_unavailable(approval_id):
+        authority_probe_calls.append(approval_id)
+        raise SecureDeployError("broker_unavailable", "broker socket missing", 503)
 
-    monkeypatch.setattr(module._secure_deploy_broker, "revoke_approval", not_broker_owned)
+    monkeypatch.setattr(module._secure_deploy_broker, "revoke_approval", authority_unavailable)
 
     def unavailable_revoke(**kwargs):
         revoke_calls.append(kwargs)
@@ -451,6 +481,7 @@ def test_http_legacy_v1_revoke_remains_local_and_non_authoritative(authed_client
     )
     assert revoke_resp.status_code == 202, revoke_resp.get_json()
     assert revoke_resp.get_json()["approval"]["status"] == "revocation_pending"
+    assert authority_probe_calls == [approval["approval_id"]]
     assert revoke_calls[0]["admission_bundle_sha256"] == bundle_sha
 
     # This endpoint is legacy local metadata only; broker-owned approval v2 is
