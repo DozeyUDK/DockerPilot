@@ -6,8 +6,9 @@
 **Problem**: Cannot connect to Docker daemon
 **Solution**: 
 1. Check if Docker is running: `docker info`
-2. Verify user permissions: `sudo usermod -aG docker $USER`
-3. Restart Docker service: `sudo systemctl restart docker`
+2. Verify that the current account has intentionally configured Docker access
+3. If using the Docker group, remember that membership grants root-equivalent host control; prefer rootless Docker where practical
+4. Restart Docker only if the daemon itself is unhealthy: `sudo systemctl restart docker`
 
 ### Container Health Check Failed
 **Problem**: Health checks timing out
@@ -33,10 +34,7 @@
 ### Permission Denied
 **Problem**: Cannot access Docker socket
 **Solution**:
-```bash
-sudo chown $USER:docker /var/run/docker.sock
-sudo chmod 660 /var/run/docker.sock
-```
+Do not manually `chown` or `chmod` the Docker socket. Fix access through the Docker daemon/system configuration instead. Use rootless Docker where practical, or grant Docker-group membership only to trusted operators because that group is root-equivalent.
 
 ## Debug Mode
 

@@ -564,22 +564,15 @@ dockerpilot docs --output ./docs
 ### Common Issues
 
 **Docker Connection Failed:**
-```bash
-# Check Docker status
-docker info
 
-# Add user to docker group
-sudo usermod -aG docker $USER
-
-# Restart Docker
-sudo systemctl restart docker
-```
+1. Check whether the daemon is reachable with `docker info`.
+2. Verify that the current account has intentionally configured Docker access.
+3. Prefer rootless Docker where practical. If you intentionally use the `docker` group, treat membership as root-equivalent host access and grant it only to trusted operators.
+4. Restart Docker only if the daemon itself is unhealthy: `sudo systemctl restart docker`.
 
 **Permission Denied:**
-```bash
-sudo chown $USER:docker /var/run/docker.sock
-sudo chmod 660 /var/run/docker.sock
-```
+
+Do not change ownership or permissions on `/var/run/docker.sock` manually. Configure Docker access intentionally through your Docker installation (for example, rootless Docker or an explicitly managed Docker group). Membership in the `docker` group grants root-equivalent control of the host, so only grant it to trusted operators.
 
 **Health Check Failures:**
 - Verify endpoint exists: `curl http://localhost:8080/health`
