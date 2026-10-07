@@ -7,6 +7,7 @@ Captures network packets and displays them in real-time via Flask-SocketIO web i
 import argparse
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import threading
@@ -226,6 +227,10 @@ class PacketSniffer:
                         bufsize=0,
                     )
                     self.capture_process = process
+                    # Serialize the visible "started" state with stop_sniffing().
+                    # A concurrent stop can only follow this with "stopped".
+                    socketio.emit('status', {'status': 'started'})
+                    logger.info("Sniffing started")
 
                 def drain_stderr():
                     if process.stderr is None:
@@ -298,10 +303,8 @@ class PacketSniffer:
             name="dockerpilot-searcher-capture",
         )
         self.sniff_thread.start()
-        socketio.emit('status', {'status': 'started'})
-        logger.info("Sniffing started")
 
-    def stop_sniffing(self, socketio: SocketIO):
+    def stop_sniffing(self, socketio: Optional[SocketIO] = None, *, emit_status: bool = True):
         """Stop packet capture and terminate the helper process."""
         with self.capture_lock:
             process = self.capture_process
@@ -321,7 +324,8 @@ class PacketSniffer:
                 process.kill()
                 process.wait(timeout=2)
 
-        socketio.emit('status', {'status': 'stopped'})
+        if emit_status and socketio is not None:
+            socketio.emit('status', {'status': 'stopped'})
         logger.info("Sniffing stopped")
 
     def set_filter(self, filter_str: Optional[str]):
@@ -525,12 +529,25 @@ Security model:
     logger.info(f"Filter: {args.filter or 'none'}")
     logger.info("Open http://{}:{} in your browser".format(args.host, args.port))
     
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
+    def handle_shutdown_signal(signum, _frame):
+        logger.info("Received shutdown signal %s", signum)
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+
     try:
         socketio.run(app, host=args.host, port=args.port, debug=args.debug)
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+    finally:
+        # Always terminate the capability-bearing capture helper, including
+        # SIGTERM and unexpected server exceptions.
         if sniffer:
-            sniffer.stop_sniffing(socketio)
+            sniffer.stop_sniffing(socketio, emit_status=False)
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+
     return 0
 
 
