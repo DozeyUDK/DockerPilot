@@ -18,6 +18,11 @@ from rich.progress import (
 )
 
 
+def _build_sudo_stdin_command(command_args):
+    """Build sudo argv with sudo options before the command and stop option parsing."""
+    return ['sudo', '-S', '--', *command_args]
+
+
 def backup_volume_using_docker(host: Any, volume_name: str, backup_file: Path, container_name: str = None) -> bool:
     """Backup Docker volume using a temporary container (no sudo needed!)
 
@@ -405,7 +410,7 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                 # For long-running operations like tar, use Popen with password passing
                 # instead of communicate() which may not work well for long operations
                 password_bytes = (sudo_password + '\n').encode('utf-8')
-                sudo_cmd = ['sudo', '-S'] + tar_cmd  # -S reads password from stdin
+                sudo_cmd = _build_sudo_stdin_command(tar_cmd)
 
                 try:
                     process = subprocess.Popen(
@@ -618,7 +623,7 @@ def run_sudo_command(host: Any, command_args, timeout=10, check=False):
         subprocess.TimeoutExpired: If command times out and check=True
         subprocess.CalledProcessError: If command fails and check=True
     """
-    sudo_cmd = ['sudo'] + command_args
+    sudo_cmd = _build_sudo_stdin_command(command_args)
 
     # If password is available (from web session), use it
     sudo_password = host._get_sudo_password()
@@ -630,7 +635,7 @@ def run_sudo_command(host: Any, command_args, timeout=10, check=False):
 
         try:
             sudo_process = subprocess.Popen(
-                sudo_cmd + ['-S'],  # -S reads password from stdin
+                sudo_cmd,  # -S is a sudo option and must precede the command
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
