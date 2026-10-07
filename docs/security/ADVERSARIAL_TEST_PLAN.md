@@ -55,8 +55,6 @@ Attempt `dockerpilot_migration_export_bundle` with `include_data=true` and `conf
 
 **Expected:** blocked before the helper-container path can call Docker `containers.create()`, `start()` or `remove()`, or broker-routed through a separately reviewed contract. An operation described as export/read must still count as a Docker mutation when its implementation creates ephemeral containers.
 
-**Permanent regression:** `tests/test_mcp_agent_safe_migration_export.py` verifies that the frozen agent-safe configuration blocks export before `MigrationOps` is reached, even when normal MCP write/destructive flags and caller confirmation request mutation.
-
 **Invariant:** INV-01, INV-02.
 
 ### AT-05 — Extras generic command execution
