@@ -77,7 +77,7 @@ _AUDIT_BEARER_RE = re.compile(
     re.IGNORECASE,
 )
 _AUDIT_ASSIGNMENT_RE = re.compile(
-    r"\b(password|passwd|passphrase|token|secret|api[_-]?key|credential)\b"
+    r"['\"]?(password|passwd|passphrase|token|secret|api[_-]?key|credential)['\"]?"
     r"\s*[:=]\s*['\"]?[^\s,;'\"]+",
     re.IGNORECASE,
 )
