@@ -8,6 +8,8 @@ import subprocess
 import time
 
 import docker
+
+from .backup_mounts import path_requires_privileged_access
 from rich.progress import (
     BarColumn,
     Progress,
@@ -264,6 +266,18 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             host.logger.warning(f"Source path does not exist: {source_path}")
             return False
 
+        requires_privileged_access = path_requires_privileged_access(source_path)
+        authorization_check = getattr(
+            host,
+            "_is_privileged_backup_authorized",
+            lambda: True,
+        )
+        if requires_privileged_access and not authorization_check():
+            host.logger.error(
+                f"Privileged backup authorization required for bind mount: {source_path}"
+            )
+            return False
+
         # Get current user UID and GID for ownership fix
         uid = os.getuid()
         gid = os.getgid()
@@ -367,12 +381,25 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             host.logger.info(f"Bind mount {source_path} backed up successfully using Docker")
             return True
         else:
-            # If Docker method failed, fall back to direct tar with timeout
-            host.logger.info(f"Docker backup method failed, falling back to direct tar for {source_path}")
+            if requires_privileged_access:
+                host.logger.error(
+                    f"Privileged Docker backup failed for {source_path}; refusing direct sudo fallback"
+                )
+                return False
+            host.logger.info(
+                f"Docker backup method failed, falling back to direct tar for {source_path}"
+            )
             return host._backup_directory(source_path, backup_file, container_name)
 
     except Exception as e:
-        host.logger.error(f"Docker bind mount backup failed: {e}, falling back to direct method")
+        if 'requires_privileged_access' in locals() and requires_privileged_access:
+            host.logger.error(
+                f"Privileged Docker bind mount backup failed for {source_path}: {e}"
+            )
+            return False
+        host.logger.error(
+            f"Docker bind mount backup failed: {e}, falling back to direct method"
+        )
         return host._backup_directory(source_path, backup_file, container_name)
 
 
@@ -391,13 +418,19 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
             host.logger.warning(f"Source path does not exist: {source_path}")
             return False
 
-        # Check if path requires sudo (Docker volume paths or system paths)
-        requires_sudo = (
-            str(source_path).startswith('/var/lib/docker/volumes/') or
-            str(source_path).startswith('/var/lib/docker/') or
-            str(source_path).startswith('/root/') or
-            not os.access(source_path, os.R_OK)  # Check if we can read without sudo
+        # Direct tar keeps the trusted local CLI sudo fallback, but an
+        # Extras execution must explicitly authorize privileged backup first.
+        requires_sudo = path_requires_privileged_access(source_path)
+        authorization_check = getattr(
+            host,
+            "_is_privileged_backup_authorized",
+            lambda: True,
         )
+        if requires_sudo and not authorization_check():
+            host.logger.error(
+                f"Privileged backup authorization required for: {source_path}"
+            )
+            return False
 
         timeout = 600  # 10 minutes timeout for large directories
         tar_cmd = ['tar', '-czf', str(backup_file), '-C', str(source.parent), source.name]
@@ -495,13 +528,14 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                     host.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
                     return False
             else:
-                # No password available - but we need sudo
-                # This should not happen in web interface, but if it does, log warning and fail
-                host.logger.error(f"Sudo password required for backup of {source_path} but password not available")
-                host.logger.error("This should not happen in web interface - password should be set from session")
-                host.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
-                host.console.print(f"[red]❌ Sudo password required but not available. Cannot backup {source_path}[/red]")
-                host.console.print(f"[red]Please provide sudo password via the web interface modal[/red]")
+                # Extras never supplies OS credentials. Trusted local CLI callers
+                # may still provide a scoped sudo credential through the CLI path.
+                host.logger.error(
+                    f"Local sudo credential required for direct backup of {source_path}"
+                )
+                host.console.print(
+                    f"[red]❌ Direct privileged tar is unavailable for {source_path}[/red]"
+                )
                 return False
         else:
             host.logger.info(f"Using direct tar for backup of: {source_path}")
@@ -625,7 +659,8 @@ def run_sudo_command(host: Any, command_args, timeout=10, check=False):
     """
     sudo_cmd = _build_sudo_stdin_command(command_args)
 
-    # If password is available (from web session), use it
+    # This helper is for trusted local CLI elevation only. DockerPilotExtras
+    # never provides an OS credential to this path.
     sudo_password = host._get_sudo_password()
     if sudo_password:
         # Use subprocess with stdin to pass password to sudo -S (read from stdin)
@@ -656,11 +691,9 @@ def run_sudo_command(host: Any, command_args, timeout=10, check=False):
             if check:
                 raise subprocess.TimeoutExpired(sudo_cmd, timeout)
     else:
-        # No password available - this should not happen in web interface
-        # Log warning and return error instead of prompting
-        host.logger.error(f"Sudo password required for command {command_args} but password not available")
-        host.logger.error("This should not happen in web interface - password should be set from session")
-        host.logger.error("If you see a sudo prompt, it means sudo was called directly without using _run_sudo_command")
+        host.logger.error(
+            f"Local sudo credential required for command {command_args} but not available"
+        )
         raise RuntimeError(f"Sudo password required but not available. Cannot execute: {' '.join(command_args)}")
 
     if check and returncode != 0:
