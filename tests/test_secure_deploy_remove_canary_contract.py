@@ -51,6 +51,7 @@ BASE = {
         ("plan_id", "plan_" + ("b" * 24)),
         ("plan_sha256", "c" * 64),
         ("approval_id", "appr_" + ("d" * 24)),
+        ("admission_bundle_sha256", "e" * 64),
         ("template_id", "dockerpilot-secure-canary-v1"),
     ],
 )
