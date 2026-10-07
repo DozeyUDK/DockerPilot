@@ -185,8 +185,7 @@ def execute_script(
     )
 
 
-def build_docker_command(docker_command: str, *, use_sudo: bool = False) -> str:
-    """Parse Docker arguments and rebuild a shell-safe remote command."""
+def build_docker_command(docker_command: str) -> str:
+    """Parse Docker arguments and rebuild a shell-safe remote Docker command."""
     args = _local_argv(docker_command)
-    prefix = ["sudo", "docker"] if use_sudo else ["docker"]
-    return shlex.join([*prefix, *args])
+    return shlex.join(["docker", *args])
