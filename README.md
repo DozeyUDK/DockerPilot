@@ -576,10 +576,8 @@ sudo systemctl restart docker
 ```
 
 **Permission Denied:**
-```bash
-sudo chown $USER:docker /var/run/docker.sock
-sudo chmod 660 /var/run/docker.sock
-```
+
+Do not change ownership or permissions on `/var/run/docker.sock` manually. Configure Docker access intentionally through your Docker installation (for example, rootless Docker or an explicitly managed Docker group). Membership in the `docker` group grants root-equivalent control of the host, so only grant it to trusted operators.
 
 **Health Check Failures:**
 - Verify endpoint exists: `curl http://localhost:8080/health`
