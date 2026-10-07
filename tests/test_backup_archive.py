@@ -309,7 +309,7 @@ def test_extras_bind_tar_failure_is_not_masked_by_existing_archive(tmp_path, mon
     assert "sh" not in argv
     assert "-c" not in argv
     assert "|| true" not in argv
-    assert argv[-6:] == [
+    assert argv[-7:] == [
         "alpine:latest",
         "tar",
         "-czf",
