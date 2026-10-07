@@ -73,6 +73,11 @@ def ensure_local_postgres_container(
     password: str,
     volume_name: str | None = None,
 ):
+    if not isinstance(password, str) or not password.strip():
+        raise ValueError("PostgreSQL bootstrap password is required")
+    if password == "dockerpilot_change_me":
+        raise ValueError("Refusing legacy default PostgreSQL password")
+
     try:
         import docker
     except ImportError as exc:
