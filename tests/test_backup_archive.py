@@ -309,14 +309,73 @@ def test_extras_bind_tar_failure_is_not_masked_by_existing_archive(tmp_path, mon
     assert "sh" not in argv
     assert "-c" not in argv
     assert "|| true" not in argv
-    assert argv[-7:] == [
+    assert argv[-8:] == [
         "alpine:latest",
         "tar",
         "-czf",
         f"/backup/{backup_file.name}",
         "-C",
         "/source",
-    ] + [source.name]
+        "--",
+        source.name,
+    ]
+
+
+def test_bind_tar_terminates_options_before_dash_prefixed_source(tmp_path, monkeypatch):
+    source = tmp_path / "--files-from=-"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+    backup_file.write_bytes(b"archive")
+    seen = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv):
+            seen["argv"] = argv
+
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return "", ""
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        backup_archive.subprocess,
+        "Popen",
+        lambda argv, **_kwargs: FakeProcess(argv),
+    )
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(backup_archive.os, "chown", lambda *_args: None)
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        _get_sudo_password=lambda: None,
+    )
+
+    with privileged_backup_authorization(True):
+        assert backup_archive.backup_bind_mount_using_docker(
+            host,
+            str(source),
+            backup_file,
+        ) is True
+
+    argv = seen["argv"]
+    source_index = argv.index(source.name)
+    assert argv[source_index - 1] == "--"
 
 def test_run_sudo_command_refuses_missing_password():
     host = SimpleNamespace(
