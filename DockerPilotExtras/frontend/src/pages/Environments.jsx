@@ -676,7 +676,11 @@ function Environments() {
 
   const handlePromote = async (fromEnv, toEnv) => {
     const targetServer = getTargetServerDisplay(toEnv)
-    if (!window.confirm(`Promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?\n\nTarget server: ${targetServer}`)) {
+    if (!window.confirm(
+      `Bulk promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()} WITHOUT BACKUP?\n\n` +
+      `Target server: ${targetServer}\n\n` +
+      'Backed-up promotion requires the per-container flow so privileged backup authorization can be scoped to one container.'
+    )) {
       return
     }
 
@@ -685,7 +689,7 @@ function Environments() {
     setMessage(null)
 
     try {
-      const response = await environmentAPI.promote(fromEnv, toEnv)
+      const response = await environmentAPI.promote(fromEnv, toEnv, true)
       if (response.data.success) {
         setMessage({ 
           type: 'success', 
