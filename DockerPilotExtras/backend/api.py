@@ -89,7 +89,6 @@ def register_api_routes(
     CancelPromotion,
     CheckSudoRequired,
     ElevationToken,
-    SudoPassword,
     EnvironmentPromoteSingle,
     DeploymentProgress,
     EnvironmentStatus,
@@ -159,7 +158,6 @@ def register_api_routes(
     api.add_resource(CancelPromotion, "/api/environment/cancel-promotion")
     api.add_resource(CheckSudoRequired, "/api/environment/check-sudo")
     api.add_resource(ElevationToken, "/api/environment/elevation-token")
-    api.add_resource(SudoPassword, "/api/environment/sudo-password")
     api.add_resource(EnvironmentPromoteSingle, "/api/environment/promote-single")
     api.add_resource(DeploymentProgress, "/api/environment/progress")
     api.add_resource(EnvironmentStatus, "/api/environment/status")
