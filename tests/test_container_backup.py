@@ -43,8 +43,11 @@ def test_container_backup_reuses_complete_recent_backup(tmp_path):
     (backup_dir / "backup_metadata.json").write_text(
         json.dumps(
             {
+                "format_version": 2,
+                "complete": True,
                 "container_name": "demo",
                 "backup_time": datetime.now().isoformat(),
+                "mount_snapshot": [],
                 "volumes": [{"backup_file": str(archive)}],
                 "total_size": archive.stat().st_size,
             }
@@ -62,6 +65,54 @@ def test_container_backup_reuses_complete_recent_backup(tmp_path):
 
     assert container_backup.backup_container_data(host, "demo", reuse_existing=True) is True
 
+
+
+def test_container_backup_rejects_legacy_reuse_without_completeness_manifest(tmp_path):
+    backup_dir = tmp_path / "backup_demo_legacy"
+    backup_dir.mkdir()
+    archive = backup_dir / "data.tar.gz"
+    archive.write_bytes(b"archive")
+    (backup_dir / "backup_metadata.json").write_text(
+        json.dumps(
+            {
+                "container_name": "demo",
+                "backup_time": datetime.now().isoformat(),
+                "volumes": [{"backup_file": str(archive)}],
+                "total_size": archive.stat().st_size,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = []
+    logger = _Logger()
+    container = SimpleNamespace(attrs={"Mounts": []})
+    host = SimpleNamespace(
+        client=SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container)),
+        find_existing_backup=lambda _name, _hours: backup_dir,
+        _check_sudo_required_for_backup=lambda name: (
+            checks.append(name)
+            or (
+                False,
+                [],
+                {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
+            )
+        ),
+        console=_console(),
+        logger=logger,
+    )
+
+    assert container_backup.backup_container_data(
+        host,
+        "demo",
+        backup_path=str(tmp_path / "fresh-backup"),
+        reuse_existing=True,
+    ) is True
+    assert checks == ["demo"]
+    assert any(
+        "legacy, incomplete, or does not match current mounts" in message
+        for _level, message in logger.messages
+    )
 
 def test_container_backup_treats_container_without_mounts_as_success():
     container = SimpleNamespace(attrs={"Mounts": []})
