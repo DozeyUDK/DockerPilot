@@ -2833,13 +2833,9 @@ def create_migration_resource(
             if network and network != 'bridge':
                 cmd_parts.extend(['--network', network])
             
-            # Add privileged if required (cadvisor/infrastructure often needs this)
-            privileged_flag = config.get('privileged', False)
-            # Heuristic: if image name contains cadvisor and not already privileged, enable it
-            if not privileged_flag and ('cadvisor' in image_tag.lower() or 'cadvisor' in container_name.lower()):
-                privileged_flag = True
-                app.logger.info("Enabling --privileged for cadvisor container")
-            if privileged_flag:
+            # Preserve privileged mode exactly as observed on the source container.
+            # Migration must never increase host authority based on image/container names.
+            if config.get('privileged', False):
                 cmd_parts.append('--privileged')
             
             # Add resource limits

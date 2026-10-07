@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI permission failures now render compact diagnostics while preserving non-zero exit status
 - Light-theme CLI output contrast in DockerPilotExtras
 - Backup sudo subprocesses now place `-S` before the command and terminate sudo option parsing with `--`
+- Container migration now preserves source `privileged` state exactly and no longer enables `--privileged` from cAdvisor image/container names
 
 ## [0.9.0-pre.2] - 2026-05-18
 

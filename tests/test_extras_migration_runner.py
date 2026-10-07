@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import logging
+import shlex
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -43,6 +44,64 @@ class _App:
 
     def test_request_context(self, *_args, **_kwargs):
         raise AssertionError("promotion must not create a Flask request context")
+
+
+def _migration_resource_for_command_tests():
+    return create_migration_resource(
+        Resource=_Resource,
+        app=_App(),
+        request=_Request({}),
+        datetime_cls=datetime,
+        migration_progress={},
+        migration_cancel_flags={},
+        load_servers_config=lambda: {"servers": []},
+        get_dockerpilot=lambda: None,
+        execute_command_via_ssh=lambda *_args, **_kwargs: "",
+        execute_docker_command_via_ssh=lambda *_args, **_kwargs: "",
+        save_deployment_config=lambda *_args, **_kwargs: None,
+        infer_port_mapping_for_host_network=lambda *_args, **_kwargs: {},
+    )
+
+
+def test_migration_does_not_auto_enable_privileged_for_cadvisor_name():
+    resource = _migration_resource_for_command_tests()()
+
+    command = resource._build_docker_run_command(
+        {"privileged": False},
+        "cadvisor",
+        "gcr.io/cadvisor/cadvisor:latest",
+    )
+
+    argv = shlex.split(command)
+    assert "--privileged" not in argv
+
+
+def test_migration_preserves_explicit_source_privileged_state():
+    resource = _migration_resource_for_command_tests()()
+
+    attrs = {
+        "Config": {"Image": "gcr.io/cadvisor/cadvisor:latest"},
+        "HostConfig": {
+            "Privileged": True,
+            "NetworkMode": "bridge",
+            "RestartPolicy": {"Name": "no"},
+            "NanoCpus": 0,
+            "Memory": 0,
+        },
+        "NetworkSettings": {"Ports": {}},
+        "Mounts": [],
+    }
+
+    config = resource._extract_container_config_from_inspect(attrs)
+    command = resource._build_docker_run_command(
+        config,
+        "cadvisor",
+        config["image_tag"],
+    )
+
+    argv = shlex.split(command)
+    assert config["privileged"] is True
+    assert argv.count("--privileged") == 1
 
 
 def test_synchronous_runner_normalizes_legacy_resource_results_without_flask():
