@@ -87,6 +87,20 @@ def ensure_local_postgres_container(
     created = False
     try:
         container = client.containers.get(container_name)
+        container.reload()
+        attrs = container.attrs or {}
+        env_map = parse_env_list((attrs.get("Config") or {}).get("Env") or [])
+        configured_password = env_map.get("POSTGRES_PASSWORD")
+
+        if configured_password == "dockerpilot_change_me":
+            raise ValueError(
+                "Refusing existing PostgreSQL container with legacy default password"
+            )
+        if configured_password != password:
+            raise ValueError(
+                "Existing PostgreSQL container password does not match requested password"
+            )
+
         if container.status != "running":
             container.start()
             container.reload()
