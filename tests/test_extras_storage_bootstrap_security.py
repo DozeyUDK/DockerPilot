@@ -95,3 +95,19 @@ def test_bootstrap_forwards_explicit_password_without_echoing_it():
     assert captured[0]["password"] == "correct-horse-battery-staple"
     assert body["postgres"]["password"] == "***"
     assert "correct-horse-battery-staple" not in repr(body)
+
+
+def test_bootstrap_maps_existing_container_credential_rejection_to_400():
+    def reject(**_kwargs):
+        raise ValueError("Existing PostgreSQL container password does not match requested password")
+
+    Bootstrap = _bootstrap_resource(
+        {"password": "new-secret"},
+        reject,
+    )
+
+    body, status = Bootstrap().post()
+
+    assert status == 400
+    assert body["success"] is False
+    assert "does not match requested password" in body["error"]
