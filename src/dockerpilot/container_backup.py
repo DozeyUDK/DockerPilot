@@ -258,13 +258,17 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                 progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
                                 host._update_progress('backup', progress_pct, f'✅ Zbackupowano volume: {volume_name} ({processed_mounts}/{total_mounts})')
                         else:
-                            host.logger.warning(f"Failed to backup volume {volume_name}, continuing...")
-                            host.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}', continuing...[/yellow]")
-                            # Don't return False - continue with other volumes
+                            host.logger.error(f"Required named volume backup failed: {volume_name}")
+                            host.console.print(
+                                f"[red]❌ Required named volume backup failed: {volume_name}[/red]"
+                            )
+                            return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup volume {volume_name}: {e}")
-                        host.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
+                        host.console.print(
+                            f"[red]❌ Required named volume backup failed: {volume_name}: {e}[/red]"
+                        )
+                        return False
 
                 elif source:
                     # Bind mount - backup using Docker container (faster and no sudo needed for many paths)
@@ -312,22 +316,29 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                     host.console.print(
                                         f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
                                     )
-                                    return False
-                                host.logger.warning(f"Failed to backup bind mount {source}, continuing...")
-                                host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
-                        else:
-                            host.logger.warning(f"Bind mount source does not exist: {source}")
-                            host.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
-                            if str(source) in privileged_path_set:
+                                else:
+                                    host.logger.error(
+                                        f"Required bind mount backup failed: {source}"
+                                    )
+                                    host.console.print(
+                                        f"[red]❌ Required bind mount backup failed: {source}[/red]"
+                                    )
                                 return False
+                        else:
+                            host.logger.error(f"Bind mount source does not exist: {source}")
+                            host.console.print(f"[red]❌ Bind mount source not found: {source}[/red]")
+                            return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup bind mount {source}: {e}")
                         if str(source) in privileged_path_set:
                             host.console.print(
                                 f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
                             )
-                            return False
-                        host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
+                        else:
+                            host.console.print(
+                                f"[red]❌ Required bind mount backup failed: {source}: {e}[/red]"
+                            )
+                        return False
 
             # Save backup metadata (inside loading context)
             if container_name:
