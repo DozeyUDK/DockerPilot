@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Light-theme CLI output contrast in DockerPilotExtras
 - Backup sudo subprocesses now place `-S` before the command and terminate sudo option parsing with `--`
 - Container migration now preserves source `privileged` state exactly and no longer enables `--privileged` from cAdvisor image/container names
+- Removed the legacy `/api/environment/sudo-password` compatibility endpoint and legacy promotion-token fallback; promotion now accepts only scoped elevation tokens
 
 ## [0.9.0-pre.2] - 2026-05-18
 
