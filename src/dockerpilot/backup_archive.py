@@ -271,7 +271,10 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             return False
 
         requires_privileged_access = path_requires_privileged_access(source_path)
-        if requires_privileged_access and not resolve_privileged_backup_authorization(True):
+        if (
+            has_privileged_backup_authorization_scope()
+            and not resolve_privileged_backup_authorization(False)
+        ):
             host.logger.error(
                 f"Privileged backup authorization required for bind mount: {source_path}"
             )
@@ -294,7 +297,7 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
                 '-v', f'{backup_file.parent.absolute()}:/backup',  # Mount backup dir
                 'alpine:latest',  # Lightweight image
                 'sh', '-c',
-                f'tar -czf /backup/{backup_file.name} -C /source {source_name} 2>/dev/null || true'
+                f'tar -czf /backup/{backup_file.name} -C /source {source_name}'
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
