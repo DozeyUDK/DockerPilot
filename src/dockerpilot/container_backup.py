@@ -70,13 +70,13 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
         requires_sudo, privileged_paths, mount_info = host._check_sudo_required_for_backup(container_name)
 
         if requires_sudo:
-            host.console.print(f"[yellow]⚠️  BACKUP REQUIRES SUDO ACCESS[/yellow]")
+            host.console.print(f"[yellow]⚠️  BACKUP INCLUDES PRIVILEGED PATHS[/yellow]")
             host.console.print(f"[yellow]Privileged paths ({len(privileged_paths)}):[/yellow]")
             for path in privileged_paths[:3]:  # Show first 3
                 host.console.print(f"[dim]  - {path}[/dim]")
             if len(privileged_paths) > 3:
                 host.console.print(f"[dim]  ... and {len(privileged_paths) - 3} more[/dim]")
-            host.console.print(f"[yellow]You may be prompted for sudo password during backup.[/yellow]")
+            host.console.print(f"[yellow]Privileged backup authorization or local CLI elevation may be required.[/yellow]")
             host.console.print(f"[yellow]To skip backup: use --skip-backup flag[/yellow]")
 
             # Give user 3 seconds to cancel
