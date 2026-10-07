@@ -134,7 +134,11 @@ def environment_promotion(
         deployment_type = 'blue-green' if target_env == 'prod' else 'rolling'
 
         if deployment_type == 'blue-green':
-            success = host._blue_green_deploy_enhanced(deployment_config, build_config)
+            success = host._blue_green_deploy_enhanced(
+                deployment_config,
+                build_config,
+                skip_backup=skip_backup,
+            )
         else:
             success = host._rolling_deploy(deployment_config, build_config)
 
