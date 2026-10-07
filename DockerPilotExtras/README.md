@@ -60,7 +60,7 @@ Application will be available at `http://localhost:5000`
 
 ### Security Configuration
 
-Set allowed browser origins and secure cookies explicitly in production:
+Extras binds to `127.0.0.1` by default. Set allowed browser origins and secure cookies explicitly in production. Any direct non-loopback backend bind requires web authentication:
 
 ```bash
 # Comma-separated list of allowed origins
@@ -69,10 +69,13 @@ export CORS_ORIGINS="https://extras.example.com"
 # Ensure cookies are marked Secure when behind HTTPS
 export SESSION_COOKIE_SECURE=true
 
-# Enable web-panel authentication
+# Enable web-panel authentication before any direct non-loopback bind
 export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD=change-me-now
+
+# Optional direct network exposure; loopback is the default
+# export HOST=0.0.0.0
 
 # Optional TOTP MFA (Google/Microsoft Authenticator, Base32 secret)
 export WEB_AUTH_TOTP_SECRET=JBSWY3DPEHPK3PXP
@@ -342,12 +345,24 @@ dockerpilot --version
 
 ### On the Same Host as DockerPilot
 
-If DockerPilot runs on `your-host:8080`, you can run DockerPilot Extras on `your-host:5000`:
+Extras listens on `127.0.0.1:5000` by default:
 
 ```bash
 export PORT=5000
 python run_dev.py
 ```
+
+For direct LAN/non-loopback exposure, enable web auth first and opt into the bind explicitly:
+
+```bash
+export WEB_AUTH_ENABLED=true
+export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
+export HOST=0.0.0.0
+python run_dev.py
+```
+
+The Vite development server also defaults to loopback. If it must be exposed directly, set
+`VITE_HOST` explicitly and keep `WEB_AUTH_ENABLED=true` in that shell as well.
 
 ### Configuration with Reverse Proxy (Nginx)
 
@@ -505,7 +520,7 @@ set `CORS_ORIGINS` in the process environment to the exact HTTPS origins that ho
 - **SECRET_KEY**: Change `SECRET_KEY` in production (set via `SECRET_KEY` environment variable)
 - **CORS**: Configure `CORS_ORIGINS` to limit access (set via `CORS_ORIGINS` environment variable)
 - **HTTPS**: Use HTTPS in production
-- **Authentication**: Optional web auth with session + MFA TOTP is available (`WEB_AUTH_ENABLED=true`)
+- **Authentication**: Web auth with session + MFA TOTP is optional only for loopback-only use and required for any direct non-loopback bind (`WEB_AUTH_ENABLED=true`)
 - **CSRF**: When web auth is enabled, all mutating `/api/*` requests require a session-bound `X-CSRF-Token`; the bundled frontend sends it automatically
 - **Login rate limiting**: Failed login attempts are bounded per client IP (`AUTH_LOGIN_MAX_FAILURES`, `AUTH_LOGIN_WINDOW_SECONDS`). Behind a reverse proxy, set `AUTH_TRUSTED_PROXY_CIDRS` to only the direct trusted proxy IP/CIDR; forwarded headers from other peers are ignored
 - **Credentials at rest**: Server passwords, private keys, key passphrases and stored server TOTP secrets are encrypted before file/PostgreSQL persistence. The Fernet master key comes from `DOCKERPILOT_EXTRAS_SECRET_KEY` or `~/.dockerpilot_extras/.secrets.key` (mode `0600`)
@@ -523,8 +538,14 @@ export SECRET_KEY=your-secret-key-here
 export CORS_ORIGINS=http://localhost:3000,http://localhost:5000
 export SESSION_COOKIE_SECURE=false
 
-# Web auth (optional, disabled by default)
+# Web auth is optional only while Extras stays on loopback
 export WEB_AUTH_ENABLED=false
+
+# Backend bind; defaults to 127.0.0.1. Non-loopback requires WEB_AUTH_ENABLED=true.
+export HOST=127.0.0.1
+
+# Vite dev bind; defaults to 127.0.0.1. Non-loopback requires WEB_AUTH_ENABLED=true.
+export VITE_HOST=127.0.0.1
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD=change-me
 # Prefer PBKDF2 hash in production:
