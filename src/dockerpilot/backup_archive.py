@@ -10,7 +10,10 @@ import time
 import docker
 
 from .backup_mounts import path_requires_privileged_access
-from .execution_context import resolve_privileged_backup_authorization
+from .execution_context import (
+    has_privileged_backup_authorization_scope,
+    resolve_privileged_backup_authorization,
+)
 from rich.progress import (
     BarColumn,
     Progress,
@@ -377,7 +380,9 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             host.logger.info(f"Bind mount {source_path} backed up successfully using Docker")
             return True
         else:
-            if requires_privileged_access:
+            # Extras installs an explicit scope and must stay Docker-helper-only.
+            # Trusted local CLI leaves the scope unset and keeps sudo/tar fallback.
+            if requires_privileged_access and has_privileged_backup_authorization_scope():
                 host.logger.error(
                     f"Privileged Docker backup failed for {source_path}; refusing direct sudo fallback"
                 )
@@ -388,7 +393,11 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             return host._backup_directory(source_path, backup_file, container_name)
 
     except Exception as e:
-        if 'requires_privileged_access' in locals() and requires_privileged_access:
+        if (
+            'requires_privileged_access' in locals()
+            and requires_privileged_access
+            and has_privileged_backup_authorization_scope()
+        ):
             host.logger.error(
                 f"Privileged Docker bind mount backup failed for {source_path}: {e}"
             )

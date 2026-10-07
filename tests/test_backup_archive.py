@@ -146,6 +146,112 @@ def test_privileged_direct_tar_requires_explicit_extras_authorization(tmp_path, 
         for _level, message in host.logger.messages
     )
 
+
+def test_privileged_docker_failure_keeps_trusted_cli_sudo_fallback(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+    fallback_calls = []
+
+    class FakeProcess:
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+        def communicate(self):
+            return "", "helper unavailable"
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        backup_archive.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: FakeProcess(),
+    )
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        _get_sudo_password=lambda: None,
+        _backup_directory=lambda *args: fallback_calls.append(args) or True,
+    )
+
+    # No Extras authorization scope: trusted local CLI may fall back to sudo/tar.
+    assert backup_archive.backup_bind_mount_using_docker(
+        host,
+        str(source),
+        backup_file,
+    ) is True
+    assert len(fallback_calls) == 1
+    assert fallback_calls[0][0] == str(source)
+
+
+def test_extras_authorized_privileged_docker_failure_refuses_sudo_fallback(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+    fallback_calls = []
+
+    class FakeProcess:
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+        def communicate(self):
+            return "", "helper unavailable"
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        backup_archive.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: FakeProcess(),
+    )
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        _get_sudo_password=lambda: None,
+        _backup_directory=lambda *args: fallback_calls.append(args) or True,
+    )
+
+    with privileged_backup_authorization(True):
+        assert backup_archive.backup_bind_mount_using_docker(
+            host,
+            str(source),
+            backup_file,
+        ) is False
+
+    assert fallback_calls == []
+    assert any(
+        "refusing direct sudo fallback" in message.lower()
+        for _level, message in host.logger.messages
+    )
+
 def test_run_sudo_command_refuses_missing_password():
     host = SimpleNamespace(
         _get_sudo_password=lambda: None,

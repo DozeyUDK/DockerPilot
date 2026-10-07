@@ -15,6 +15,7 @@ if str(EXTRAS_DIR) not in sys.path:
 from backend.services.migration_execution import DockerPilotExecutionContext
 from backend.services.migration_runner import MigrationSpec
 from dockerpilot.execution_context import (
+    has_privileged_backup_authorization_scope,
     privileged_backup_authorization,
     resolve_privileged_backup_authorization,
     resolve_sudo_password,
@@ -127,14 +128,18 @@ def test_execution_context_forgets_authorization_when_pilot_provider_fails():
 
 def test_privileged_backup_scope_overrides_trusted_cli_fallback():
     assert resolve_privileged_backup_authorization(True) is True
+    assert has_privileged_backup_authorization_scope() is False
 
     with privileged_backup_authorization(False):
         assert resolve_privileged_backup_authorization(True) is False
+        assert has_privileged_backup_authorization_scope() is True
 
     with privileged_backup_authorization(True):
         assert resolve_privileged_backup_authorization(False) is True
+        assert has_privileged_backup_authorization_scope() is True
 
     assert resolve_privileged_backup_authorization(True) is True
+    assert has_privileged_backup_authorization_scope() is False
 
 
 def test_sudo_credential_remains_cli_only_and_independent():

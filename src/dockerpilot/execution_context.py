@@ -60,3 +60,13 @@ def resolve_privileged_backup_authorization(fallback: bool = True) -> bool:
     if authorized is _UNSET:
         return bool(fallback)
     return bool(authorized)
+
+
+def has_privileged_backup_authorization_scope() -> bool:
+    """Return True when an explicit privileged-backup scope is active.
+
+    Trusted local CLI leaves the scope unset and may use its sudo fallback.
+    DockerPilotExtras always installs True/False for each promotion run.
+    """
+
+    return _privileged_backup_authorized.get() is not _UNSET
