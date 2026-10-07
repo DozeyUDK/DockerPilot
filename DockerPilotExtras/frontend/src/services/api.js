@@ -74,10 +74,6 @@ export const environmentAPI = {
     scope
   }, { withCredentials: true }),
   clearElevationTokens: () => api.delete('/environment/elevation-token', { withCredentials: true }),
-  setSudoPassword: (password) => api.post('/environment/sudo-password', {
-    sudo_password: password
-  }, { withCredentials: true }),
-  clearSudoPassword: () => api.delete('/environment/sudo-password', { withCredentials: true }),
   cancelPromotion: (containerName) => api.post('/environment/cancel-promotion', {
     container_name: containerName
   }),

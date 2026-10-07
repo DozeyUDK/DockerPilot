@@ -226,58 +226,13 @@ def create_auth_resources(
         def delete(self):
             try:
                 revoked = revoke_elevation_tokens_for_current_session()
-                # Clean legacy cookie-session fields if an old session still contains them.
+                # Clean historical cookie-session fields during token revocation.
                 session.pop("sudo_password", None)
                 session.pop("sudo_password_timestamp", None)
-                session.pop("legacy_elevation_token", None)
                 app.logger.info(f"Revoked {revoked} elevation token(s) for current session")
                 return {"success": True, "revoked": revoked}
             except Exception as exc:
                 app.logger.error(f"Failed to revoke elevation tokens: {exc}")
                 return {"error": str(exc)}, 500
 
-    class SudoPassword(Resource):
-        """Legacy endpoint that now returns an elevation token without storing sudo in session."""
-
-        def post(self):
-            try:
-                data = request.get_json() or {}
-                sudo_password = str(data.get("sudo_password") or "")
-                if not sudo_password:
-                    return {"error": "sudo_password is required"}, 400
-
-                # Never put privileged material in Flask's client-side signed cookie.
-                session.pop("sudo_password", None)
-                session.pop("sudo_password_timestamp", None)
-                issued = issue_elevation_token(
-                    sudo_password=sudo_password,
-                    scope={"action": "legacy.sudo_password"},
-                )
-                # Preserve old two-step clients without putting privileged
-                # material back into Flask's client-side session. The cookie
-                # stores only the short-lived opaque token; the sudo password
-                # remains exclusively in the server-side token manager.
-                session["legacy_elevation_token"] = issued.get("token")
-                return {
-                    "success": True,
-                    "message": "Elevation token issued; sudo password was not stored in session",
-                    "elevation_token": issued.get("token"),
-                    "elevation_expires_in": issued.get("expires_in"),
-                    "deprecated": True,
-                }
-            except Exception as exc:
-                app.logger.error(f"Legacy sudo endpoint failed: {exc}")
-                return {"error": str(exc)}, 500
-
-        def delete(self):
-            """Revoke elevation material and clear any legacy session fields."""
-            try:
-                revoked = revoke_elevation_tokens_for_current_session()
-                session.pop("sudo_password", None)
-                session.pop("sudo_password_timestamp", None)
-                session.pop("legacy_elevation_token", None)
-                return {"success": True, "message": "Elevation credentials cleared", "revoked": revoked}
-            except Exception as exc:
-                return {"error": str(exc)}, 500
-
-    return AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken, SudoPassword
+    return AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken
