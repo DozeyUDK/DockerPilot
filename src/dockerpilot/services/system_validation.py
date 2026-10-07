@@ -50,7 +50,10 @@ def validate_system_requirements(console: Any, client: Any) -> bool:
         console.print("[green]✓ Docker daemon accessible[/green]")
     except Exception:
         console.print("[red]❌ Docker daemon permission denied[/red]")
-        console.print("[yellow]Try: sudo usermod -aG docker $USER[/yellow]")
+        console.print(
+            "[yellow]Configure Docker access explicitly; do not modify docker.sock permissions manually. "
+            "Docker-group membership grants root-equivalent host control.[/yellow]"
+        )
         requirements_met = False
 
     if requirements_met:
