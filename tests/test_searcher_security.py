@@ -90,3 +90,26 @@ def test_searcher_shutdown_always_cleans_dumpcap_and_handles_sigterm():
     assert "finally:" in source
     assert "sniffer.stop_sniffing(socketio, emit_status=False)" in source
     assert "signal.signal(signal.SIGTERM, previous_sigterm_handler)" in source
+
+
+def test_searcher_capture_pipe_uses_buffered_subprocess_stream():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+    start_method = source[source.index("    def start_sniffing"):source.index("    def stop_sniffing")]
+
+    assert "stdout=subprocess.PIPE" in start_method
+    assert "bufsize=0" not in start_method
+
+
+def test_searcher_obsolete_stop_cannot_override_new_capture_status():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+    stop_method = source[source.index("    def stop_sniffing"):source.index("    def set_filter")]
+
+    generation_increment = stop_method.index("self.capture_generation += 1")
+    generation_snapshot = stop_method.index("stopped_generation = self.capture_generation")
+    wait_for_helper = stop_method.index("process.wait(timeout=2)")
+    current_check = stop_method.index("self.capture_generation == stopped_generation")
+    stopped_emit = stop_method.index("socketio.emit('status', {'status': 'stopped'})")
+
+    assert generation_increment < generation_snapshot < wait_for_helper < current_check < stopped_emit
+    assert "and not self.sniffing" in stop_method
+    assert "and still_current" in stop_method
