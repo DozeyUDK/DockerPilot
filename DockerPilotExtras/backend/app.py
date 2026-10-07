@@ -997,7 +997,7 @@ def promote_config_to_server(server_id: str, config_path_str: str, from_env: str
         logger=app.logger,
     )
 
-AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken, SudoPassword = create_auth_resources(
+AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken = create_auth_resources(
     Resource=Resource,
     app=app,
     request=request,
@@ -1259,7 +1259,6 @@ HealthCheck, EnvironmentPromote, CancelPromotion, EnvironmentPromoteSingle = cre
     Resource=Resource,
     app=app,
     request=request,
-    session=session,
     datetime_cls=datetime,
     deployment_progress=_deployment_progress,
     get_dockerpilot=lambda: get_dockerpilot('local'),
@@ -1410,7 +1409,6 @@ register_api_routes(
     CancelPromotion=CancelPromotion,
     CheckSudoRequired=CheckSudoRequired,
     ElevationToken=ElevationToken,
-    SudoPassword=SudoPassword,
     EnvironmentPromoteSingle=EnvironmentPromoteSingle,
     DeploymentProgress=DeploymentProgress,
     EnvironmentStatus=EnvironmentStatus,
