@@ -239,7 +239,15 @@ def _validate_operation_shape(doc: Dict[str, Any]) -> None:
     if op == "remove_canary":
         if not isinstance(doc.get("canary_execution_id"), str):
             raise ProtocolError("invalid_request_schema", "canary_execution_id required")
-        for forbidden in ("plan", "approval", "template_id", "plan_id", "plan_sha256", "approval_id"):
+        for forbidden in (
+            "plan",
+            "approval",
+            "template_id",
+            "plan_id",
+            "plan_sha256",
+            "approval_id",
+            "admission_bundle_sha256",
+        ):
             if forbidden in doc:
                 raise ProtocolError("forbidden_field", f"field {forbidden} is not allowed for remove_canary")
 
