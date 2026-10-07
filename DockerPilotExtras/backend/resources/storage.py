@@ -71,7 +71,17 @@ def create_storage_resources(
                 host_port = int(data.get("host_port", 5432))
                 database = data.get("database", "dockerpilot_extras")
                 user = data.get("user", "dockerpilot")
-                password = data.get("password", "dockerpilot_change_me")
+                password = data.get("password")
+                if not isinstance(password, str) or not password.strip():
+                    return {
+                        "success": False,
+                        "error": "password is required for local PostgreSQL bootstrap",
+                    }, 400
+                if password == "dockerpilot_change_me":
+                    return {
+                        "success": False,
+                        "error": "Refusing legacy default PostgreSQL password",
+                    }, 400
                 schema = data.get("schema", default_postgres_schema)
                 table_prefix = data.get("table_prefix", default_postgres_table_prefix)
                 auto_create_schema = bool(data.get("auto_create_schema", True))
