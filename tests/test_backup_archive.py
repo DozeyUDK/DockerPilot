@@ -252,6 +252,63 @@ def test_extras_authorized_privileged_docker_failure_refuses_sudo_fallback(tmp_p
         for _level, message in host.logger.messages
     )
 
+
+def test_extras_bind_tar_failure_is_not_masked_by_existing_archive(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+    backup_file.write_bytes(b"partial")
+    seen = {}
+
+    class FakeProcess:
+        returncode = 1
+
+        def __init__(self, argv):
+            seen["argv"] = argv
+
+        def poll(self):
+            return 1
+
+        def communicate(self):
+            return "", "tar: read error"
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        backup_archive.subprocess,
+        "Popen",
+        lambda argv, **_kwargs: FakeProcess(argv),
+    )
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        _get_sudo_password=lambda: None,
+        _backup_directory=lambda *_args: True,
+    )
+
+    with privileged_backup_authorization(True):
+        assert backup_archive.backup_bind_mount_using_docker(
+            host,
+            str(source),
+            backup_file,
+        ) is False
+
+    shell_command = seen["argv"][-1]
+    assert "|| true" not in shell_command
+    assert "tar -czf" in shell_command
+
 def test_run_sudo_command_refuses_missing_password():
     host = SimpleNamespace(
         _get_sudo_password=lambda: None,
