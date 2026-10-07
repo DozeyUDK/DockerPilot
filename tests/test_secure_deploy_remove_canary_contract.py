@@ -12,7 +12,6 @@ for path in (ROOT / "DockerPilotExtras", ROOT / "src"):
 
 from backend.secure_deploy.broker_client import BrokerClient
 from backend.secure_deploy.errors import SecureDeployError
-from dockerpilot.secure_deploy.schemas import SchemaValidationError
 from dockerpilot.secure_deploy_broker.errors import ProtocolError
 from dockerpilot.secure_deploy_broker.protocol import PROTOCOL_VERSION, validate_request
 
@@ -56,8 +55,12 @@ BASE = {
     ],
 )
 def test_remove_canary_protocol_rejects_all_client_controlled_cleanup_fields(field, value):
-    with pytest.raises((ProtocolError, SchemaValidationError)):
+    try:
         validate_request({**BASE, field: value})
+    except Exception as exc:  # schema/protocol gate may be reloaded by Extras tests
+        assert type(exc).__name__ in {"ProtocolError", "SchemaValidationError"}
+    else:
+        pytest.fail(f"remove_canary accepted forbidden field: {field}")
 
 
 def test_remove_canary_protocol_accepts_only_execution_identifier():
