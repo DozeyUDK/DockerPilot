@@ -564,16 +564,11 @@ dockerpilot docs --output ./docs
 ### Common Issues
 
 **Docker Connection Failed:**
-```bash
-# Check Docker status
-docker info
 
-# Add user to docker group
-sudo usermod -aG docker $USER
-
-# Restart Docker
-sudo systemctl restart docker
-```
+1. Check whether the daemon is reachable with `docker info`.
+2. Verify that the current account has intentionally configured Docker access.
+3. Prefer rootless Docker where practical. If you intentionally use the `docker` group, treat membership as root-equivalent host access and grant it only to trusted operators.
+4. Restart Docker only if the daemon itself is unhealthy: `sudo systemctl restart docker`.
 
 **Permission Denied:**
 
