@@ -178,6 +178,23 @@ def test_backed_up_remote_shared_server_promotion_is_rejected_before_token_consu
     assert calls == []
     assert authorization == []
 
+
+def test_frontend_exposes_shared_remote_backup_free_route():
+    frontend_page = (
+        EXTRAS_DIR / "frontend" / "src" / "pages" / "Environments.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "const sharedRemoteServer =" in frontend_page
+    assert "sourceServerId === targetServerId && targetServerId !== 'local'" in frontend_page
+    assert "this promotion must run WITHOUT BACKUP" in frontend_page
+
+    shared_remote_block = frontend_page[
+        frontend_page.index("if (sharedRemoteServer) {"):
+        frontend_page.index("    try {", frontend_page.index("if (sharedRemoteServer) {"))
+    ]
+    assert "continuePromotion(" in shared_remote_block
+    assert "\n        true,\n        null" in shared_remote_block
+
 def test_legacy_sudo_password_surface_is_absent():
     auth_source = (EXTRAS_DIR / "backend" / "resources" / "auth.py").read_text(encoding="utf-8")
     promotion_source = (EXTRAS_DIR / "backend" / "resources" / "promotion.py").read_text(encoding="utf-8")
