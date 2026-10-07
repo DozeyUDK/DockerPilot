@@ -10,6 +10,7 @@ import time
 import docker
 
 from .backup_mounts import path_requires_privileged_access
+from .execution_context import resolve_privileged_backup_authorization
 from rich.progress import (
     BarColumn,
     Progress,
@@ -267,12 +268,7 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
             return False
 
         requires_privileged_access = path_requires_privileged_access(source_path)
-        authorization_check = getattr(
-            host,
-            "_is_privileged_backup_authorized",
-            lambda: True,
-        )
-        if requires_privileged_access and not authorization_check():
+        if requires_privileged_access and not resolve_privileged_backup_authorization(True):
             host.logger.error(
                 f"Privileged backup authorization required for bind mount: {source_path}"
             )
@@ -421,12 +417,7 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
         # Direct tar keeps the trusted local CLI sudo fallback, but an
         # Extras execution must explicitly authorize privileged backup first.
         requires_sudo = path_requires_privileged_access(source_path)
-        authorization_check = getattr(
-            host,
-            "_is_privileged_backup_authorized",
-            lambda: True,
-        )
-        if requires_sudo and not authorization_check():
+        if requires_sudo and not resolve_privileged_backup_authorization(True):
             host.logger.error(
                 f"Privileged backup authorization required for: {source_path}"
             )
