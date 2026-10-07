@@ -154,6 +154,8 @@ def create_storage_resources(
                     "storage_configured": configure_storage,
                     "migration": migration_info,
                 }
+            except ValueError as exc:
+                return {"success": False, "error": str(exc)}, 400
             except Exception as exc:
                 return {"success": False, "error": str(exc)}, 500
 
