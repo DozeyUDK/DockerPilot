@@ -297,7 +297,7 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
                 '-v', f'{backup_file.parent.absolute()}:/backup',  # Mount backup dir
                 'alpine:latest',  # Lightweight image
                 'tar', '-czf', f'/backup/{backup_file.name}',
-                '-C', '/source', source_name
+                '-C', '/source', '--', source_name
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
