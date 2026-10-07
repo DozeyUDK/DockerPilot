@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+import pytest
+
 EXTRAS = Path(__file__).resolve().parents[1] / "DockerPilotExtras"
 if str(EXTRAS) not in sys.path:
     sys.path.insert(0, str(EXTRAS))
@@ -86,3 +88,22 @@ def test_discover_local_postgres_uses_container_metadata(monkeypatch):
     assert result["postgres"]["port"] == 55432
     assert result["postgres"]["database"] == "dp"
     assert result["postgres_sanitized"]["password"] == "***"
+
+
+def test_local_postgres_bootstrap_rejects_missing_or_legacy_password_before_docker_import():
+    common = {
+        "container_name": "postgres-dozeyserver",
+        "image": "postgres:16-alpine",
+        "host_port": 5432,
+        "database": "dockerpilot_extras",
+        "user": "dockerpilot",
+    }
+
+    with pytest.raises(ValueError, match="password is required"):
+        local_postgres.ensure_local_postgres_container(password="", **common)
+
+    with pytest.raises(ValueError, match="legacy default"):
+        local_postgres.ensure_local_postgres_container(
+            password="dockerpilot_change_me",
+            **common,
+        )
