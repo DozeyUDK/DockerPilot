@@ -140,7 +140,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                     source_path = Path(source)
 
                     # ALWAYS skip root filesystem - this is critical!
-                    if str(source_path) == '/' or str(source_path).resolve() == Path('/'):
+                    if source_path == Path('/') or source_path.resolve() == Path('/'):
                         host.logger.warning(f"Skipping root filesystem bind mount: {source} -> {mount_point} (CRITICAL: root filesystem should never be backed up)")
                         host.console.print(f"[red]⚠️ SKIPPING root filesystem bind mount '{source}' (root filesystem should never be backed up!)[/red]")
                         continue

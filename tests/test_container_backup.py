@@ -117,7 +117,7 @@ def test_backup_restore_facade_delegates_container_backup(monkeypatch):
 
 
 def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypatch):
-    source = "/opt"
+    source = "/opt/dockerpilot-demo-data"
     container = SimpleNamespace(
         attrs={
             "Mounts": [
@@ -131,6 +131,15 @@ def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypa
     )
     backup_calls = []
     logger = _Logger()
+    real_exists = Path.exists
+
+    def _exists(self):
+        if str(self) == source:
+            return True
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _exists)
+    monkeypatch.setattr(container_backup.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         container_backup.subprocess,
         "run",
