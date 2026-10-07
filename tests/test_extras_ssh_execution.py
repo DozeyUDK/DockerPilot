@@ -54,7 +54,7 @@ def test_explicit_script_uses_bash_argv_but_still_not_shell_true(monkeypatch, tm
 
 
 def test_docker_builder_quotes_shell_metacharacters():
-    command = ssh_execution.build_docker_command("ps; touch /tmp/pwn", use_sudo=False)
+    command = ssh_execution.build_docker_command("ps; touch /tmp/pwn")
     assert shlex.split(command) == ["docker", "ps;", "touch", "/tmp/pwn"]
     assert command.startswith("docker ")
 
@@ -62,3 +62,22 @@ def test_docker_builder_quotes_shell_metacharacters():
 def test_docker_builder_preserves_format_argument():
     command = ssh_execution.build_docker_command("ps -a --format '{{.Names}}\\t{{.Image}}'")
     assert shlex.split(command) == ["docker", "ps", "-a", "--format", "{{.Names}}\\t{{.Image}}"]
+
+
+def test_remote_docker_builder_has_no_sudo_mode():
+    import inspect
+
+    signature = inspect.signature(ssh_execution.build_docker_command)
+    assert "use_sudo" not in signature.parameters
+
+    command = ssh_execution.build_docker_command("ps -a")
+    assert shlex.split(command) == ["docker", "ps", "-a"]
+    assert "sudo" not in shlex.split(command)
+
+
+def test_extras_app_has_no_remote_docker_auto_sudo_path():
+    app_source = (EXTRAS_DIR / "backend" / "app.py").read_text(encoding="utf-8")
+
+    assert "_check_docker_sudo_required" not in app_source
+    assert "_docker_sudo_cache" not in app_source
+    assert "use_sudo=" not in app_source

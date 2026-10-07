@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searcher no longer accepts sudo passwords or mutates Python interpreter capabilities; packet capture is delegated to dumpcap and the web UI binds to loopback by default
 - Container migration now preserves source `privileged` state exactly and no longer enables `--privileged` from cAdvisor image/container names
 - Removed the legacy `/api/environment/sudo-password` compatibility endpoint and legacy promotion-token fallback; promotion now accepts only scoped elevation tokens
+- Remote Docker execution and status probes no longer auto-escalate through `sudo`; SSH accounts must have direct Docker access or fail closed
 
 ## [0.9.0-pre.2] - 2026-05-18
 

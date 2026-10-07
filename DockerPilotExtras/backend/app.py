@@ -711,10 +711,6 @@ def execute_command_via_ssh(server_config, command, check_exit_status=True):
         raise
 
 
-# Cache for sudo requirements per server
-_docker_sudo_cache = {}
-
-
 def _get_or_create_elevation_session_id() -> str:
     """Compatibility wrapper for session-bound elevation identity."""
     return _elevation_token_manager._get_or_create_session_id(session)
@@ -746,56 +742,15 @@ def _revoke_elevation_tokens_for_current_session() -> int:
     return _elevation_token_manager.revoke_for_session(session)
 
 
-def _check_docker_sudo_required(server_config):
-    """Check if docker commands require sudo on the server (with caching)"""
-    # Use server ID or hostname as cache key
-    cache_key = server_config.get('id') or server_config.get('hostname', 'unknown')
-    
-    # Check cache first
-    if cache_key in _docker_sudo_cache:
-        return _docker_sudo_cache[cache_key]
-    
-    # For local server, assume no sudo needed (user should have docker group access)
-    if server_config is None or server_config.get('id') == 'local':
-        _docker_sudo_cache[cache_key] = False
-        return False
-    
-    try:
-        # Try to run docker ps without sudo
-        result = execute_command_via_ssh(server_config, "docker ps", check_exit_status=False)
-        # If it works, no sudo needed
-        _docker_sudo_cache[cache_key] = False
-        return False
-    except Exception as e:
-        # If it fails with permission error, sudo is likely required
-        error_msg = str(e).lower()
-        if 'permission denied' in error_msg or 'cannot connect' in error_msg or 'permission' in error_msg:
-            _docker_sudo_cache[cache_key] = True
-            return True
-        # For other errors, assume no sudo needed (might be other issues like docker not running)
-        _docker_sudo_cache[cache_key] = False
-        return False
+def execute_docker_command_via_ssh(server_config, docker_command, check_exit_status=True, return_stderr=False):
+    """Execute a Docker command over SSH without implicit privilege escalation.
 
-def execute_docker_command_via_ssh(server_config, docker_command, check_exit_status=True, use_sudo=None, return_stderr=False):
-    """Execute docker command on remote server via SSH
-    
-    Args:
-        server_config: Server configuration
-        docker_command: Docker command to execute (without 'docker' prefix)
-        check_exit_status: Whether to raise exception on non-zero exit code
-        use_sudo: Whether to use sudo (None = auto-detect, True/False = force)
-        return_stderr: If True, return tuple (stdout, stderr), otherwise just stdout
-    
-    Returns:
-        stdout string, or (stdout, stderr) tuple if return_stderr=True
+    The remote SSH account must already have direct Docker access. Permission
+    failures are returned to the caller instead of retrying through sudo.
     """
-    # Auto-detect sudo requirement if not specified
-    if use_sudo is None:
-        use_sudo = _check_docker_sudo_required(server_config)
-    
     # Parse and re-quote Docker arguments so remote shell metacharacters never
     # gain command-separator semantics.
-    command = _svc_build_docker_command(docker_command, use_sudo=bool(use_sudo))
+    command = _svc_build_docker_command(docker_command)
     
     # For docker load, we need to check stderr too (docker load outputs to stderr)
     if return_stderr or 'load' in docker_command:

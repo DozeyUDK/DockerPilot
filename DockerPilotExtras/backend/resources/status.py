@@ -77,7 +77,7 @@ def create_status_resources(
             if server_config:
                 docker_output, docker_error = run_remote_probe(
                     server_config,
-                    "docker --version 2>/dev/null || sudo -n docker --version 2>/dev/null || echo MISSING_DOCKER",
+                    "docker --version 2>/dev/null || echo MISSING_DOCKER",
                 )
                 if docker_error:
                     status["docker"]["error"] = f"Remote Docker check failed on {server_label}: {docker_error}"
