@@ -305,9 +305,18 @@ def test_extras_bind_tar_failure_is_not_masked_by_existing_archive(tmp_path, mon
             backup_file,
         ) is False
 
-    shell_command = seen["argv"][-1]
-    assert "|| true" not in shell_command
-    assert "tar -czf" in shell_command
+    argv = seen["argv"]
+    assert "sh" not in argv
+    assert "-c" not in argv
+    assert "|| true" not in argv
+    assert argv[-6:] == [
+        "alpine:latest",
+        "tar",
+        "-czf",
+        f"/backup/{backup_file.name}",
+        "-C",
+        "/source",
+    ] + [source.name]
 
 def test_run_sudo_command_refuses_missing_password():
     host = SimpleNamespace(
