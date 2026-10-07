@@ -10,6 +10,57 @@ import time
 import docker
 
 
+_BACKUP_METADATA_VERSION = 2
+
+
+def _mount_snapshot(mounts: list[dict]) -> list[dict]:
+    """Return a stable identity snapshot for all container mounts."""
+
+    snapshot = [
+        {
+            "name": str(mount.get("Name") or ""),
+            "source": str(mount.get("Source") or ""),
+            "destination": str(mount.get("Destination") or ""),
+        }
+        for mount in mounts
+    ]
+    return sorted(
+        snapshot,
+        key=lambda item: (item["destination"], item["name"], item["source"]),
+    )
+
+
+def _backup_metadata_is_complete(
+    metadata: dict,
+    mounts: list[dict],
+    backup_dir: Path,
+) -> bool:
+    """Accept reuse only for complete backups produced by the hardened format."""
+
+    if metadata.get("format_version") != _BACKUP_METADATA_VERSION:
+        return False
+    if metadata.get("complete") is not True:
+        return False
+    if metadata.get("mount_snapshot") != _mount_snapshot(mounts):
+        return False
+
+    volumes = metadata.get("volumes")
+    if not isinstance(volumes, list):
+        return False
+
+    for volume in volumes:
+        if not isinstance(volume, dict):
+            return False
+        backup_file = volume.get("backup_file")
+        if not backup_file:
+            return False
+        archive = Path(str(backup_file))
+        if not archive.is_file() and not (backup_dir / archive.name).is_file():
+            return False
+
+    return True
+
+
 def backup_container_data(host: Any, container_name: str, backup_path: str = None, reuse_existing: bool = True, max_backup_age_hours: int = 24) -> bool:
     """
     Backup ALL data from container volumes (actual data, not just metadata).
@@ -27,6 +78,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
     """
     try:
         container = host.client.containers.get(container_name)
+        mounts = container.attrs.get('Mounts', [])
 
         # Check for existing backup first if reuse_existing is True
         # Even if backup_path is provided, we check for existing backup first
@@ -43,18 +95,27 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                         with open(metadata_file, 'r') as f:
                             metadata = json.load(f)
 
-                        volumes = metadata.get('volumes', [])
-                        total_size_mb = metadata.get('total_size', 0) / (1024 * 1024)
-                        backup_time = metadata.get('backup_time', 'unknown')
+                        if not _backup_metadata_is_complete(
+                            metadata,
+                            mounts,
+                            existing_backup,
+                        ):
+                            host.logger.warning(
+                                f"Existing backup is legacy, incomplete, or does not match current mounts: {existing_backup}"
+                            )
+                        else:
+                            volumes = metadata.get('volumes', [])
+                            total_size_mb = metadata.get('total_size', 0) / (1024 * 1024)
+                            backup_time = metadata.get('backup_time', 'unknown')
 
-                        host.console.print(f"[green]Backup created: {backup_time}[/green]")
-                        host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
-                        host.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
-                        host.console.print(f"[cyan]ℹ️ Reusing existing backup instead of creating new one[/cyan]")
+                            host.console.print(f"[green]Backup created: {backup_time}[/green]")
+                            host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
+                            host.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
+                            host.console.print(f"[cyan]ℹ️ Reusing existing complete backup instead of creating new one[/cyan]")
 
-                        # Set backup_path to the existing backup path for consistency
-                        backup_path = str(existing_backup)
-                        return True
+                            # Set backup_path to the existing backup path for consistency
+                            backup_path = str(existing_backup)
+                            return True
                     except Exception as e:
                         host.logger.warning(f"Error reading existing backup metadata: {e}")
                         # Continue to create new backup
@@ -90,9 +151,6 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
             sys.stdout.write("\r" + " " * 50 + "\r")  # Clear line
 
         host.console.print(f"[cyan]📦 Creating data backup for container '{container_name}'...[/cyan]")
-
-        # Get container mounts
-        mounts = container.attrs.get('Mounts', [])
 
         if not mounts:
             host.console.print(f"[yellow]⚠️ No volumes mounted to container '{container_name}'[/yellow]")
@@ -345,9 +403,12 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                 host._update_progress('backup', 18, '💾 Saving backup metadata...')
 
             backup_metadata = {
+                'format_version': _BACKUP_METADATA_VERSION,
+                'complete': True,
                 'container_name': container_name,
                 'backup_time': datetime.now().isoformat(),
                 'container_image': container.image.tags[0] if container.image.tags else container.image.id,
+                'mount_snapshot': _mount_snapshot(mounts),
                 'volumes': backed_up_volumes,
                 'total_size': sum(v.get('size', 0) for v in backed_up_volumes)
             }
