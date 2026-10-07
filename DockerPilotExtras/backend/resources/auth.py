@@ -147,7 +147,7 @@ def create_auth_resources(
                 return {"success": False, "error": str(exc)}, 500
 
     class CheckSudoRequired(Resource):
-        """Check if backup will require sudo password."""
+        """Check whether backup needs one-time privileged helper authorization."""
 
         def post(self):
             try:
@@ -172,6 +172,7 @@ def create_auth_resources(
 
                 return {
                     "requires_sudo": requires_sudo,
+                    "requires_privileged_backup_authorization": requires_sudo,
                     "privileged_paths": privileged_paths[:5],
                     "total_privileged_paths": len(privileged_paths),
                     "has_large_mounts": has_large_mounts,
@@ -179,7 +180,11 @@ def create_auth_resources(
                     "total_size_tb": round(total_size_tb, 2),
                     "total_size_gb": round(mount_info.get("total_size_gb", 0), 2),
                     "total_capacity_tb": round(total_capacity_tb, 2),
-                    "message": "Backup will require sudo password" if requires_sudo else "No sudo required",
+                    "message": (
+                        "Backup requires one-time privileged backup authorization"
+                        if requires_sudo
+                        else "No privileged backup authorization required"
+                    ),
                     "warning": (
                         "⚠️ Wykryto duże dyski "
                         f"(użyte: {total_size_tb:.2f} TB, pojemność: {total_capacity_tb:.2f} TB). "
