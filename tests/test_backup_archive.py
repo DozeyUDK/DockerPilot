@@ -89,6 +89,64 @@ def test_cleanup_backup_containers_removes_exited_alpine_container():
     assert removed == ["1234567890abcdef"]
 
 
+
+def test_privileged_bind_mount_requires_explicit_extras_authorization(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+    popen_calls = []
+
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        backup_archive.subprocess,
+        "Popen",
+        lambda *args, **kwargs: popen_calls.append((args, kwargs)),
+    )
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        _is_privileged_backup_authorized=lambda: False,
+    )
+
+    assert backup_archive.backup_bind_mount_using_docker(
+        host,
+        str(source),
+        backup_file,
+    ) is False
+    assert popen_calls == []
+    assert any(
+        "authorization required" in message.lower()
+        for _level, message in host.logger.messages
+    )
+
+
+def test_privileged_direct_tar_requires_explicit_extras_authorization(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    backup_file = tmp_path / "backup.tar.gz"
+
+    monkeypatch.setattr(
+        backup_archive,
+        "path_requires_privileged_access",
+        lambda _path: True,
+    )
+
+    host = SimpleNamespace(
+        logger=_Logger(),
+        console=_console(),
+        _is_privileged_backup_authorized=lambda: False,
+    )
+
+    assert backup_archive.backup_directory(host, str(source), backup_file) is False
+    assert any(
+        "authorization required" in message.lower()
+        for _level, message in host.logger.messages
+    )
+
 def test_run_sudo_command_refuses_missing_password():
     host = SimpleNamespace(
         _get_sudo_password=lambda: None,
