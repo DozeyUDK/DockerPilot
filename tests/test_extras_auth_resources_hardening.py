@@ -91,6 +91,53 @@ def test_auth_factory_exposes_strict_elevation_token_resource_only():
     assert issued == []
 
 
+
+def test_elevation_endpoint_rejects_os_credentials():
+    request = Request()
+    request.payload = {
+        "sudo_password": "must-never-cross-http",
+        "scope": {
+            "action": "environment.promote_single",
+            "container_name": "web",
+            "from_env": "dev",
+            "to_env": "prod",
+        },
+    }
+    classes, issued = _resources(request, Session())
+    ElevationToken = classes[-1]
+
+    response = ElevationToken().post()
+
+    assert response[1] == 400
+    assert "not accepted" in response[0]["error"]
+    assert issued == []
+
+
+def test_elevation_endpoint_issues_scope_only_capability():
+    request = Request()
+    request.payload = {
+        "scope": {
+            "action": "environment.promote_single",
+            "container_name": "web",
+            "from_env": "dev",
+            "to_env": "prod",
+        },
+    }
+    classes, issued = _resources(request, Session())
+    ElevationToken = classes[-1]
+
+    response = ElevationToken().post()
+
+    assert response["success"] is True
+    assert response["token"] == "elev-token"
+    assert issued == [
+        {
+            "scope": request.payload["scope"],
+            "ttl_seconds": None,
+        }
+    ]
+    assert "sudo_password" not in issued[0]
+
 def test_login_rate_limiter_returns_429_after_failed_attempts():
     request = Request()
     request.payload = {"username": "admin", "password": "wrong"}
