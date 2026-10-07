@@ -27,15 +27,19 @@ class StopAfterElevation(RuntimeError):
     pass
 
 
-def _build_promote_single(*, payload, consume, captured_passwords):
+def _build_promote_single(*, payload, consume, captured_authorization):
     logger = SimpleNamespace(
         info=lambda *_a, **_k: None,
         warning=lambda *_a, **_k: None,
         error=lambda *_a, **_k: None,
     )
 
-    def execution_context_factory(_get_dockerpilot, *, sudo_password=None):
-        captured_passwords.append(sudo_password)
+    def execution_context_factory(
+        _get_dockerpilot,
+        *,
+        privileged_backup_authorized=False,
+    ):
+        captured_authorization.append(privileged_backup_authorized)
         raise StopAfterElevation("stop-after-elevation")
 
     classes = create_promotion_resources(
@@ -71,22 +75,22 @@ def _base_payload(**extra):
 
 def test_promotion_scope_mismatch_has_no_legacy_fallback():
     calls = []
-    passwords = []
+    authorization = []
 
     def consume(token, *, expected_action=None, expected_scope=None):
         calls.append((token, expected_action, expected_scope))
-        return False, "Elevation token scope mismatch (container_name)", None
+        return False, "Elevation token scope mismatch (container_name)"
 
     PromoteSingle = _build_promote_single(
         payload=_base_payload(elevation_token="strict-token"),
         consume=consume,
-        captured_passwords=passwords,
+        captured_authorization=authorization,
     )
 
     response = PromoteSingle().post()
 
     assert response == ({"error": "Elevation token scope mismatch (container_name)"}, 403)
-    assert passwords == []
+    assert authorization == []
     assert calls == [
         (
             "strict-token",
@@ -100,9 +104,34 @@ def test_promotion_scope_mismatch_has_no_legacy_fallback():
     ]
 
 
-def test_promotion_without_token_does_not_consume_hidden_compatibility_token():
+def test_valid_token_enables_only_privileged_backup_capability():
+    authorization = []
+
+    def consume(_token, *, expected_action=None, expected_scope=None):
+        assert expected_action == "environment.promote_single"
+        assert expected_scope == {
+            "container_name": "web",
+            "from_env": "dev",
+            "to_env": "staging",
+        }
+        return True, "ok"
+
+    PromoteSingle = _build_promote_single(
+        payload=_base_payload(elevation_token="strict-token"),
+        consume=consume,
+        captured_authorization=authorization,
+    )
+
+    response = PromoteSingle().post()
+
+    assert response[1] == 500
+    assert response[0]["error"] == "stop-after-elevation"
+    assert authorization == [True]
+
+
+def test_promotion_without_token_has_no_privileged_backup_capability():
     calls = []
-    passwords = []
+    authorization = []
 
     def consume(*args, **kwargs):
         calls.append((args, kwargs))
@@ -111,7 +140,7 @@ def test_promotion_without_token_does_not_consume_hidden_compatibility_token():
     PromoteSingle = _build_promote_single(
         payload=_base_payload(),
         consume=consume,
-        captured_passwords=passwords,
+        captured_authorization=authorization,
     )
 
     response = PromoteSingle().post()
@@ -119,7 +148,7 @@ def test_promotion_without_token_does_not_consume_hidden_compatibility_token():
     assert response[1] == 500
     assert response[0]["error"] == "stop-after-elevation"
     assert calls == []
-    assert passwords == [None]
+    assert authorization == [False]
 
 
 def test_legacy_sudo_password_surface_is_absent():
@@ -127,6 +156,7 @@ def test_legacy_sudo_password_surface_is_absent():
     promotion_source = (EXTRAS_DIR / "backend" / "resources" / "promotion.py").read_text(encoding="utf-8")
     api_source = (EXTRAS_DIR / "backend" / "api.py").read_text(encoding="utf-8")
     frontend_api = (EXTRAS_DIR / "frontend" / "src" / "services" / "api.js").read_text(encoding="utf-8")
+    frontend_page = (EXTRAS_DIR / "frontend" / "src" / "pages" / "Environments.jsx").read_text(encoding="utf-8")
 
     for source in (auth_source, promotion_source, api_source, frontend_api):
         assert "legacy.sudo_password" not in source
@@ -137,3 +167,10 @@ def test_legacy_sudo_password_surface_is_absent():
     assert "class SudoPassword" not in auth_source
     assert "clearSudoPassword" not in frontend_api
     assert "setSudoPassword:" not in frontend_api
+
+    assert "sudo_password" not in frontend_api
+    assert "sudoPassword" not in frontend_page
+    assert 'type="password"' not in frontend_page[
+        frontend_page.index("Privileged Backup Authorization Modal"):
+        frontend_page.index(") : null}", frontend_page.index("Privileged Backup Authorization Modal"))
+    ]
