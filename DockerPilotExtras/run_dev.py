@@ -21,13 +21,14 @@ if __name__ == '__main__':
     from backend.app import app
     
     port = int(os.environ.get('PORT', 5000))
+    host = (os.environ.get('HOST') or '127.0.0.1').strip() or '127.0.0.1'
     debug = os.environ.get('FLASK_ENV') == 'development'
     
-    print(f"Starting DockerPilot Extras backend on http://0.0.0.0:{port}")
+    print(f"Starting DockerPilot Extras backend on http://{host}:{port}")
     print(f"Debug mode: {debug}")
     print(f"\nFor frontend development, run in separate terminal:")
     print(f"  cd frontend && npm run dev")
     print(f"\nPress Ctrl+C to stop")
     
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug)
 
