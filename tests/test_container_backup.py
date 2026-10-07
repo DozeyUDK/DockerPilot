@@ -117,7 +117,7 @@ def test_backup_restore_facade_delegates_container_backup(monkeypatch):
 
 
 def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypatch):
-    source = "/opt/dockerpilot-required-privileged-test"
+    source = "/opt"
     container = SimpleNamespace(
         attrs={
             "Mounts": [
@@ -131,12 +131,6 @@ def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypa
     )
     backup_calls = []
     logger = _Logger()
-    original_exists = Path.exists
-    monkeypatch.setattr(
-        Path,
-        "exists",
-        lambda path: True if str(path) == source else original_exists(path),
-    )
     monkeypatch.setattr(
         container_backup.subprocess,
         "run",
