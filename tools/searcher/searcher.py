@@ -224,7 +224,6 @@ class PacketSniffer:
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         shell=False,
-                        bufsize=0,
                     )
                     self.capture_process = process
                     # Serialize the visible "started" state with stop_sniffing().
@@ -312,6 +311,7 @@ class PacketSniffer:
                 return
 
             self.capture_generation += 1
+            stopped_generation = self.capture_generation
             self.sniffing = False
             self.capture_process = None
             self.capture_stderr_thread = None
@@ -324,7 +324,13 @@ class PacketSniffer:
                 process.kill()
                 process.wait(timeout=2)
 
-        if emit_status and socketio is not None:
+        with self.capture_lock:
+            still_current = (
+                self.capture_generation == stopped_generation
+                and not self.sniffing
+            )
+
+        if emit_status and socketio is not None and still_current:
             socketio.emit('status', {'status': 'stopped'})
         logger.info("Sniffing stopped")
 
