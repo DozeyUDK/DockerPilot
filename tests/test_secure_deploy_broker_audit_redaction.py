@@ -19,6 +19,8 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "detail": "password=hunter2",
         "json_detail": '{"password":"quoted-hunter2"}',
         "repr_detail": "{'token': 'quoted-token-123456'}",
+        "control_split": "password\x00=hunter2-control",
+        "control_auth": "Authorization:\x00Bearer control-token-123456",
         "nested": {
             "note": "token=abc123456789",
             "url": "postgresql://user:db-secret@example/db",
@@ -37,6 +39,8 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "hunter2",
         "quoted-hunter2",
         "quoted-token-123456",
+        "hunter2-control",
+        "control-token-123456",
         "abc123456789",
         "db-secret",
         "list-token-123456",
@@ -55,6 +59,7 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "message": "Authorization: Bearer audit-token-123456",
             "detail": "api_key=super-secret-value",
             "structured": '{"password":"persisted-quoted-secret"}',
+            "control_split": "token\x00=control-persisted-secret",
             "connection": "postgres://user:db-password@example/db",
             "credential": "direct-secret",
         }
@@ -66,6 +71,7 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         "audit-token-123456",
         "super-secret-value",
         "persisted-quoted-secret",
+        "control-persisted-secret",
         "db-password",
         "direct-secret",
     ):
