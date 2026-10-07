@@ -9,6 +9,7 @@ from rich.console import Console
 
 from dockerpilot import backup_archive
 from dockerpilot.backup_restore import BackupRestoreMixin
+from dockerpilot.execution_context import privileged_backup_authorization
 
 
 class _Logger:
@@ -107,16 +108,14 @@ def test_privileged_bind_mount_requires_explicit_extras_authorization(tmp_path, 
         lambda *args, **kwargs: popen_calls.append((args, kwargs)),
     )
 
-    host = SimpleNamespace(
-        logger=_Logger(),
-        _is_privileged_backup_authorized=lambda: False,
-    )
+    host = SimpleNamespace(logger=_Logger())
 
-    assert backup_archive.backup_bind_mount_using_docker(
-        host,
-        str(source),
-        backup_file,
-    ) is False
+    with privileged_backup_authorization(False):
+        assert backup_archive.backup_bind_mount_using_docker(
+            host,
+            str(source),
+            backup_file,
+        ) is False
     assert popen_calls == []
     assert any(
         "authorization required" in message.lower()
@@ -138,10 +137,10 @@ def test_privileged_direct_tar_requires_explicit_extras_authorization(tmp_path, 
     host = SimpleNamespace(
         logger=_Logger(),
         console=_console(),
-        _is_privileged_backup_authorized=lambda: False,
     )
 
-    assert backup_archive.backup_directory(host, str(source), backup_file) is False
+    with privileged_backup_authorization(False):
+        assert backup_archive.backup_directory(host, str(source), backup_file) is False
     assert any(
         "authorization required" in message.lower()
         for _level, message in host.logger.messages
