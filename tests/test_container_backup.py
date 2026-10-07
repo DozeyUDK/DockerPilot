@@ -117,20 +117,26 @@ def test_backup_restore_facade_delegates_container_backup(monkeypatch):
 
 
 def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypatch):
-    source = tmp_path / "privileged"
-    source.mkdir()
+    source = "/opt/dockerpilot-required-privileged-test"
     container = SimpleNamespace(
         attrs={
             "Mounts": [
                 {
-                    "Source": str(source),
+                    "Source": source,
                     "Destination": "/data",
                     "Name": None,
                 }
             ]
         }
     )
+    backup_calls = []
     logger = _Logger()
+    original_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: True if str(path) == source else original_exists(path),
+    )
     monkeypatch.setattr(
         container_backup.subprocess,
         "run",
@@ -141,10 +147,10 @@ def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypa
         find_existing_backup=lambda *_args: None,
         _check_sudo_required_for_backup=lambda _name: (
             True,
-            [str(source)],
+            [source],
             {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
         ),
-        _backup_bind_mount_using_docker=lambda *_args: False,
+        _backup_bind_mount_using_docker=lambda *args: backup_calls.append(args) or False,
         _check_cancel_flag=lambda *_args: False,
         _with_loading=lambda _message: nullcontext(),
         _update_progress=lambda *_args: None,
@@ -160,6 +166,8 @@ def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypa
     )
 
     assert result is False
+    assert len(backup_calls) == 1
+    assert backup_calls[0][0] == source
     assert any(
         "required privileged bind mount backup failed" in message.lower()
         for _level, message in logger.messages
