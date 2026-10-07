@@ -1335,14 +1335,9 @@ function Environments() {
         elevationToken
       )
       
-      // Clear one-time elevation tokens and legacy sudo password after promotion
+      // Clear one-time elevation tokens after promotion
       try {
         await environmentAPI.clearElevationTokens()
-      } catch (error) {
-        // Ignore errors during cleanup
-      }
-      try {
-        await environmentAPI.clearSudoPassword()
       } catch (error) {
         // Ignore errors during cleanup
       }
