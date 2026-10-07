@@ -12,6 +12,7 @@ for path in (ROOT / "DockerPilotExtras", ROOT / "src"):
 
 from backend.secure_deploy.broker_client import BrokerClient
 from backend.secure_deploy.errors import SecureDeployError
+from dockerpilot.secure_deploy.schemas import SchemaValidationError
 from dockerpilot.secure_deploy_broker.errors import ProtocolError
 from dockerpilot.secure_deploy_broker.protocol import PROTOCOL_VERSION, validate_request
 
@@ -54,7 +55,7 @@ BASE = {
     ],
 )
 def test_remove_canary_protocol_rejects_all_client_controlled_cleanup_fields(field, value):
-    with pytest.raises(ProtocolError):
+    with pytest.raises((ProtocolError, SchemaValidationError)):
         validate_request({**BASE, field: value})
 
 
