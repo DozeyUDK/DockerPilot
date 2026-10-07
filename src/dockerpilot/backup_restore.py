@@ -2,10 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
-from .execution_context import (
-    resolve_privileged_backup_authorization,
-    resolve_sudo_password,
-)
+from .execution_context import resolve_sudo_password
 from .backup_discovery import find_existing_backup as _find_existing_backup_impl
 from .container_backup import backup_container_data as _backup_container_data_impl
 from .container_restore import (
@@ -40,11 +37,6 @@ class BackupRestoreMixin:
         """Resolve a per-execution credential before the legacy fallback."""
 
         return resolve_sudo_password(getattr(self, '_sudo_password', None))
-
-    def _is_privileged_backup_authorized(self) -> bool:
-        """Return whether this execution may use privileged backup helpers."""
-
-        return resolve_privileged_backup_authorization(True)
 
     def _check_sudo_required_for_backup(self, container_name: str) -> tuple[bool, list[str], dict]:
         """Check whether backup mount access requires sudo and collect mount metadata."""
