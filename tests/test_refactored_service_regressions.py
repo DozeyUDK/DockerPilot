@@ -230,6 +230,9 @@ def test_system_validation_fails_when_docker_client_is_unavailable(monkeypatch):
     assert system_validation.validate_system_requirements(console, BrokenClient()) is False
     assert any("Docker connection failed" in message for message in console.messages)
     assert any("Docker daemon permission denied" in message for message in console.messages)
+    assert any("root-equivalent host control" in message for message in console.messages)
+    assert not any("sudo usermod" in message for message in console.messages)
+    assert not any("chmod" in message and "docker.sock" in message for message in console.messages)
 
 
 def test_checklist_missing_template_preserves_false_result(tmp_path):
