@@ -73,3 +73,40 @@ def test_invalid_environment_stops_before_config_or_docker_io():
         "prod",
         config_path="does-not-matter.yml",
     ) is False
+
+
+def test_environment_promotion_forwards_skip_backup_to_blue_green(tmp_path):
+    config_path = tmp_path / "deployment.yml"
+    config_path.write_text(
+        "deployment:\n"
+        "  image_tag: demo:v1\n"
+        "  container_name: demo\n"
+        "build: {}\n",
+        encoding="utf-8",
+    )
+    calls = []
+    logger = SimpleNamespace(
+        info=lambda *_a, **_k: None,
+        warning=lambda *_a, **_k: None,
+        error=lambda *_a, **_k: None,
+    )
+    host = SimpleNamespace(
+        console=_console(),
+        logger=logger,
+        _run_pre_promotion_checks=lambda *_args: True,
+        _deployment_config_from_dict=lambda deployment: deployment,
+        _blue_green_deploy_enhanced=lambda config, build, skip_backup=False: (
+            calls.append(skip_backup) or False
+        ),
+    )
+
+    result = deployment_promotion.environment_promotion(
+        host,
+        "dev",
+        "prod",
+        config_path=str(config_path),
+        skip_backup=True,
+    )
+
+    assert result is False
+    assert calls == [True]
