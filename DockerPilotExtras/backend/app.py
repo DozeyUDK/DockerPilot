@@ -236,6 +236,7 @@ app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
 
 APP_SESSION_IDLE_MINUTES = int(os.environ.get('APP_SESSION_IDLE_MINUTES', '45'))
 WEB_AUTH_ENABLED = os.environ.get('WEB_AUTH_ENABLED', 'false').lower() == 'true'
+EXTRAS_HOST = (os.environ.get('HOST') or '127.0.0.1').strip() or '127.0.0.1'
 WEB_AUTH_USERNAME = os.environ.get('WEB_AUTH_USERNAME', 'admin')
 WEB_AUTH_PASSWORD = os.environ.get('WEB_AUTH_PASSWORD', 'admin')
 WEB_AUTH_PASSWORD_HASH = os.environ.get('WEB_AUTH_PASSWORD_HASH', '')
@@ -247,6 +248,11 @@ DEMO_MODE = os.environ.get('DOCKERPILOT_DEMO', 'false').lower() == 'true'
 DEMO_ALLOW_MUTATIONS = os.environ.get(
     'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
 ).lower() == 'true'
+
+if EXTRAS_HOST not in {'127.0.0.1', 'localhost', '::1'} and not WEB_AUTH_ENABLED:
+    raise RuntimeError(
+        "Refusing non-loopback DockerPilot Extras bind without WEB_AUTH_ENABLED=true"
+    )
 _login_rate_limiter = SlidingWindowRateLimiter(
     max_failures=AUTH_LOGIN_MAX_FAILURES,
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
@@ -1468,4 +1474,4 @@ if __name__ == '__main__':
     # Development server
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host=EXTRAS_HOST, port=port, debug=debug)
