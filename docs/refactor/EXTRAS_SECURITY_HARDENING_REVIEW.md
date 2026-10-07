@@ -9,8 +9,8 @@ This pass hardens the existing DockerPilotExtras local/session authentication an
 ### Privilege elevation
 
 - Sudo passwords are no longer stored in the Flask cookie session.
-- The legacy `/api/environment/sudo-password` endpoint is retained for compatibility, but it now returns a short-lived server-side elevation token instead of persisting the password in session state.
-- Environment promotion no longer reads a legacy `session['sudo_password']` fallback.
+- The legacy `/api/environment/sudo-password` compatibility endpoint and session-bound compatibility token were removed; privileged promotion now accepts only scoped `/api/environment/elevation-token` tokens.
+- Environment promotion does not read legacy sudo/session fallbacks.
 - Elevation tokens are short-lived, one-time, session-bound and scope-checked.
 
 ### Server credentials at rest
