@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container migration now preserves source `privileged` state exactly and no longer enables `--privileged` from cAdvisor image/container names
 - Removed the legacy `/api/environment/sudo-password` compatibility endpoint and legacy promotion-token fallback; promotion now accepts only scoped elevation tokens
 - Remote Docker execution and status probes no longer auto-escalate through `sudo`; SSH accounts must have direct Docker access or fail closed
+- DockerPilotExtras elevation is now authorization-only: browser/API flows no longer accept OS sudo passwords, privileged backup capability is scoped per container/environment transition, and backed-up bulk promotion is rejected in favor of the scoped single-container flow
 
 ## [0.9.0-pre.2] - 2026-05-18
 
