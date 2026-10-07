@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+import pytest
+
 EXTRAS = Path(__file__).resolve().parents[1] / "DockerPilotExtras"
 if str(EXTRAS) not in sys.path:
     sys.path.insert(0, str(EXTRAS))
@@ -86,3 +88,149 @@ def test_discover_local_postgres_uses_container_metadata(monkeypatch):
     assert result["postgres"]["port"] == 55432
     assert result["postgres"]["database"] == "dp"
     assert result["postgres_sanitized"]["password"] == "***"
+
+
+def test_local_postgres_bootstrap_rejects_missing_or_legacy_password_before_docker_import():
+    common = {
+        "container_name": "postgres-dozeyserver",
+        "image": "postgres:16-alpine",
+        "host_port": 5432,
+        "database": "dockerpilot_extras",
+        "user": "dockerpilot",
+    }
+
+    with pytest.raises(ValueError, match="password is required"):
+        local_postgres.ensure_local_postgres_container(password="", **common)
+
+    with pytest.raises(ValueError, match="legacy default"):
+        local_postgres.ensure_local_postgres_container(
+            password="dockerpilot_change_me",
+            **common,
+        )
+
+
+def test_existing_postgres_legacy_password_is_rejected_before_start(monkeypatch):
+    class NotFound(Exception):
+        pass
+
+    starts = []
+    reloads = []
+    container = SimpleNamespace(
+        status="exited",
+        attrs={
+            "Config": {
+                "Env": [
+                    "POSTGRES_DB=dockerpilot_extras",
+                    "POSTGRES_USER=dockerpilot",
+                    "POSTGRES_PASSWORD=dockerpilot_change_me",
+                ]
+            }
+        },
+        reload=lambda: reloads.append(True),
+        start=lambda: starts.append(True),
+    )
+    client = SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container))
+    fake_docker = SimpleNamespace(
+        from_env=lambda: client,
+        errors=SimpleNamespace(NotFound=NotFound),
+    )
+    monkeypatch.setitem(sys.modules, "docker", fake_docker)
+
+    with pytest.raises(ValueError, match="legacy default password"):
+        local_postgres.ensure_local_postgres_container(
+            container_name="postgres-dozeyserver",
+            image="postgres:16-alpine",
+            host_port=5432,
+            database="dockerpilot_extras",
+            user="dockerpilot",
+            password="new-strong-password",
+        )
+
+    assert reloads == [True]
+    assert starts == []
+
+
+def test_existing_postgres_password_mismatch_is_rejected_before_start(monkeypatch):
+    class NotFound(Exception):
+        pass
+
+    starts = []
+    container = SimpleNamespace(
+        status="exited",
+        attrs={
+            "Config": {
+                "Env": [
+                    "POSTGRES_DB=dockerpilot_extras",
+                    "POSTGRES_USER=dockerpilot",
+                    "POSTGRES_PASSWORD=existing-secret",
+                ]
+            }
+        },
+        reload=lambda: None,
+        start=lambda: starts.append(True),
+    )
+    client = SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container))
+    fake_docker = SimpleNamespace(
+        from_env=lambda: client,
+        errors=SimpleNamespace(NotFound=NotFound),
+    )
+    monkeypatch.setitem(sys.modules, "docker", fake_docker)
+
+    with pytest.raises(ValueError, match="does not match requested password"):
+        local_postgres.ensure_local_postgres_container(
+            container_name="postgres-dozeyserver",
+            image="postgres:16-alpine",
+            host_port=5432,
+            database="dockerpilot_extras",
+            user="dockerpilot",
+            password="different-secret",
+        )
+
+    assert starts == []
+
+
+def test_existing_postgres_matching_password_can_start(monkeypatch):
+    class NotFound(Exception):
+        pass
+
+    starts = []
+    reload_count = [0]
+
+    def reload():
+        reload_count[0] += 1
+        if reload_count[0] >= 2:
+            container.status = "running"
+
+    container = SimpleNamespace(
+        status="exited",
+        attrs={
+            "Config": {
+                "Env": [
+                    "POSTGRES_DB=dockerpilot_extras",
+                    "POSTGRES_USER=dockerpilot",
+                    "POSTGRES_PASSWORD=matching-secret",
+                ]
+            }
+        },
+        reload=reload,
+        start=lambda: starts.append(True),
+    )
+    client = SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container))
+    fake_docker = SimpleNamespace(
+        from_env=lambda: client,
+        errors=SimpleNamespace(NotFound=NotFound),
+    )
+    monkeypatch.setitem(sys.modules, "docker", fake_docker)
+
+    result, created = local_postgres.ensure_local_postgres_container(
+        container_name="postgres-dozeyserver",
+        image="postgres:16-alpine",
+        host_port=5432,
+        database="dockerpilot_extras",
+        user="dockerpilot",
+        password="matching-secret",
+    )
+
+    assert result is container
+    assert created is False
+    assert starts == [True]
