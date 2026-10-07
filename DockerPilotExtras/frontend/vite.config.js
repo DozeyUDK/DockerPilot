@@ -12,7 +12,15 @@ if (!['127.0.0.1', 'localhost', '::1'].includes(devHost) && !webAuthEnabled) {
   )
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => {
+  // Vite CLI --host overrides server.host after config evaluation.
+  // Reject any CLI host override for an unauthenticated dev server.
+  if (!webAuthEnabled && command === 'serve' &&
+      process.argv.some(arg => arg === '--host' || arg.startsWith('--host='))) {
+    throw new Error('Refusing Vite --host override without WEB_AUTH_ENABLED=true')
+  }
+
+  return {
   plugins: [react()],
   server: {
     host: devHost,
@@ -32,5 +40,6 @@ export default defineConfig({
   },
   build: {
     outDir: 'build'
+  }
   }
 })
