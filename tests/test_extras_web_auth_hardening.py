@@ -77,3 +77,25 @@ def test_login_rate_limit_blocks_repeated_failures(monkeypatch, tmp_path):
     limited = client.post("/api/auth/login", json=body)
     assert limited.status_code == 429
     assert limited.get_json()["retry_after_seconds"] > 0
+
+
+def test_non_loopback_backend_bind_requires_web_auth(monkeypatch, tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    extras = root / "DockerPilotExtras"
+    src = root / "src"
+    for path in (extras, src):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    monkeypatch.setenv("WEB_AUTH_ENABLED", "false")
+    monkeypatch.setenv("SECRET_KEY", "bind-security-test-key")
+    monkeypatch.setenv("FLASK_ENV", "development")
+
+    sys.modules.pop("backend.app", None)
+    try:
+        with pytest.raises(RuntimeError, match="non-loopback.*WEB_AUTH_ENABLED=true"):
+            importlib.import_module("backend.app")
+    finally:
+        sys.modules.pop("backend.app", None)
