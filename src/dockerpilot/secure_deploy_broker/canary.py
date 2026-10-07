@@ -649,7 +649,10 @@ class CanaryLedger:
 
 
 def _redact_audit_text(value: str) -> str:
-    text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", value)
+    # Normalize control characters before matching so an attacker cannot split
+    # a sensitive key/value token and have the later sanitizer rejoin it.
+    text = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in value)
+    text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", text)
     text = _AUDIT_BEARER_RE.sub("[REDACTED-AUTH]", text)
     text = _AUDIT_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _AUDIT_URL_CREDENTIAL_RE.sub("://[REDACTED]@", text)
