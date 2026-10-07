@@ -503,7 +503,7 @@ set `CORS_ORIGINS` in the process environment to the exact HTTPS origins that ho
 - **Login rate limiting**: Failed login attempts are bounded per client IP (`AUTH_LOGIN_MAX_FAILURES`, `AUTH_LOGIN_WINDOW_SECONDS`). Behind a reverse proxy, set `AUTH_TRUSTED_PROXY_CIDRS` to only the direct trusted proxy IP/CIDR; forwarded headers from other peers are ignored
 - **Credentials at rest**: Server passwords, private keys, key passphrases and stored server TOTP secrets are encrypted before file/PostgreSQL persistence. The Fernet master key comes from `DOCKERPILOT_EXTRAS_SECRET_KEY` or `~/.dockerpilot_extras/.secrets.key` (mode `0600`)
 - **SSH host identity**: Remote SSH connections use a managed `~/.dockerpilot_extras/known_hosts`; unknown hosts must be explicitly trusted by SHA256 fingerprint and mismatches fail closed. Managed host-key updates are serialized and atomically replaced so readers never observe a partially written file
-- **Privilege elevation**: Sudo passwords are never stored in the Flask cookie session; privileged operations use short-lived, one-time server-side elevation tokens
+- **Privilege elevation**: The browser/API never accepts or stores an OS sudo password. Backed-up promotion uses a short-lived, one-time, session-bound authorization capability scoped to one container/from-env/to-env operation; the capability can authorize the existing privileged Docker backup helper but does not grant Docker or sudo authority by itself
 
 ### Environment Variables
 
