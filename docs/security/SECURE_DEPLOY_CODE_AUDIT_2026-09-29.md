@@ -170,7 +170,7 @@ On a correctly installed root-owned `/etc` this is a normal administrative trust
 
 The broker permits removal by broker execution ID without a plan/approval tuple. This is not equivalent to arbitrary Docker deletion: the operation maps to the fixed broker-owned canary project and fixed `docker compose down` argv.
 
-Keep this explicitly documented as a cleanup capability. Add regression tests ensuring the client can never supply project, path, compose file or cleanup argv.
+**Permanent regression:** `tests/test_secure_deploy_remove_canary_contract.py` pins this as a closed cleanup capability. The protocol accepts only the broker execution identifier and rejects client-controlled project, path, compose, command/argv, image, environment, cleanup, mount/device, privilege/network and plan/approval override fields. The Extras broker client also rejects cleanup override fields before socket use.
 
 ### F-06 — MEDIUM — Plan expiry is execution-authorizing metadata but is not bound to plan identity
 
