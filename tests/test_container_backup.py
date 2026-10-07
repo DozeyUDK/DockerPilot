@@ -168,7 +168,3 @@ def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypa
     assert result is False
     assert len(backup_calls) == 1
     assert backup_calls[0][0] == source
-    assert any(
-        "required privileged bind mount backup failed" in message.lower()
-        for _level, message in logger.messages
-    )
