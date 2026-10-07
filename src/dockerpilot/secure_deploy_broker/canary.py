@@ -73,13 +73,21 @@ _AUDIT_AUTH_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 _AUDIT_BEARER_RE = re.compile(
-    r"\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}",
+    r"\b(?:Bearer|Basic)\s+[^\s,;]+",
     re.IGNORECASE,
 )
 _AUDIT_ASSIGNMENT_RE = re.compile(
-    r"['\"]?(password|passwd|passphrase|token|secret|api[_-]?key|credential)['\"]?"
-    r"\s*[:=]\s*['\"]?[^\s,;'\"]+",
-    re.IGNORECASE,
+    r"""['"]?(password|passwd|passphrase|token|secret|api[_-]?key|credential)['"]?
+        \s*[:=]\s*
+        (?:
+            "(?:\\.|[^"])*"
+            |
+            '(?:\\.|[^'])*'
+            |
+            [^\s,;]+
+        )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 _AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@:]+:[^\s/@]+@")
 
@@ -651,7 +659,7 @@ class CanaryLedger:
 def _redact_audit_text(value: str) -> str:
     # Normalize control characters before matching so an attacker cannot split
     # a sensitive key/value token and have the later sanitizer rejoin it.
-    text = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in value)
+    text = "".join(ch for ch in value if ch >= " " and ch != "\x7f")
     text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", text)
     text = _AUDIT_BEARER_RE.sub("[REDACTED-AUTH]", text)
     text = _AUDIT_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
