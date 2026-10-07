@@ -188,6 +188,23 @@ def create_promotion_resources(
                 
                 if not from_env or not to_env or not container_name:
                     return {'error': 'Missing required parameters'}, 400
+
+                source_server_id = resolve_server_id_for_env(from_env)
+                target_server_id = resolve_server_id_for_env(to_env)
+
+                if (
+                    source_server_id == target_server_id
+                    and target_server_id != 'local'
+                    and not bool(skip_backup)
+                ):
+                    return {
+                        'error': (
+                            'Backed-up promotion on a remote shared server is not '
+                            'supported by the scoped elevation model. Use skip_backup=true '
+                            'or run the backed-up promotion locally on that host.'
+                        ),
+                        'code': 'remote_backup_capability_unavailable',
+                    }, 409
                 
                 app.logger.info(f"Promoting single container {container_name} from {from_env} to {to_env}")
 
@@ -230,10 +247,7 @@ def create_promotion_resources(
                 
                 try:
                     # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
-                    # Source/target servers are resolved from env->server mapping.
-                    source_server_id = resolve_server_id_for_env(from_env)
-                    target_server_id = resolve_server_id_for_env(to_env)
-    
+                    # Source/target servers were resolved before capability consumption.
                     if source_server_id == target_server_id:
                         def promote_on_shared_server():
                             initialize_promotion_progress()
