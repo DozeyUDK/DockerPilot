@@ -45,13 +45,21 @@ backup file to the invoking user's UID/GID.
 
 ## DockerPilotExtras elevation
 
-DockerPilotExtras does not persist sudo passwords in the browser session.
-Privileged legacy operations use short-lived, one-time server-side elevation
-credentials scoped to the current execution.
+DockerPilotExtras does not accept an OS sudo password from the browser or API.
+Its elevation endpoint issues a short-lived, one-time authorization capability
+scoped to one container and environment transition.
 
-Secure Deploy is separate from this legacy backup fallback. The
-`dockerpilot-extras` service account in the agent-safe/Secure Deploy profile
-must not receive general sudo or Docker-socket access.
+For a privileged bind-mount backup, that capability permits the existing
+read-only Docker helper path for the current execution. It carries no password
+and does not grant Docker access by itself. If the Extras service account does
+not already have the intended helper/Docker authority, the backup fails closed.
+
+Direct `sudo tar` remains a trusted local CLI fallback only. Extras never
+injects an OS credential into that path.
+
+Secure Deploy is separate. The `dockerpilot-extras` service account in the
+agent-safe/Secure Deploy profile must not receive general sudo or unrestricted
+Docker-socket access.
 
 ## Recommended setup
 

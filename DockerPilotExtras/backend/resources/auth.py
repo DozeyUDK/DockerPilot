@@ -147,7 +147,7 @@ def create_auth_resources(
                 return {"success": False, "error": str(exc)}, 500
 
     class CheckSudoRequired(Resource):
-        """Check if backup will require sudo password."""
+        """Check whether backup needs one-time privileged helper authorization."""
 
         def post(self):
             try:
@@ -172,6 +172,7 @@ def create_auth_resources(
 
                 return {
                     "requires_sudo": requires_sudo,
+                    "requires_privileged_backup_authorization": requires_sudo,
                     "privileged_paths": privileged_paths[:5],
                     "total_privileged_paths": len(privileged_paths),
                     "has_large_mounts": has_large_mounts,
@@ -179,11 +180,15 @@ def create_auth_resources(
                     "total_size_tb": round(total_size_tb, 2),
                     "total_size_gb": round(mount_info.get("total_size_gb", 0), 2),
                     "total_capacity_tb": round(total_capacity_tb, 2),
-                    "message": "Backup will require sudo password" if requires_sudo else "No sudo required",
+                    "message": (
+                        "Backup requires one-time privileged backup authorization"
+                        if requires_sudo
+                        else "No privileged backup authorization required"
+                    ),
                     "warning": (
-                        "⚠️ Wykryto duże dyski "
-                        f"(użyte: {total_size_tb:.2f} TB, pojemność: {total_capacity_tb:.2f} TB). "
-                        "Backup może trwać bardzo długo!"
+                        "⚠️ Large disks detected "
+                        f"(used: {total_size_tb:.2f} TB, capacity: {total_capacity_tb:.2f} TB). "
+                        "Backup may take a very long time!"
                         if has_large_mounts
                         else None
                     ),
@@ -193,16 +198,23 @@ def create_auth_resources(
                 return {"error": str(exc)}, 500
 
     class ElevationToken(Resource):
-        """Issue/revoke short-lived one-time elevation tokens."""
+        """Issue/revoke short-lived one-time authorization capabilities."""
 
         def post(self):
             try:
                 data = request.get_json() or {}
-                sudo_password = str(data.get("sudo_password") or "")
-                if not sudo_password.strip():
-                    return {"error": "sudo_password is required"}, 400
+                if "sudo_password" in data or "password" in data:
+                    return {
+                        "error": "OS credentials are not accepted by the elevation API"
+                    }, 400
 
                 scope = data.get("scope") if isinstance(data.get("scope"), dict) else {}
+                if scope.get("action") != "environment.promote_single":
+                    return {"error": "Unsupported elevation action"}, 400
+                for key in ("container_name", "from_env", "to_env"):
+                    if not str(scope.get(key) or "").strip():
+                        return {"error": f"scope.{key} is required"}, 400
+
                 ttl_seconds = data.get("ttl_seconds")
                 if ttl_seconds is not None:
                     try:
@@ -211,16 +223,15 @@ def create_auth_resources(
                         return {"error": "ttl_seconds must be an integer"}, 400
 
                 issued = issue_elevation_token(
-                    sudo_password=sudo_password,
                     scope=scope,
                     ttl_seconds=ttl_seconds,
                 )
                 app.logger.info(
-                    f"Issued elevation token (action={scope.get('action')}, expires_in={issued['expires_in']}s)"
+                    f"Issued elevation capability (action={scope.get('action')}, expires_in={issued['expires_in']}s)"
                 )
                 return {"success": True, **issued}
             except Exception as exc:
-                app.logger.error(f"Failed to issue elevation token: {exc}")
+                app.logger.error(f"Failed to issue elevation capability: {exc}")
                 return {"error": str(exc)}, 500
 
         def delete(self):

@@ -55,7 +55,7 @@ def test_find_existing_backup_selects_newest_complete_backup(tmp_path, monkeypat
     assert result.resolve() != older.resolve()
 
 
-def test_mount_inspection_reports_readable_mount_without_sudo(tmp_path, monkeypatch):
+def test_mount_inspection_requires_authorization_for_readable_bind_mount(tmp_path, monkeypatch):
     source = tmp_path / "data"
     source.mkdir()
     container = SimpleNamespace(attrs={"Mounts": [{"Source": str(source), "Destination": "/data"}]})
@@ -77,13 +77,26 @@ def test_mount_inspection_reports_readable_mount_without_sudo(tmp_path, monkeypa
 
     requires_sudo, privileged_paths, info = backup_mounts.check_sudo_required_for_backup(host, "demo")
 
-    assert requires_sudo is False
-    assert privileged_paths == []
+    assert requires_sudo is True
+    assert privileged_paths == [str(source)]
     assert len(info["mounts"]) == 1
     assert info["mounts"][0]["mount_point"] == "/data"
-    assert info["mounts"][0]["requires_sudo"] is False
+    assert info["mounts"][0]["requires_sudo"] is True
     assert info["total_size_gb"] > 0
 
+
+
+def test_path_requires_privileged_access_requires_read_and_traverse(monkeypatch):
+    calls = []
+
+    def fake_access(path, mode):
+        calls.append((path, mode))
+        return False
+
+    monkeypatch.setattr(backup_mounts.os, "access", fake_access)
+
+    assert backup_mounts.path_requires_privileged_access("/srv/demo") is True
+    assert calls == [("/srv/demo", backup_mounts.os.R_OK | backup_mounts.os.X_OK)]
 
 def test_backup_restore_facade_delegates_phase1(monkeypatch):
     host = BackupRestoreMixin.__new__(BackupRestoreMixin)

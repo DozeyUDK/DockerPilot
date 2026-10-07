@@ -10,6 +10,57 @@ import time
 import docker
 
 
+_BACKUP_METADATA_VERSION = 2
+
+
+def _mount_snapshot(mounts: list[dict]) -> list[dict]:
+    """Return a stable identity snapshot for all container mounts."""
+
+    snapshot = [
+        {
+            "name": str(mount.get("Name") or ""),
+            "source": str(mount.get("Source") or ""),
+            "destination": str(mount.get("Destination") or ""),
+        }
+        for mount in mounts
+    ]
+    return sorted(
+        snapshot,
+        key=lambda item: (item["destination"], item["name"], item["source"]),
+    )
+
+
+def _backup_metadata_is_complete(
+    metadata: dict,
+    mounts: list[dict],
+    backup_dir: Path,
+) -> bool:
+    """Accept reuse only for complete backups produced by the hardened format."""
+
+    if metadata.get("format_version") != _BACKUP_METADATA_VERSION:
+        return False
+    if metadata.get("complete") is not True:
+        return False
+    if metadata.get("mount_snapshot") != _mount_snapshot(mounts):
+        return False
+
+    volumes = metadata.get("volumes")
+    if not isinstance(volumes, list):
+        return False
+
+    for volume in volumes:
+        if not isinstance(volume, dict):
+            return False
+        backup_file = volume.get("backup_file")
+        if not backup_file:
+            return False
+        archive = Path(str(backup_file))
+        if not archive.is_file() and not (backup_dir / archive.name).is_file():
+            return False
+
+    return True
+
+
 def backup_container_data(host: Any, container_name: str, backup_path: str = None, reuse_existing: bool = True, max_backup_age_hours: int = 24) -> bool:
     """
     Backup ALL data from container volumes (actual data, not just metadata).
@@ -27,6 +78,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
     """
     try:
         container = host.client.containers.get(container_name)
+        mounts = container.attrs.get('Mounts', [])
 
         # Check for existing backup first if reuse_existing is True
         # Even if backup_path is provided, we check for existing backup first
@@ -43,18 +95,27 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                         with open(metadata_file, 'r') as f:
                             metadata = json.load(f)
 
-                        volumes = metadata.get('volumes', [])
-                        total_size_mb = metadata.get('total_size', 0) / (1024 * 1024)
-                        backup_time = metadata.get('backup_time', 'unknown')
+                        if not _backup_metadata_is_complete(
+                            metadata,
+                            mounts,
+                            existing_backup,
+                        ):
+                            host.logger.warning(
+                                f"Existing backup is legacy, incomplete, or does not match current mounts: {existing_backup}"
+                            )
+                        else:
+                            volumes = metadata.get('volumes', [])
+                            total_size_mb = metadata.get('total_size', 0) / (1024 * 1024)
+                            backup_time = metadata.get('backup_time', 'unknown')
 
-                        host.console.print(f"[green]Backup created: {backup_time}[/green]")
-                        host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
-                        host.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
-                        host.console.print(f"[cyan]ℹ️ Reusing existing backup instead of creating new one[/cyan]")
+                            host.console.print(f"[green]Backup created: {backup_time}[/green]")
+                            host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
+                            host.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
+                            host.console.print(f"[cyan]ℹ️ Reusing existing complete backup instead of creating new one[/cyan]")
 
-                        # Set backup_path to the existing backup path for consistency
-                        backup_path = str(existing_backup)
-                        return True
+                            # Set backup_path to the existing backup path for consistency
+                            backup_path = str(existing_backup)
+                            return True
                     except Exception as e:
                         host.logger.warning(f"Error reading existing backup metadata: {e}")
                         # Continue to create new backup
@@ -69,14 +130,16 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
         # Pre-check: will we need sudo?
         requires_sudo, privileged_paths, mount_info = host._check_sudo_required_for_backup(container_name)
 
+        privileged_path_set = {str(path) for path in privileged_paths}
+
         if requires_sudo:
-            host.console.print(f"[yellow]⚠️  BACKUP REQUIRES SUDO ACCESS[/yellow]")
+            host.console.print(f"[yellow]⚠️  BACKUP INCLUDES PRIVILEGED PATHS[/yellow]")
             host.console.print(f"[yellow]Privileged paths ({len(privileged_paths)}):[/yellow]")
             for path in privileged_paths[:3]:  # Show first 3
                 host.console.print(f"[dim]  - {path}[/dim]")
             if len(privileged_paths) > 3:
                 host.console.print(f"[dim]  ... and {len(privileged_paths) - 3} more[/dim]")
-            host.console.print(f"[yellow]You may be prompted for sudo password during backup.[/yellow]")
+            host.console.print(f"[yellow]Privileged backup authorization or local CLI elevation may be required.[/yellow]")
             host.console.print(f"[yellow]To skip backup: use --skip-backup flag[/yellow]")
 
             # Give user 3 seconds to cancel
@@ -88,9 +151,6 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
             sys.stdout.write("\r" + " " * 50 + "\r")  # Clear line
 
         host.console.print(f"[cyan]📦 Creating data backup for container '{container_name}'...[/cyan]")
-
-        # Get container mounts
-        mounts = container.attrs.get('Mounts', [])
 
         if not mounts:
             host.console.print(f"[yellow]⚠️ No volumes mounted to container '{container_name}'[/yellow]")
@@ -138,7 +198,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                     source_path = Path(source)
 
                     # ALWAYS skip root filesystem - this is critical!
-                    if str(source_path) == '/' or str(source_path).resolve() == Path('/'):
+                    if source_path == Path('/') or source_path.resolve() == Path('/'):
                         host.logger.warning(f"Skipping root filesystem bind mount: {source} -> {mount_point} (CRITICAL: root filesystem should never be backed up)")
                         host.console.print(f"[red]⚠️ SKIPPING root filesystem bind mount '{source}' (root filesystem should never be backed up!)[/red]")
                         continue
@@ -256,13 +316,17 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                 progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
                                 host._update_progress('backup', progress_pct, f'✅ Zbackupowano volume: {volume_name} ({processed_mounts}/{total_mounts})')
                         else:
-                            host.logger.warning(f"Failed to backup volume {volume_name}, continuing...")
-                            host.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}', continuing...[/yellow]")
-                            # Don't return False - continue with other volumes
+                            host.logger.error(f"Required named volume backup failed: {volume_name}")
+                            host.console.print(
+                                f"[red]❌ Required named volume backup failed: {volume_name}[/red]"
+                            )
+                            return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup volume {volume_name}: {e}")
-                        host.console.print(f"[yellow]⚠️ Failed to backup volume '{volume_name}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
+                        host.console.print(
+                            f"[red]❌ Required named volume backup failed: {volume_name}: {e}[/red]"
+                        )
+                        return False
 
                 elif source:
                     # Bind mount - backup using Docker container (faster and no sudo needed for many paths)
@@ -303,25 +367,48 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                     progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
                                     host._update_progress('backup', progress_pct, f'✅ Zbackupowano bind mount: {source_name} ({processed_mounts}/{total_mounts})')
                             else:
-                                host.logger.warning(f"Failed to backup bind mount {source}, continuing...")
-                                host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
-                                # Don't return False - continue with other volumes
+                                if str(source) in privileged_path_set:
+                                    host.logger.error(
+                                        f"Required privileged bind mount backup failed: {source}"
+                                    )
+                                    host.console.print(
+                                        f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                                    )
+                                else:
+                                    host.logger.error(
+                                        f"Required bind mount backup failed: {source}"
+                                    )
+                                    host.console.print(
+                                        f"[red]❌ Required bind mount backup failed: {source}[/red]"
+                                    )
+                                return False
                         else:
-                            host.logger.warning(f"Bind mount source does not exist: {source}")
-                            host.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
+                            host.logger.error(f"Bind mount source does not exist: {source}")
+                            host.console.print(f"[red]❌ Bind mount source not found: {source}[/red]")
+                            return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup bind mount {source}: {e}")
-                        host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
+                        if str(source) in privileged_path_set:
+                            host.console.print(
+                                f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                            )
+                        else:
+                            host.console.print(
+                                f"[red]❌ Required bind mount backup failed: {source}: {e}[/red]"
+                            )
+                        return False
 
             # Save backup metadata (inside loading context)
             if container_name:
                 host._update_progress('backup', 18, '💾 Saving backup metadata...')
 
             backup_metadata = {
+                'format_version': _BACKUP_METADATA_VERSION,
+                'complete': True,
                 'container_name': container_name,
                 'backup_time': datetime.now().isoformat(),
                 'container_image': container.image.tags[0] if container.image.tags else container.image.id,
+                'mount_snapshot': _mount_snapshot(mounts),
                 'volumes': backed_up_volumes,
                 'total_size': sum(v.get('size', 0) for v in backed_up_volumes)
             }

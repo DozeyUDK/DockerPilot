@@ -51,6 +51,18 @@ def create_promotion_resources(
                 
                 if not from_env or not to_env:
                     return {'error': 'Missing environment names'}, 400
+
+                skip_backup = bool(data.get('skip_backup', False))
+                if not skip_backup:
+                    return {
+                        'success': False,
+                        'error': (
+                            'Bulk promotion cannot run backups because elevation '
+                            'capabilities are scoped per container. Use promote-single '
+                            'for backed-up promotion or set skip_backup=true explicitly.'
+                        ),
+                        'code': 'scoped_backup_authorization_required',
+                    }, 409
                 
                 # Find ALL deployment configs for the source environment
                 # Each container MUST have a deployment-{env}.yml file
@@ -77,8 +89,7 @@ def create_promotion_resources(
                     
                     try:
                         app.logger.info(f"Promoting {container_name} from {from_env} to {to_env} using config: {config_path_str}")
-                        skip_backup = data.get('skip_backup', False)
-                        success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, skip_backup)
+                        success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, True)
                         
                         if success:
                             results['success'].append(container_name)
@@ -177,6 +188,23 @@ def create_promotion_resources(
                 
                 if not from_env or not to_env or not container_name:
                     return {'error': 'Missing required parameters'}, 400
+
+                source_server_id = resolve_server_id_for_env(from_env)
+                target_server_id = resolve_server_id_for_env(to_env)
+
+                if (
+                    source_server_id == target_server_id
+                    and target_server_id != 'local'
+                    and not bool(skip_backup)
+                ):
+                    return {
+                        'error': (
+                            'Backed-up promotion on a remote shared server is not '
+                            'supported by the scoped elevation model. Use skip_backup=true '
+                            'or run the backed-up promotion locally on that host.'
+                        ),
+                        'code': 'remote_backup_capability_unavailable',
+                    }, 409
                 
                 app.logger.info(f"Promoting single container {container_name} from {from_env} to {to_env}")
 
@@ -194,9 +222,9 @@ def create_promotion_resources(
                         'timestamp': datetime.now().isoformat()
                     }
                 
-                sudo_password = None
+                privileged_backup_authorized = False
                 if elevation_token:
-                    token_ok, token_message, token_password = _consume_elevation_token(
+                    token_ok, token_message = _consume_elevation_token(
                         elevation_token,
                         expected_action='environment.promote_single',
                         expected_scope={
@@ -207,20 +235,19 @@ def create_promotion_resources(
                     )
                     if not token_ok:
                         return {'error': token_message}, 403
-                    sudo_password = token_password
-                    app.logger.info("Using elevation token for privileged promotion flow")
+                    privileged_backup_authorized = True
+                    app.logger.info(
+                        "Using scoped elevation capability for privileged backup flow"
+                    )
     
                 execution_context = _execution_context_factory(
                     get_dockerpilot,
-                    sudo_password=sudo_password,
+                    privileged_backup_authorized=privileged_backup_authorized,
                 )
                 
                 try:
                     # Promotion is implemented as a server-to-server migration (enterprise-style env isolation).
-                    # Source/target servers are resolved from env->server mapping.
-                    source_server_id = resolve_server_id_for_env(from_env)
-                    target_server_id = resolve_server_id_for_env(to_env)
-    
+                    # Source/target servers were resolved before capability consumption.
                     if source_server_id == target_server_id:
                         def promote_on_shared_server():
                             initialize_promotion_progress()

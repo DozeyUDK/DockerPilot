@@ -35,8 +35,7 @@ function Environments() {
   const [importingConfig, setImportingConfig] = useState(false)
   const [selectedContainerForFile, setSelectedContainerForFile] = useState(null) // Container selected for file import
   const [showFileBrowser, setShowFileBrowser] = useState(false) // Show file browser after container selection
-  const [showSudoModal, setShowSudoModal] = useState(false) // Show sudo password modal
-  const [sudoPassword, setSudoPassword] = useState('') // Sudo password input
+  const [showSudoModal, setShowSudoModal] = useState(false) // Show privileged-backup authorization modal
   const sudoModalCallbackRef = useRef(null) // Ref for modal action callback
   const [sudoModalMeta, setSudoModalMeta] = useState({
     requiresSudo: false,
@@ -45,8 +44,8 @@ function Environments() {
     totalSizeGB: 0,
     largeMounts: []
   })
-  const [privilegedPaths, setPrivilegedPaths] = useState([]) // Paths requiring sudo
-  const [sudoModalContainerName, setSudoModalContainerName] = useState(null) // Container name for modal
+  const [privilegedPaths, setPrivilegedPaths] = useState([]) // Paths requiring privileged backup access
+  const [sudoModalContainerName, setSudoModalContainerName] = useState(null) // Container name for authorization modal
   const [deploymentProgress, setDeploymentProgress] = useState(null) // Progress tracking for deployment
   const [showDeploymentLogs, setShowDeploymentLogs] = useState(false)
   const cancelPollingRef = useRef(false) // Ref to cancel polling immediately
@@ -431,7 +430,6 @@ function Environments() {
   
   const resetSudoModalState = () => {
     setShowSudoModal(false)
-    setSudoPassword('')
     setPrivilegedPaths([])
     setSudoModalContainerName(null)
     setSudoModalMeta({
@@ -678,7 +676,11 @@ function Environments() {
 
   const handlePromote = async (fromEnv, toEnv) => {
     const targetServer = getTargetServerDisplay(toEnv)
-    if (!window.confirm(`Promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()}?\n\nTarget server: ${targetServer}`)) {
+    if (!window.confirm(
+      `Bulk promote from ${fromEnv.toUpperCase()} to ${toEnv.toUpperCase()} WITHOUT BACKUP?\n\n` +
+      `Target server: ${targetServer}\n\n` +
+      'Backed-up promotion requires the per-container flow so privileged backup authorization can be scoped to one container.'
+    )) {
       return
     }
 
@@ -687,7 +689,7 @@ function Environments() {
     setMessage(null)
 
     try {
-      const response = await environmentAPI.promote(fromEnv, toEnv)
+      const response = await environmentAPI.promote(fromEnv, toEnv, true)
       if (response.data.success) {
         setMessage({ 
           type: 'success', 
@@ -1199,17 +1201,46 @@ function Environments() {
     
     const sourceLabel = envLabels[selectedEnv] || selectedEnv.toUpperCase()
     const targetLabel = envLabels[targetEnv] || targetEnv.toUpperCase()
+    const sourceServerId = envServersMap[selectedEnv] || 'local'
+    const targetServerId = envServersMap[targetEnv] || 'local'
+    const sharedRemoteServer =
+      sourceServerId === targetServerId && targetServerId !== 'local'
+
+    if (sharedRemoteServer) {
+      const serverLabel = getServerLabelById(targetServerId)
+      const confirmed = window.confirm(
+        `Both environments map to the same remote server: ${serverLabel}.\n\n` +
+        'Scoped backup authorization cannot cross the SSH boundary, so this promotion must run WITHOUT BACKUP.\n\n' +
+        `Promote ${containerName} from ${sourceLabel} to ${targetLabel} without backup?`
+      )
+      if (!confirmed) {
+        return
+      }
+
+      await continuePromotion(
+        containerName,
+        selectedEnv,
+        targetEnv,
+        sourceLabel,
+        targetLabel,
+        true,
+        null
+      )
+      return
+    }
     
     try {
       const sudoCheck = await environmentAPI.checkSudo(containerName)
-      const requiresSudo = Boolean(sudoCheck.data && sudoCheck.data.requires_sudo)
+      const requiresSudo = Boolean(
+        sudoCheck.data?.requires_privileged_backup_authorization ??
+        sudoCheck.data?.requires_sudo
+      )
       const hasLargeMounts = Boolean(sudoCheck.data && sudoCheck.data.has_large_mounts)
       const shouldShowModal = requiresSudo || hasLargeMounts
       
       if (shouldShowModal) {
         setPrivilegedPaths(sudoCheck.data.privileged_paths || [])
         setSudoModalContainerName(containerName)
-        setSudoPassword('')
         setSudoModalMeta({
           requiresSudo,
           hasLargeMounts,
@@ -1218,11 +1249,10 @@ function Environments() {
           largeMounts: sudoCheck.data?.large_mounts || []
         })
         setShowSudoModal(true)
-        sudoModalCallbackRef.current = async (password, shouldSkip) => {
+        sudoModalCallbackRef.current = async (authorizePrivilegedBackup, shouldSkip) => {
           try {
             resetSudoModalState()
             let actualSkipBackup = false
-            const passwordValue = (password || '').trim()
             let elevationToken = null
             
             if (shouldSkip) {
@@ -1235,9 +1265,9 @@ function Environments() {
                 return
               }
               actualSkipBackup = true
-            } else if (requiresSudo && passwordValue) {
+            } else if (requiresSudo && authorizePrivilegedBackup) {
               try {
-                const tokenResponse = await environmentAPI.requestElevationToken(passwordValue, {
+                const tokenResponse = await environmentAPI.requestElevationToken({
                   action: 'environment.promote_single',
                   container_name: containerName,
                   from_env: selectedEnv,
@@ -1245,18 +1275,19 @@ function Environments() {
                 })
                 elevationToken = tokenResponse?.data?.token || null
                 if (!elevationToken) {
-                  setMessage({ type: 'error', text: 'Could not create elevation token for privileged action.' })
+                  setMessage({ type: 'error', text: 'Could not create authorization capability for privileged backup.' })
                   return
                 }
               } catch (error) {
-                setMessage({ type: 'error', text: 'Error creating elevation token' })
+                setMessage({ type: 'error', text: 'Error creating privileged backup authorization' })
                 return
               }
-            } else if (requiresSudo && !passwordValue) {
+            } else if (requiresSudo) {
               setMessage({
-                type: 'info',
-                text: 'Continuing without sudo password. Backup may skip privileged mounts if access is denied.'
+                type: 'error',
+                text: 'Privileged backup authorization is required. Authorize it or skip the backup.'
               })
+              return
             }
 
             await continuePromotion(
@@ -1273,14 +1304,14 @@ function Environments() {
           }
         }
 
-        return // Wait for user to provide password or skip
+        return // Wait for user authorization, cancellation, or backup skip
       }
     } catch (error) {
-      console.warn('Could not check sudo requirements:', error)
-      // Continue anyway - sudo check is not critical
+      console.warn('Could not check privileged backup requirements:', error)
+      // Continue anyway - the backup runtime still fails closed on privileged paths
     }
     
-    // No sudo required - continue directly
+    // No privileged backup authorization required - continue directly
     await continuePromotion(containerName, selectedEnv, targetEnv, sourceLabel, targetLabel, false, null)
   }
   
@@ -3057,10 +3088,10 @@ function Environments() {
             </div>
       </Modal>
       
-      {/* Sudo Password Modal */}
+      {/* Privileged Backup Authorization Modal */}
       {showSudoModal ? (
         <div 
-          id="sudo-password-modal"
+          id="privileged-backup-modal"
           style={{
             position: 'fixed',
             top: 0,
@@ -3075,7 +3106,7 @@ function Environments() {
             pointerEvents: 'auto'
           }}
           onClick={(e) => {
-            if (e.target.id === 'sudo-password-modal') {
+            if (e.target.id === 'privileged-backup-modal') {
               resetSudoModalState()
             }
           }}
@@ -3097,8 +3128,8 @@ function Environments() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{ marginTop: 0, color: sudoModalMeta.requiresSudo ? '#dc3545' : '#ff9800' }}>
-              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ? '🔐 Sudo password required + ⚠️ Large disks' :
-               sudoModalMeta.requiresSudo ? '🔐 Sudo password required' :
+              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ? '🔐 Privileged backup authorization + ⚠️ Large disks' :
+               sudoModalMeta.requiresSudo ? '🔐 Privileged backup authorization required' :
                sudoModalMeta.hasLargeMounts ? '⚠️ Large disks detected' :
                '🔐 Backup configuration'}
             </h2>
@@ -3106,7 +3137,7 @@ function Environments() {
               {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ?
                 `Backup of container ${sudoModalContainerName || 'container'} requires administrator privileges and large disks detected (${sudoModalMeta.totalSizeTB.toFixed(2)} TB). Backup may take a very long time.` :
                sudoModalMeta.requiresSudo ?
-                `Backup of container ${sudoModalContainerName || 'container'} may need elevated permissions. Enter sudo password or continue without it.` :
+                `Backup of container ${sudoModalContainerName || 'container'} needs a one-time authorization capability to use the privileged Docker backup helper. No OS password is sent or stored.` :
                sudoModalMeta.hasLargeMounts ?
                 `Large disks detected (${sudoModalMeta.totalSizeTB.toFixed(2)} TB) for container ${sudoModalContainerName || 'container'}. Backup may take a very long time.` :
                 `Backup configuration for container ${sudoModalContainerName || 'container'}.`}
@@ -3143,7 +3174,7 @@ function Environments() {
                 color: 'var(--text-primary)',
                 border: theme === 'dark' ? '1px solid rgba(255, 193, 7, 0.3)' : 'none'
               }}>
-                <strong>Required paths (sudo):</strong>
+                <strong>Privileged backup paths:</strong>
                 <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem', color: 'var(--text-primary)' }}>
                   {privilegedPaths.slice(0, 5).map((path, idx) => (
                     <li key={idx} style={{ wordBreak: 'break-all' }}>{path}</li>
@@ -3153,32 +3184,6 @@ function Environments() {
               </div>
             )}
 
-            {sudoModalMeta.requiresSudo && (
-              <input
-                type="password"
-                value={sudoPassword}
-                onChange={(e) => setSudoPassword(e.target.value)}
-                placeholder="Enter sudo password (optional if you want to try without it)"
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  fontSize: '1rem',
-                  border: `1px solid ${theme === 'dark' ? 'var(--input-border)' : '#ccc'}`,
-                  borderRadius: '4px',
-                  marginBottom: '1rem',
-                  boxSizing: 'border-box',
-                  backgroundColor: theme === 'dark' ? 'var(--input-bg)' : 'white',
-                  color: 'var(--text-primary)'
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key !== 'Enter') return
-                  const callback = sudoModalCallbackRef.current
-                  if (!callback) return
-                  await callback(sudoPassword, false)
-                }}
-                autoFocus
-              />
-            )}
 
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button
@@ -3190,7 +3195,7 @@ function Environments() {
                   }
 
                   try {
-                    await callback('', true)
+                    await callback(false, true)
                   } catch (error) {
                     setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
                   }
@@ -3232,7 +3237,7 @@ function Environments() {
                   }
 
                   try {
-                    await callback(sudoPassword, false)
+                    await callback(sudoModalMeta.requiresSudo, false)
                   } catch (error) {
                     setMessage({ type: 'error', text: 'Error: ' + (error.message || 'Unknown error') })
                   }
@@ -3247,7 +3252,7 @@ function Environments() {
                   fontWeight: '600'
                 }}
               >
-                Kontynuuj
+                {sudoModalMeta.requiresSudo ? 'Authorize & continue' : 'Continue'}
               </button>
             </div>
           </div>

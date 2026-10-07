@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-from dockerpilot.execution_context import sudo_credential
+from dockerpilot.execution_context import privileged_backup_authorization
 
 
 class DockerPilotExecutionContext:
-    """Activate a credential without storing it on the shared pilot instance."""
+    """Activate one-shot operation capabilities without storing OS credentials."""
 
     __slots__ = (
         "_pilot_provider",
-        "_sudo_password",
-        "_credential_scope",
+        "_privileged_backup_authorized",
+        "_authorization_scope",
         "_pilot",
         "_active",
         "_used",
@@ -23,11 +23,11 @@ class DockerPilotExecutionContext:
         self,
         pilot_provider: Callable[[], Any],
         *,
-        sudo_password: Optional[str] = None,
+        privileged_backup_authorized: bool = False,
     ) -> None:
         self._pilot_provider = pilot_provider
-        self._sudo_password = sudo_password
-        self._credential_scope = None
+        self._privileged_backup_authorized = bool(privileged_backup_authorized)
+        self._authorization_scope = None
         self._pilot = None
         self._active = False
         self._used = False
@@ -47,25 +47,23 @@ class DockerPilotExecutionContext:
         if self._used:
             raise RuntimeError("DockerPilot execution context has already been used")
 
-        # Consume the capability before any dependency call.  A failing pilot
-        # provider must not leave a reusable object retaining the credential.
-        password = self._sudo_password
-        self._sudo_password = None
+        authorized = self._privileged_backup_authorized
+        self._privileged_backup_authorized = False
         self._used = True
         pilot = self._pilot_provider()
-        scope = sudo_credential(password)
+        scope = privileged_backup_authorization(authorized)
         scope.__enter__()
-        password = None
+        authorized = False
         self._pilot = pilot
-        self._credential_scope = scope
+        self._authorization_scope = scope
         self._active = True
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
-        scope = self._credential_scope
-        self._credential_scope = None
+        scope = self._authorization_scope
+        self._authorization_scope = None
         self._pilot = None
-        self._sudo_password = None
+        self._privileged_backup_authorized = False
         self._active = False
         if scope is not None:
             scope.__exit__(exc_type, exc_value, traceback)

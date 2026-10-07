@@ -12,52 +12,67 @@ class Session(dict):
     permanent = False
 
 
-def test_elevation_token_is_one_time_and_session_bound():
+def test_elevation_token_is_one_time_and_session_bound_without_credentials():
     now = [100.0]
     manager = ElevationTokenManager(clock=lambda: now[0])
     owner = Session()
     other = Session()
     issued = manager.issue(
         owner,
-        sudo_password="secret",
         scope={"action": "promote", "container": "api"},
     )
 
-    ok, message, password = manager.consume(
+    assert "sudo_password" not in issued
+    assert all("sudo_password" not in entry for entry in manager._tokens.values())
+
+    ok, message = manager.consume(
         other,
         issued["token"],
         expected_action="promote",
     )
     assert not ok
     assert "session" in message.lower()
-    assert password is None
 
-    ok, message, password = manager.consume(
+    ok, message = manager.consume(
         owner,
         issued["token"],
         expected_action="promote",
         expected_scope={"container": "api"},
     )
-    assert (ok, message, password) == (True, "ok", "secret")
+    assert (ok, message) == (True, "ok")
 
-    ok, _message, password = manager.consume(owner, issued["token"])
+    ok, _message = manager.consume(owner, issued["token"])
     assert not ok
-    assert password is None
 
 
 def test_elevation_token_expires_and_revoke_clears_session_tokens():
     now = [100.0]
-    manager = ElevationTokenManager(default_ttl_seconds=30, max_ttl_seconds=60, clock=lambda: now[0])
+    manager = ElevationTokenManager(
+        default_ttl_seconds=30,
+        max_ttl_seconds=60,
+        clock=lambda: now[0],
+    )
     session = Session()
-    first = manager.issue(session, sudo_password="one")
-    second = manager.issue(session, sudo_password="two")
+    first = manager.issue(session)
+    second = manager.issue(session)
     assert manager.revoke_for_session(session) == 2
     assert manager.consume(session, first["token"])[0] is False
     assert manager.consume(session, second["token"])[0] is False
 
-    third = manager.issue(session, sudo_password="three", ttl_seconds=30)
+    third = manager.issue(session, ttl_seconds=30)
     now[0] = 131.0
-    ok, message, password = manager.consume(session, third["token"])
+    ok, message = manager.consume(session, third["token"])
     assert not ok
     assert "expired" in message.lower()
-    assert password is None
+
+
+def test_manager_api_has_no_sudo_password_parameter():
+    import inspect
+
+    issue_signature = inspect.signature(ElevationTokenManager.issue)
+    assert "sudo_password" not in issue_signature.parameters
+
+    source = Path(
+        sys.modules[ElevationTokenManager.__module__].__file__
+    ).read_text(encoding="utf-8")
+    assert '"sudo_password":' not in source

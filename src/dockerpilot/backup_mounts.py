@@ -6,6 +6,17 @@ import os
 import subprocess
 
 
+
+def path_requires_privileged_access(source: str) -> bool:
+    """Return True when a bind path needs privileged read access."""
+    return (
+        str(source).startswith('/var/lib/docker/volumes/')
+        or str(source).startswith('/var/lib/docker/')
+        or str(source).startswith('/root/')
+        or not os.access(source, os.R_OK | os.X_OK)
+    )
+
+
 def check_sudo_required_for_backup(host: Any, container_name: str) -> tuple[bool, list[str], dict]:
     """Check if backup will require sudo access and get mount information
 
@@ -28,11 +39,13 @@ def check_sudo_required_for_backup(host: Any, container_name: str) -> tuple[bool
             source = mount.get('Source')
             if source:
                 source_path = Path(source)
+                # Any bind mount is read through a root Docker helper in Extras.
+                # Require an explicit capability instead of trying to prove that every
+                # descendant is readable by the service account.
+                is_bind_mount = not bool(mount.get('Name'))
                 requires_sudo = (
-                    str(source).startswith('/var/lib/docker/volumes/') or
-                    str(source).startswith('/var/lib/docker/') or
-                    str(source).startswith('/root/') or
-                    not os.access(source, os.R_OK)
+                    is_bind_mount
+                    or path_requires_privileged_access(source)
                 )
 
                 if requires_sudo:

@@ -86,3 +86,43 @@ def test_blue_green_early_cancel_clears_tracking_and_backup_helpers():
     assert blue_green_strategy.blue_green_deploy(host, config, {}) is False
     assert host._current_deployment_container is None
     assert cleanup_calls == [True]
+
+
+def test_blue_green_aborts_when_required_backup_fails():
+    cleanup_calls = []
+    prepare_calls = []
+
+    class _Containers:
+        def get(self, name):
+            if name in {"demo_blue", "demo_green"}:
+                raise docker.errors.NotFound("missing")
+            if name == "demo":
+                return SimpleNamespace(name="demo", status="running")
+            raise docker.errors.NotFound("missing")
+
+    host = SimpleNamespace(
+        console=_console(),
+        logger=_Logger(),
+        client=SimpleNamespace(containers=_Containers()),
+        _current_deployment_container=None,
+        _detect_health_check_endpoint=lambda _image: None,
+        _resolve_runtime_network=lambda network: network,
+        _check_cancel_flag=lambda: False,
+        _cleanup_backup_containers=lambda: cleanup_calls.append(True),
+        _update_progress=lambda *_args: None,
+        backup_container_data=lambda *_args, **_kwargs: False,
+        _prepare_image=lambda *_args, **_kwargs: prepare_calls.append(True) or (True, "ok"),
+    )
+    config = DeploymentConfig(
+        image_tag="demo:v2",
+        container_name="demo",
+        port_mapping={},
+        environment={},
+        volumes={},
+        health_check_endpoint=None,
+    )
+
+    assert blue_green_strategy.blue_green_deploy(host, config, {}, skip_backup=False) is False
+    assert host._current_deployment_container is None
+    assert cleanup_calls == [True]
+    assert prepare_calls == []

@@ -69,8 +69,7 @@ export const environmentAPI = {
   checkSudo: (containerName) => api.post('/environment/check-sudo', {
     container_name: containerName
   }),
-  requestElevationToken: (password, scope = {}) => api.post('/environment/elevation-token', {
-    sudo_password: password,
+  requestElevationToken: (scope = {}) => api.post('/environment/elevation-token', {
     scope
   }, { withCredentials: true }),
   clearElevationTokens: () => api.delete('/environment/elevation-token', { withCredentials: true }),

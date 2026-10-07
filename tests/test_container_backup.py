@@ -1,5 +1,6 @@
 """Regression tests for container backup orchestration extraction."""
 
+from contextlib import nullcontext
 from datetime import datetime
 from io import StringIO
 import json
@@ -42,8 +43,11 @@ def test_container_backup_reuses_complete_recent_backup(tmp_path):
     (backup_dir / "backup_metadata.json").write_text(
         json.dumps(
             {
+                "format_version": 2,
+                "complete": True,
                 "container_name": "demo",
                 "backup_time": datetime.now().isoformat(),
+                "mount_snapshot": [],
                 "volumes": [{"backup_file": str(archive)}],
                 "total_size": archive.stat().st_size,
             }
@@ -61,6 +65,54 @@ def test_container_backup_reuses_complete_recent_backup(tmp_path):
 
     assert container_backup.backup_container_data(host, "demo", reuse_existing=True) is True
 
+
+
+def test_container_backup_rejects_legacy_reuse_without_completeness_manifest(tmp_path):
+    backup_dir = tmp_path / "backup_demo_legacy"
+    backup_dir.mkdir()
+    archive = backup_dir / "data.tar.gz"
+    archive.write_bytes(b"archive")
+    (backup_dir / "backup_metadata.json").write_text(
+        json.dumps(
+            {
+                "container_name": "demo",
+                "backup_time": datetime.now().isoformat(),
+                "volumes": [{"backup_file": str(archive)}],
+                "total_size": archive.stat().st_size,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = []
+    logger = _Logger()
+    container = SimpleNamespace(attrs={"Mounts": []})
+    host = SimpleNamespace(
+        client=SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container)),
+        find_existing_backup=lambda _name, _hours: backup_dir,
+        _check_sudo_required_for_backup=lambda name: (
+            checks.append(name)
+            or (
+                False,
+                [],
+                {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
+            )
+        ),
+        console=_console(),
+        logger=logger,
+    )
+
+    assert container_backup.backup_container_data(
+        host,
+        "demo",
+        backup_path=str(tmp_path / "fresh-backup"),
+        reuse_existing=True,
+    ) is True
+    assert checks == ["demo"]
+    assert any(
+        "legacy, incomplete, or does not match current mounts" in message
+        for _level, message in logger.messages
+    )
 
 def test_container_backup_treats_container_without_mounts_as_success():
     container = SimpleNamespace(attrs={"Mounts": []})
@@ -113,3 +165,106 @@ def test_backup_restore_facade_delegates_container_backup(monkeypatch):
             },
         )
     ]
+
+
+def test_named_volume_backup_failure_aborts_incomplete_backup(tmp_path, monkeypatch):
+    volume_name = "demo_data"
+    container = SimpleNamespace(
+        attrs={
+            "Mounts": [
+                {
+                    "Source": "",
+                    "Destination": "/data",
+                    "Name": volume_name,
+                }
+            ]
+        },
+        image=SimpleNamespace(tags=["demo:latest"], id="sha256:demo"),
+    )
+    volume_calls = []
+    monkeypatch.setattr(container_backup.time, "sleep", lambda *_args, **_kwargs: None)
+    host = SimpleNamespace(
+        client=SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container)),
+        find_existing_backup=lambda *_args: None,
+        _check_sudo_required_for_backup=lambda _name: (
+            False,
+            [],
+            {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
+        ),
+        _backup_volume_using_docker=lambda *args: volume_calls.append(args) or False,
+        _check_cancel_flag=lambda *_args: False,
+        _with_loading=lambda _message: nullcontext(),
+        _update_progress=lambda *_args: None,
+        console=_console(),
+        logger=_Logger(),
+    )
+
+    backup_path = tmp_path / "backup"
+    result = container_backup.backup_container_data(
+        host,
+        "demo",
+        backup_path=str(backup_path),
+        reuse_existing=False,
+    )
+
+    assert result is False
+    assert len(volume_calls) == 1
+    assert volume_calls[0][0] == volume_name
+    assert not (backup_path / "backup_metadata.json").exists()
+
+
+def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypatch):
+    source = "/opt/dockerpilot-demo-data"
+    container = SimpleNamespace(
+        attrs={
+            "Mounts": [
+                {
+                    "Source": source,
+                    "Destination": "/data",
+                    "Name": None,
+                }
+            ]
+        }
+    )
+    backup_calls = []
+    logger = _Logger()
+    real_exists = Path.exists
+
+    def _exists(self):
+        if str(self) == source:
+            return True
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _exists)
+    monkeypatch.setattr(container_backup.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        container_backup.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    host = SimpleNamespace(
+        client=SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container)),
+        find_existing_backup=lambda *_args: None,
+        _check_sudo_required_for_backup=lambda _name: (
+            True,
+            [source],
+            {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
+        ),
+        _backup_bind_mount_using_docker=lambda *args: backup_calls.append(args) or False,
+        _check_cancel_flag=lambda *_args: False,
+        _with_loading=lambda _message: nullcontext(),
+        _update_progress=lambda *_args: None,
+        console=_console(),
+        logger=logger,
+    )
+
+    result = container_backup.backup_container_data(
+        host,
+        "demo",
+        backup_path=str(tmp_path / "backup"),
+        reuse_existing=False,
+    )
+
+    assert result is False
+    assert len(backup_calls) == 1
+    assert backup_calls[0][0] == source

@@ -127,8 +127,13 @@ def blue_green_deploy(
             else:
                 host.console.print(f"[green]💾 Using existing backup[/green]")
         else:
-            host.console.print(f"[yellow]⚠️ Data backup failed, but continuing deployment...[/yellow]")
-            host.logger.warning("Data backup failed before deployment - this is risky for production!")
+            host.console.print("[red]❌ Data backup failed; aborting production deployment[/red]")
+            host.logger.error(
+                "Data backup failed before blue-green deployment; refusing unbacked promotion"
+            )
+            host._current_deployment_container = None
+            host._cleanup_backup_containers()
+            return False
     elif skip_backup and active_container:
         host.console.print("[yellow]⚠️ Skipping data backup (--skip-backup flag)[/yellow]")
     else:

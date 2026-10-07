@@ -720,10 +720,9 @@ def _cleanup_expired_elevation_tokens() -> int:
     return _elevation_token_manager.cleanup_expired()
 
 
-def _issue_elevation_token(sudo_password: str, scope: dict = None, ttl_seconds: int = None) -> dict:
+def _issue_elevation_token(scope: dict = None, ttl_seconds: int = None) -> dict:
     return _elevation_token_manager.issue(
         session,
-        sudo_password=sudo_password,
         scope=scope,
         ttl_seconds=ttl_seconds,
     )
@@ -966,8 +965,7 @@ AuthStatus, AuthLogin, AuthLogout, CheckSudoRequired, ElevationToken = create_au
     verify_totp_code=lambda secret, code, window=1: globals()["_verify_totp_code"](secret, code, window),
     clear_auth_session=lambda: globals()["_clear_auth_session"](),
     get_dockerpilot=get_dockerpilot,
-    issue_elevation_token=lambda sudo_password, scope, ttl_seconds=None: globals()["_issue_elevation_token"](
-        sudo_password=sudo_password,
+    issue_elevation_token=lambda scope, ttl_seconds=None: globals()["_issue_elevation_token"](
         scope=scope,
         ttl_seconds=ttl_seconds,
     ),
