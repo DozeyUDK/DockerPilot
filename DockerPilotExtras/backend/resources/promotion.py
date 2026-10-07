@@ -51,6 +51,18 @@ def create_promotion_resources(
                 
                 if not from_env or not to_env:
                     return {'error': 'Missing environment names'}, 400
+
+                skip_backup = bool(data.get('skip_backup', False))
+                if not skip_backup:
+                    return {
+                        'success': False,
+                        'error': (
+                            'Bulk promotion cannot run backups because elevation '
+                            'capabilities are scoped per container. Use promote-single '
+                            'for backed-up promotion or set skip_backup=true explicitly.'
+                        ),
+                        'code': 'scoped_backup_authorization_required',
+                    }, 409
                 
                 # Find ALL deployment configs for the source environment
                 # Each container MUST have a deployment-{env}.yml file
@@ -77,8 +89,7 @@ def create_promotion_resources(
                     
                     try:
                         app.logger.info(f"Promoting {container_name} from {from_env} to {to_env} using config: {config_path_str}")
-                        skip_backup = data.get('skip_backup', False)
-                        success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, skip_backup)
+                        success = promote_config_to_server(target_server_id, config_path_str, from_env, to_env, True)
                         
                         if success:
                             results['success'].append(container_name)
