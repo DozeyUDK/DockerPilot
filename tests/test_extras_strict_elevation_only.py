@@ -27,7 +27,7 @@ class StopAfterElevation(RuntimeError):
     pass
 
 
-def _build_promote_single(*, payload, consume, captured_authorization):
+def _build_promote_single(*, payload, consume, captured_authorization, resolve_server_id=None):
     logger = SimpleNamespace(
         info=lambda *_a, **_k: None,
         warning=lambda *_a, **_k: None,
@@ -51,7 +51,7 @@ def _build_promote_single(*, payload, consume, captured_authorization):
         get_dockerpilot=lambda: None,
         consume_elevation_token=consume,
         find_all_deployment_configs_for_env=lambda _env: [],
-        resolve_server_id_for_env=lambda _env: "srv",
+        resolve_server_id_for_env=resolve_server_id or (lambda _env: "local"),
         promote_config_to_server=lambda *_a, **_k: True,
         move_many_container_bindings=lambda *_a, **_k: None,
         move_container_binding=lambda *_a, **_k: None,
@@ -150,6 +150,33 @@ def test_promotion_without_token_has_no_privileged_backup_capability():
     assert calls == []
     assert authorization == [False]
 
+
+
+def test_backed_up_remote_shared_server_promotion_is_rejected_before_token_consumption():
+    calls = []
+    authorization = []
+
+    def consume(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("remote rejection must happen before token consumption")
+
+    PromoteSingle = _build_promote_single(
+        payload=_base_payload(
+            to_env="prod",
+            elevation_token="strict-token",
+            skip_backup=False,
+        ),
+        consume=consume,
+        captured_authorization=authorization,
+        resolve_server_id=lambda _env: "remote-1",
+    )
+
+    body, status = PromoteSingle().post()
+
+    assert status == 409
+    assert body["code"] == "remote_backup_capability_unavailable"
+    assert calls == []
+    assert authorization == []
 
 def test_legacy_sudo_password_surface_is_absent():
     auth_source = (EXTRAS_DIR / "backend" / "resources" / "auth.py").read_text(encoding="utf-8")
