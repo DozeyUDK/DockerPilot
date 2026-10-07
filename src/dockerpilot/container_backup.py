@@ -69,6 +69,8 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
         # Pre-check: will we need sudo?
         requires_sudo, privileged_paths, mount_info = host._check_sudo_required_for_backup(container_name)
 
+        privileged_path_set = {str(path) for path in privileged_paths}
+
         if requires_sudo:
             host.console.print(f"[yellow]⚠️  BACKUP INCLUDES PRIVILEGED PATHS[/yellow]")
             host.console.print(f"[yellow]Privileged paths ({len(privileged_paths)}):[/yellow]")
@@ -303,16 +305,29 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                     progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
                                     host._update_progress('backup', progress_pct, f'✅ Zbackupowano bind mount: {source_name} ({processed_mounts}/{total_mounts})')
                             else:
+                                if str(source) in privileged_path_set:
+                                    host.logger.error(
+                                        f"Required privileged bind mount backup failed: {source}"
+                                    )
+                                    host.console.print(
+                                        f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                                    )
+                                    return False
                                 host.logger.warning(f"Failed to backup bind mount {source}, continuing...")
                                 host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}', continuing...[/yellow]")
-                                # Don't return False - continue with other volumes
                         else:
                             host.logger.warning(f"Bind mount source does not exist: {source}")
                             host.console.print(f"[yellow]⚠️ Bind mount source not found: {source}[/yellow]")
+                            if str(source) in privileged_path_set:
+                                return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup bind mount {source}: {e}")
+                        if str(source) in privileged_path_set:
+                            host.console.print(
+                                f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                            )
+                            return False
                         host.console.print(f"[yellow]⚠️ Failed to backup bind mount '{source}': {e}, continuing...[/yellow]")
-                        # Don't return False - continue with other volumes
 
             # Save backup metadata (inside loading context)
             if container_name:
