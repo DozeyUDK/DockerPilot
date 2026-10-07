@@ -67,3 +67,26 @@ def test_searcher_stop_race_is_guarded_before_dumpcap_popen():
         "process = subprocess.Popen("
     )
     assert "self.capture_generation += 1" in source
+
+
+def test_searcher_started_status_follows_successful_popen():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+    start_method = source[source.index("    def start_sniffing"):source.index("    def stop_sniffing")]
+
+    popen = start_method.index("process = subprocess.Popen(")
+    assign = start_method.index("self.capture_process = process", popen)
+    started = start_method.index("socketio.emit('status', {'status': 'started'})", assign)
+    thread_start = start_method.index("self.sniff_thread.start()")
+
+    assert popen < assign < started < thread_start
+    assert start_method.count("socketio.emit('status', {'status': 'started'})") == 1
+
+
+def test_searcher_shutdown_always_cleans_dumpcap_and_handles_sigterm():
+    source = (SEARCHER / "searcher.py").read_text(encoding="utf-8")
+
+    assert "import signal" in source
+    assert "signal.signal(signal.SIGTERM, handle_shutdown_signal)" in source
+    assert "finally:" in source
+    assert "sniffer.stop_sniffing(socketio, emit_status=False)" in source
+    assert "signal.signal(signal.SIGTERM, previous_sigterm_handler)" in source
