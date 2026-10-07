@@ -64,6 +64,24 @@ MAX_BUNDLE_RECORDS = 1000
 HTTP_BODY_LIMIT = 4096
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 _EXEC_RE = re.compile(r"^exec_[A-Fa-f0-9]{24}$")
+_AUDIT_SENSITIVE_KEY_RE = re.compile(
+    r"(?:password|passwd|passphrase|token|secret|api[_-]?key|credential|authorization)",
+    re.IGNORECASE,
+)
+_AUDIT_AUTH_HEADER_RE = re.compile(
+    r"\bAuthorization\s*:\s*(?:Bearer|Basic)\s+[^\s,;]+",
+    re.IGNORECASE,
+)
+_AUDIT_BEARER_RE = re.compile(
+    r"\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}",
+    re.IGNORECASE,
+)
+_AUDIT_ASSIGNMENT_RE = re.compile(
+    r"\b(password|passwd|passphrase|token|secret|api[_-]?key|credential)\b"
+    r"\s*[:=]\s*['\"]?[^\s,;'\"]+",
+    re.IGNORECASE,
+)
+_AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@:]+:[^\s/@]+@")
 
 
 @dataclass(frozen=True)
@@ -630,15 +648,25 @@ class CanaryLedger:
         return self._with_lock(op)
 
 
+def _redact_audit_text(value: str) -> str:
+    text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", value)
+    text = _AUDIT_BEARER_RE.sub("[REDACTED-AUTH]", text)
+    text = _AUDIT_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _AUDIT_URL_CREDENTIAL_RE.sub("://[REDACTED]@", text)
+    return text
+
+
 def redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
     def scrub(value: Any) -> Any:
         if isinstance(value, dict):
             return {
-                key: "[REDACTED]" if any(word in key.lower() for word in ("secret", "token", "password")) else scrub(item)
+                key: "[REDACTED]" if _AUDIT_SENSITIVE_KEY_RE.search(str(key)) else scrub(item)
                 for key, item in value.items()
             }
         if isinstance(value, list):
             return [scrub(item) for item in value]
+        if isinstance(value, str):
+            return _redact_audit_text(value)
         return value
 
     return scrub(event)
