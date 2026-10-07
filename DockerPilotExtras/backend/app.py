@@ -249,6 +249,14 @@ DEMO_ALLOW_MUTATIONS = os.environ.get(
     'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
 ).lower() == 'true'
 
+# Flask CLI and external WSGI servers choose their own bind independently of HOST.
+# An unauthenticated instance is supported only through the guarded direct entrypoint.
+if not WEB_AUTH_ENABLED and __name__ != '__main__':
+    raise RuntimeError(
+        "Unauthenticated Extras requires the guarded backend.app direct entrypoint; "
+        "Flask CLI and external WSGI servers must enable WEB_AUTH_ENABLED=true"
+    )
+
 if EXTRAS_HOST not in {'127.0.0.1', 'localhost', '::1'} and not WEB_AUTH_ENABLED:
     raise RuntimeError(
         "Refusing non-loopback DockerPilot Extras bind without WEB_AUTH_ENABLED=true"
