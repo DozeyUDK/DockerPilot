@@ -72,10 +72,12 @@ def test_status_endpoint_remote_context_and_versions(monkeypatch):
     client = backend_app_module.app.test_client()
 
     server = {"id": "prod-1", "name": "Prod Node", "hostname": "prod.example.internal"}
+    probe_commands = []
 
     monkeypatch.setattr(backend_app_module, "get_selected_server_config", lambda: server)
 
     def fake_probe(_server_config, command, attempts=2):  # noqa: ARG001
+        probe_commands.append(command)
         if "MISSING_DOCKERPILOT" in command:
             return "DockerPilot 0.1.0", None
         if "MISSING_DOCKER" in command:
@@ -95,6 +97,10 @@ def test_status_endpoint_remote_context_and_versions(monkeypatch):
     assert payload["docker"]["version"].startswith("Docker version")
     assert payload["dockerpilot"]["available"] is True
     assert payload["dockerpilot"]["version"] == "DockerPilot 0.1.0"
+
+    docker_probe = next(command for command in probe_commands if "MISSING_DOCKER" in command)
+    assert "sudo" not in docker_probe
+    assert docker_probe.startswith("docker --version")
 
 
 def test_status_endpoint_remote_probe_errors(monkeypatch):
