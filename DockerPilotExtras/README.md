@@ -246,19 +246,26 @@ curl -X POST http://localhost:5000/api/storage/configure \
 
 ### Bootstrap PostgreSQL container next to app
 
+The bootstrap API requires an explicit PostgreSQL password. Generate a strong random secret instead of relying on a product default:
+
 ```bash
+POSTGRES_BOOTSTRAP_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
 curl -X POST http://localhost:5000/api/storage/bootstrap-local-postgres \
   -H "Content-Type: application/json" \
-  -d '{
-    "container_name":"postgres-dozeyserver",
-    "image":"postgres:16-alpine",
-    "host_port":5432,
-    "database":"dockerpilot_extras",
-    "user":"dockerpilot",
-    "password":"change-me-now",
-    "configure_storage":true,
-    "migrate_from_file":true
-  }'
+  -d "$(cat <<JSON
+{
+  \"container_name\":\"postgres-dozeyserver\",
+  \"image\":\"postgres:16-alpine\",
+  \"host_port\":5432,
+  \"database\":\"dockerpilot_extras\",
+  \"user\":\"dockerpilot\",
+  \"password\":\"${POSTGRES_BOOTSTRAP_PASSWORD}\",
+  \"configure_storage\":true,
+  \"migrate_from_file\":true
+}
+JSON
+)"
 ```
 
 ## Requirements
