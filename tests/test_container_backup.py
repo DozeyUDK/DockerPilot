@@ -1,5 +1,6 @@
 """Regression tests for container backup orchestration extraction."""
 
+from contextlib import nullcontext
 from datetime import datetime
 from io import StringIO
 import json
@@ -113,3 +114,53 @@ def test_backup_restore_facade_delegates_container_backup(monkeypatch):
             },
         )
     ]
+
+
+def test_required_privileged_bind_mount_failure_aborts_backup(tmp_path, monkeypatch):
+    source = tmp_path / "privileged"
+    source.mkdir()
+    container = SimpleNamespace(
+        attrs={
+            "Mounts": [
+                {
+                    "Source": str(source),
+                    "Destination": "/data",
+                    "Name": None,
+                }
+            ]
+        }
+    )
+    logger = _Logger()
+    monkeypatch.setattr(
+        container_backup.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    host = SimpleNamespace(
+        client=SimpleNamespace(containers=SimpleNamespace(get=lambda _name: container)),
+        find_existing_backup=lambda *_args: None,
+        _check_sudo_required_for_backup=lambda _name: (
+            True,
+            [str(source)],
+            {"large_mounts": [], "total_size_gb": 0, "total_size_tb": 0, "mounts": []},
+        ),
+        _backup_bind_mount_using_docker=lambda *_args: False,
+        _check_cancel_flag=lambda *_args: False,
+        _with_loading=lambda _message: nullcontext(),
+        _update_progress=lambda *_args: None,
+        console=_console(),
+        logger=logger,
+    )
+
+    result = container_backup.backup_container_data(
+        host,
+        "demo",
+        backup_path=str(tmp_path / "backup"),
+        reuse_existing=False,
+    )
+
+    assert result is False
+    assert any(
+        "required privileged bind mount backup failed" in message.lower()
+        for _level, message in logger.messages
+    )
