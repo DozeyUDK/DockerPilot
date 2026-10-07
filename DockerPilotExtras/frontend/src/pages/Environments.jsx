@@ -1201,6 +1201,33 @@ function Environments() {
     
     const sourceLabel = envLabels[selectedEnv] || selectedEnv.toUpperCase()
     const targetLabel = envLabels[targetEnv] || targetEnv.toUpperCase()
+    const sourceServerId = envServersMap[selectedEnv] || 'local'
+    const targetServerId = envServersMap[targetEnv] || 'local'
+    const sharedRemoteServer =
+      sourceServerId === targetServerId && targetServerId !== 'local'
+
+    if (sharedRemoteServer) {
+      const serverLabel = getServerLabelById(targetServerId)
+      const confirmed = window.confirm(
+        `Both environments map to the same remote server: ${serverLabel}.\n\n` +
+        'Scoped backup authorization cannot cross the SSH boundary, so this promotion must run WITHOUT BACKUP.\n\n' +
+        `Promote ${containerName} from ${sourceLabel} to ${targetLabel} without backup?`
+      )
+      if (!confirmed) {
+        return
+      }
+
+      await continuePromotion(
+        containerName,
+        selectedEnv,
+        targetEnv,
+        sourceLabel,
+        targetLabel,
+        true,
+        null
+      )
+      return
+    }
     
     try {
       const sudoCheck = await environmentAPI.checkSudo(containerName)
