@@ -6,13 +6,17 @@ const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT ||
 const devHost = process.env.VITE_HOST || '127.0.0.1'
 const webAuthEnabled = (process.env.WEB_AUTH_ENABLED || 'false').toLowerCase() === 'true'
 
-if (!['127.0.0.1', 'localhost', '::1'].includes(devHost) && !webAuthEnabled) {
-  throw new Error(
-    'Refusing non-loopback Vite dev bind without WEB_AUTH_ENABLED=true'
-  )
-}
-
 export default defineConfig(({ command }) => {
+  if (
+    command === 'serve' &&
+    !['127.0.0.1', 'localhost', '::1'].includes(devHost) &&
+    !webAuthEnabled
+  ) {
+    throw new Error(
+      'Refusing non-loopback Vite dev bind without WEB_AUTH_ENABLED=true'
+    )
+  }
+
   // Vite CLI --host overrides server.host after config evaluation.
   // Reject any CLI host override for an unauthenticated dev server.
   if (!webAuthEnabled && command === 'serve' &&
