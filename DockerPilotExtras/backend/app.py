@@ -8,6 +8,8 @@ from flask_cors import CORS
 from flask_restful import Api, Resource
 import atexit
 import os
+import ipaddress
+import ipaddress
 import json
 import yaml
 import subprocess
@@ -236,6 +238,7 @@ app.config['SESSION_COOKIE_SECURE'] = os.environ.get(
 
 APP_SESSION_IDLE_MINUTES = int(os.environ.get('APP_SESSION_IDLE_MINUTES', '45'))
 WEB_AUTH_ENABLED = os.environ.get('WEB_AUTH_ENABLED', 'false').lower() == 'true'
+EXTRAS_HOST = (os.environ.get('HOST') or '127.0.0.1').strip() or '127.0.0.1'
 WEB_AUTH_USERNAME = os.environ.get('WEB_AUTH_USERNAME', 'admin')
 WEB_AUTH_PASSWORD = os.environ.get('WEB_AUTH_PASSWORD', 'admin')
 WEB_AUTH_PASSWORD_HASH = os.environ.get('WEB_AUTH_PASSWORD_HASH', '')
@@ -247,6 +250,41 @@ DEMO_MODE = os.environ.get('DOCKERPILOT_DEMO', 'false').lower() == 'true'
 DEMO_ALLOW_MUTATIONS = os.environ.get(
     'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
 ).lower() == 'true'
+
+def _is_loopback_bind(host: str) -> bool:
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+if not _is_loopback_bind(EXTRAS_HOST) and not WEB_AUTH_ENABLED:
+    raise RuntimeError(
+        "Refusing non-loopback DockerPilot Extras bind without WEB_AUTH_ENABLED=true"
+    )
+
+if (
+    not WEB_AUTH_ENABLED
+    and os.environ.get('FLASK_RUN_FROM_CLI', '').lower() == 'true'
+):
+    raise RuntimeError(
+        "Unauthenticated DockerPilot Extras is not supported through Flask CLI; "
+        "use run_dev.py on loopback or enable WEB_AUTH_ENABLED=true"
+    )
+
+
+def _is_loopback_client(address: str | None) -> bool:
+    if not address:
+        return False
+    value = str(address).strip().strip('[]')
+    if '%' in value:
+        value = value.split('%', 1)[0]
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return value.lower() == 'localhost'
 _login_rate_limiter = SlidingWindowRateLimiter(
     max_failures=AUTH_LOGIN_MAX_FAILURES,
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
@@ -432,6 +470,33 @@ PUBLIC_API_PATHS = {
     '/api/auth/login',
     '/api/auth/status',
 }
+
+
+@app.before_request
+def enforce_unauthenticated_loopback_only():
+    if WEB_AUTH_ENABLED:
+        return None
+
+    remote_addr = request.remote_addr
+    if not remote_addr or not _is_loopback_client(remote_addr):
+        return {'error': 'Web authentication is required for non-loopback access'}, 403
+
+    # RFC Forwarded is not emitted by the bundled Vite proxy; reject it in
+    # unauthenticated mode rather than attempting to trust or parse it.
+    if request.headers.get('Forwarded'):
+        return {'error': 'Web authentication is required for proxied access'}, 403
+
+    # The bundled Vite proxy uses xfwd=true. Allow it only when every forwarded
+    # client address is loopback; any remote hop makes unauthenticated access fail closed.
+    for name in ('X-Forwarded-For', 'X-Real-IP'):
+        value = request.headers.get(name)
+        if not value:
+            continue
+        addresses = [part.strip() for part in value.split(',') if part.strip()]
+        if not addresses or any(not _is_loopback_client(address) for address in addresses):
+            return {'error': 'Web authentication is required for proxied access'}, 403
+
+    return None
 
 
 @app.before_request
@@ -1468,4 +1533,4 @@ if __name__ == '__main__':
     # Development server
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host=EXTRAS_HOST, port=port, debug=debug)
