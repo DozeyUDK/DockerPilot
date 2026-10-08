@@ -21,6 +21,9 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "repr_detail": "{'token': 'quoted-token-123456'}",
         "control_split": "password\x00=hunter2-control",
         "control_key_split": "pass\x00word=hunter2-key-control",
+        "unicode_key": "pass\u0085word=unicode-hunter2",
+        "format_key": "pass\u200bword=format-hunter2",
+        "token_url": "https://ghp_ABC123@example.com/repo.git",
         "control_auth": "Authorization:\x00Bearer control-token-123456",
         "quoted_space": '{"password":" hunter2-leading-space"}',
         "short_bearer": "authentication failed for Bearer abc123",
@@ -47,6 +50,9 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "hunter2-key-control",
         "control-token-123456",
         "hunter2-leading-space",
+        "unicode-hunter2",
+        "format-hunter2",
+        "ghp_ABC123",
         "abc123",
         "dTpw",
         "abc123456789",
@@ -73,6 +79,9 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "short_auth": "Bearer z9",
             "connection": "postgres://user:db-password@example/db",
             "credential": "direct-secret",
+            "unicode_key": "pass\u0085word=persisted-unicode-secret",
+            "format_key": "pass\u200bword=persisted-format-secret",
+            "token_url": "https://ghp_PERSISTED@example.com/repo.git",
         }
     )
 
@@ -88,6 +97,9 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         "z9",
         "db-password",
         "direct-secret",
+        "persisted-unicode-secret",
+        "persisted-format-secret",
+        "ghp_PERSISTED",
     ):
         assert secret not in text
 
