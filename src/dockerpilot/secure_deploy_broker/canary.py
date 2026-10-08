@@ -17,6 +17,7 @@ import socket
 import subprocess
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
