@@ -29,4 +29,17 @@ def test_vite_proxy_defaults_to_loopback_and_requires_auth_for_external_bind():
     assert "Refusing non-loopback Vite dev bind" in vite
     assert "process.argv.some" in vite
     assert "Refusing Vite --host override" in vite
+    assert "target: `http://127.0.0.1:${backendPort}`" in vite
+    assert "target: `http://localhost:${backendPort}`" not in vite
     assert "xfwd: true" in vite
+
+
+def test_reverse_proxy_recipe_enables_web_auth_before_trusting_forwarded_clients():
+    readme = (EXTRAS / "README.md").read_text(encoding="utf-8")
+
+    heading = "### Configuration with Reverse Proxy (Nginx)"
+    section = readme.split(heading, 1)[1].split("### ", 1)[0]
+
+    assert "export WEB_AUTH_ENABLED=true" in section
+    assert "export WEB_AUTH_PASSWORD=" in section
+    assert 'export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"' in section
