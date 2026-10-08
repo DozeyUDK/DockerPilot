@@ -92,7 +92,11 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
 )
 _AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@]+@")
 _AUDIT_ANSI_ESCAPE_RE = re.compile(
-    r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))"
+    r"\x1B(?:"
+    r"\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07\x1B]*(?:\x07|\x1B\\)"
+    r"|[\x30-\x7E]"
+    r")"
 )
 
 
