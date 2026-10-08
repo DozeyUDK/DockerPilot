@@ -37,7 +37,7 @@ export default defineConfig(({ command }) => {
     ],
     proxy: {
       '/api': {
-        target: `http://localhost:${backendPort}`,
+        target: `http://127.0.0.1:${backendPort}`,
         changeOrigin: true,
         xfwd: true
       }
