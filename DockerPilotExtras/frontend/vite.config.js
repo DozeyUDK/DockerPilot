@@ -38,7 +38,8 @@ export default defineConfig(({ command }) => {
     proxy: {
       '/api': {
         target: `http://localhost:${backendPort}`,
-        changeOrigin: true
+        changeOrigin: true,
+        xfwd: true
       }
     }
   },
