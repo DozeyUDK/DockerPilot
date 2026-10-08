@@ -37,6 +37,7 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "ansi_key": "pass\x1b[31mword=ansi-key-secret",
         "quoted_space": '{"password":" hunter2-leading-space"}',
         "short_bearer": "authentication failed for Bearer abc123",
+        "ansi_auth_no_space": "Authorization: Bearer\x1b[31mlive-token-123",
         "short_basic": "authentication failed for Basic dTpw",
         "nested": {
             "note": "token=abc123456789",
@@ -77,6 +78,7 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "dTpw",
         "abc123456789",
         "db-secret",
+        "live-token-123",
         "list-token-123456",
         "opaque-secret",
     ):
@@ -96,6 +98,7 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "control_split": "token\x00=control-persisted-secret",
             "control_key_split": "pass\x00word=control-key-secret",
             "quoted_space": '{"password":" persisted-leading-space"}',
+            "ansi_auth_no_space": "Authorization: Bearer\x1b[31mpersisted-ansi-token",
             "short_auth": "Bearer z9",
             "control_scheme_separator": "Basic\x00persisted-basic-token",
             "ansi_auth": "Bearer\x1b[0m persisted-ansi-token",
@@ -117,6 +120,7 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
 
     for secret in (
         "audit-token-123456",
+        "persisted-ansi-token",
         "super-secret-value",
         "persisted-quoted-secret",
         "control-persisted-secret",
