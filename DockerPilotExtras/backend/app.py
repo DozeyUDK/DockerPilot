@@ -467,17 +467,24 @@ def enforce_unauthenticated_loopback_only():
     if WEB_AUTH_ENABLED:
         return None
 
-    # A local reverse proxy can otherwise hide a remote client behind loopback.
-    # Unauthenticated mode is intentionally direct-loopback only.
-    if any(
-        request.headers.get(name)
-        for name in ('Forwarded', 'X-Forwarded-For', 'X-Real-IP')
-    ):
+    remote_addr = request.remote_addr
+    if not remote_addr or not _is_loopback_client(remote_addr):
+        return {'error': 'Web authentication is required for non-loopback access'}, 403
+
+    # RFC Forwarded is not emitted by the bundled Vite proxy; reject it in
+    # unauthenticated mode rather than attempting to trust or parse it.
+    if request.headers.get('Forwarded'):
         return {'error': 'Web authentication is required for proxied access'}, 403
 
-    remote_addr = request.remote_addr
-    if remote_addr and not _is_loopback_client(remote_addr):
-        return {'error': 'Web authentication is required for non-loopback access'}, 403
+    # The bundled Vite proxy uses xfwd=true. Allow it only when every forwarded
+    # client address is loopback; any remote hop makes unauthenticated access fail closed.
+    for name in ('X-Forwarded-For', 'X-Real-IP'):
+        value = request.headers.get(name)
+        if not value:
+            continue
+        addresses = [part.strip() for part in value.split(',') if part.strip()]
+        if not addresses or any(not _is_loopback_client(address) for address in addresses):
+            return {'error': 'Web authentication is required for proxied access'}, 403
 
     return None
 
