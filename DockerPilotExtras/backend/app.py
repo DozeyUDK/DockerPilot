@@ -475,7 +475,8 @@ def enforce_unauthenticated_loopback_only():
     ):
         return {'error': 'Web authentication is required for proxied access'}, 403
 
-    if not _is_loopback_client(request.remote_addr):
+    remote_addr = request.remote_addr
+    if remote_addr and not _is_loopback_client(remote_addr):
         return {'error': 'Web authentication is required for non-loopback access'}, 403
 
     return None
