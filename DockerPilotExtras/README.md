@@ -43,7 +43,7 @@ npm run dev
 ```
 Frontend will be available at `http://localhost:3000`
 
-### 3. Production Mode
+### 3. Local Built-Frontend Mode
 
 **1. Build frontend:**
 ```bash
@@ -51,12 +51,12 @@ cd frontend
 npm run build
 ```
 
-**2. Run backend (also serves frontend):**
+**2. Run backend locally (also serves frontend; not a production WSGI server):**
 ```bash
 python run_dev.py
 ```
 
-Application will be available at `http://localhost:5000`
+For production, use the authenticated HTTPS Nginx/Gunicorn configuration below.
 
 ### Security Configuration
 
@@ -74,8 +74,7 @@ export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD=change-me-now
 
-# Optional direct network exposure; loopback is the default
-# export HOST=0.0.0.0
+# Keep HOST on loopback; use the HTTPS reverse proxy recipe below for network access.
 
 # Optional TOTP MFA (Google/Microsoft Authenticator, Base32 secret)
 export WEB_AUTH_TOTP_SECRET=JBSWY3DPEHPK3PXP
@@ -377,7 +376,7 @@ export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
 gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app
 ```
 
-Then configure nginx to append the real client address:
+Then configure a dedicated HTTPS hostname (not a /extras/ subpath) and append the real client address:
 
 ```nginx
 # /etc/nginx/sites-available/dockerpilot-extras
@@ -394,7 +393,9 @@ server {
     ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
 
-    location /extras/ {
+    # Extras is built for root-relative /assets and /api paths.
+    # Use a dedicated hostname and proxy the entire root.
+    location / {
         proxy_pass http://127.0.0.1:5000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
