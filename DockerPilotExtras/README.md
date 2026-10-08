@@ -355,13 +355,14 @@ python run_dev.py
 Unauthenticated mode is intentionally direct-loopback only. Do not expose it through
 `flask run`, an external WSGI bind, or a reverse proxy; enable web authentication first.
 
-For direct LAN/non-loopback exposure, enable web auth first and opt into the bind explicitly:
+For direct LAN/non-loopback exposure, enable web auth and use the production WSGI server installed with Extras. Do not expose `run_dev.py` or Werkzeug's debugger to the network:
 
 ```bash
 export WEB_AUTH_ENABLED=true
+export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
 export HOST=0.0.0.0
-python run_dev.py
+gunicorn --bind 0.0.0.0:5000 backend.app:app
 ```
 
 The Vite development server also defaults to loopback. If it must be exposed directly, set
@@ -377,7 +378,7 @@ export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
-python run_dev.py
+gunicorn --bind 127.0.0.1:5000 backend.app:app
 ```
 
 Then configure nginx to append the real client address:
@@ -411,7 +412,7 @@ If DockerPilot runs on port 8080, you can configure DockerPilot Extras on port 5
 # Set environment variable
 export PORT=5000
 
-# Run application
+# Local development only
 python run_dev.py
 ```
 
