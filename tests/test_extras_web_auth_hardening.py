@@ -176,3 +176,32 @@ def test_unauthenticated_mode_rejects_proxied_access(monkeypatch, tmp_path):
 
     assert response.status_code == 403
     assert "proxied access" in response.get_json()["error"]
+
+
+def test_unauthenticated_mode_rejects_missing_peer_address(monkeypatch, tmp_path):
+    module = _load_unauth_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+
+    response = client.get(
+        "/api/health",
+        environ_overrides={"REMOTE_ADDR": ""},
+    )
+
+    assert response.status_code == 403
+    assert "non-loopback" in response.get_json()["error"]
+
+
+def test_unauthenticated_mode_allows_loopback_vite_proxy_metadata(monkeypatch, tmp_path):
+    module = _load_unauth_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+
+    response = client.get(
+        "/api/health",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        headers={
+            "X-Forwarded-For": "127.0.0.1",
+            "X-Real-IP": "127.0.0.1",
+        },
+    )
+
+    assert response.status_code != 403
