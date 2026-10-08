@@ -368,6 +368,9 @@ forwarding proxy. For Docker or another network topology, use the exact proxy IP
 export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
+# Generate once, store securely, and reuse the same value across restarts:
+# python -c 'import secrets; print(secrets.token_urlsafe(64))'
+export SECRET_KEY='replace-with-a-persistent-random-secret'
 export SESSION_COOKIE_SECURE=true
 export FLASK_ENV=production
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
