@@ -750,6 +750,12 @@ def _strip_ansi_sequences(value: str) -> str:
 
 
 def _normalize_audit_controls(value: str) -> str:
+    # Preserve the auth-scheme delimiter when an ANSI sequence takes its place.
+    value = re.sub(
+        r"(?i)\\b(Bearer|Basic)(?=\\x1b|\\x9b)",
+        lambda match: match.group(1) + " ",
+        value,
+    )
     value = _strip_ansi_sequences(value)
     normalized: list[str] = []
     for ch in value:
