@@ -44,15 +44,19 @@ def test_reverse_proxy_recipe_enables_web_auth_before_trusting_forwarded_clients
     assert "export WEB_AUTH_PASSWORD=" in section
     assert 'export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"' in section
     assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app" in section
+    assert "export SESSION_COOKIE_SECURE=true" in section
+    assert "listen 443 ssl;" in section
+    assert "proxy_set_header X-Forwarded-Proto https;" in section
     assert "python run_dev.py" not in section
 
 
-def test_direct_network_recipe_uses_production_wsgi_server():
+def test_network_exposure_docs_require_https_reverse_proxy():
     readme = (EXTRAS / "README.md").read_text(encoding="utf-8")
 
-    heading = "### On the Same Host as DockerPilot"
-    section = readme.split(heading, 1)[1].split("### ", 1)[0]
+    hosting = readme.split("## Hosting", 1)[1]
 
-    assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 0.0.0.0:5000 backend.app:app" in section
-    assert "WEB_AUTH_ENABLED=true" in section
-    assert "Do not expose `run_dev.py`" in section
+    assert "Do not expose Extras directly over plaintext LAN/HTTP" in hosting
+    assert "--bind 0.0.0.0:5000" not in hosting
+    assert "listen 443 ssl;" in hosting
+    assert "return 301 https://$host$request_uri;" in hosting
+    assert "export SESSION_COOKIE_SECURE=true" in hosting
