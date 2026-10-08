@@ -660,7 +660,7 @@ class CanaryLedger:
 def _redact_audit_text(value: str) -> str:
     # Normalize control characters before matching so an attacker cannot split
     # a sensitive key/value token and have the later sanitizer rejoin it.
-    text = "".join(ch for ch in value if ch >= " " and ch != "\x7f")
+    text = "".join(ch for ch in value if unicodedata.category(ch) not in {"Cc", "Cf"})
     text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", text)
     text = _AUDIT_BEARER_RE.sub("[REDACTED-AUTH]", text)
     text = _AUDIT_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
