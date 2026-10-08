@@ -9,6 +9,7 @@ from flask_restful import Api, Resource
 import atexit
 import os
 import ipaddress
+import ipaddress
 import json
 import yaml
 import subprocess
@@ -250,7 +251,16 @@ DEMO_ALLOW_MUTATIONS = os.environ.get(
     'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
 ).lower() == 'true'
 
-if EXTRAS_HOST not in {'127.0.0.1', 'localhost', '::1'} and not WEB_AUTH_ENABLED:
+def _is_loopback_bind(host: str) -> bool:
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+if not _is_loopback_bind(EXTRAS_HOST) and not WEB_AUTH_ENABLED:
     raise RuntimeError(
         "Refusing non-loopback DockerPilot Extras bind without WEB_AUTH_ENABLED=true"
     )
