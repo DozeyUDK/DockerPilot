@@ -355,18 +355,9 @@ python run_dev.py
 Unauthenticated mode is intentionally direct-loopback only. Do not expose it through
 `flask run`, an external WSGI bind, or a reverse proxy; enable web authentication first.
 
-For direct LAN/non-loopback exposure, enable web auth and use the production WSGI server installed with Extras. Do not expose `run_dev.py` or Werkzeug's debugger to the network:
+Do not expose Extras directly over plaintext LAN/HTTP. For network access, keep Gunicorn on loopback and put it behind an HTTPS reverse proxy as shown below. This keeps credentials and session cookies off cleartext transport.
 
-```bash
-export WEB_AUTH_ENABLED=true
-export WEB_AUTH_USERNAME=admin
-export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
-export HOST=0.0.0.0
-gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 0.0.0.0:5000 backend.app:app
-```
-
-The Vite development server also defaults to loopback. If it must be exposed directly, set
-`VITE_HOST` explicitly and keep `WEB_AUTH_ENABLED=true` in that shell as well.
+The Vite development server is for local development only and should remain on loopback.
 
 ### Configuration with Reverse Proxy (Nginx)
 
@@ -377,6 +368,8 @@ forwarding proxy. For Docker or another network topology, use the exact proxy IP
 export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
+export SESSION_COOKIE_SECURE=true
+export FLASK_ENV=production
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
 gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app
 ```
@@ -388,13 +381,22 @@ Then configure nginx to append the real client address:
 server {
     listen 80;
     server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
 
     location /extras/ {
         proxy_pass http://127.0.0.1:5000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto https;
     }
 }
 ```
