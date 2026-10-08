@@ -43,7 +43,7 @@ def test_reverse_proxy_recipe_enables_web_auth_before_trusting_forwarded_clients
     assert "export WEB_AUTH_ENABLED=true" in section
     assert "export WEB_AUTH_PASSWORD=" in section
     assert 'export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"' in section
-    assert "gunicorn --bind 127.0.0.1:5000 backend.app:app" in section
+    assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app" in section
     assert "python run_dev.py" not in section
 
 
@@ -53,6 +53,6 @@ def test_direct_network_recipe_uses_production_wsgi_server():
     heading = "### On the Same Host as DockerPilot"
     section = readme.split(heading, 1)[1].split("### ", 1)[0]
 
-    assert "gunicorn --bind 0.0.0.0:5000 backend.app:app" in section
+    assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 0.0.0.0:5000 backend.app:app" in section
     assert "WEB_AUTH_ENABLED=true" in section
     assert "Do not expose `run_dev.py`" in section
