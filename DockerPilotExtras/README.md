@@ -373,6 +373,9 @@ If nginx connects to Extras over loopback, configure the backend to trust only l
 forwarding proxy. For Docker or another network topology, use the exact proxy IP/CIDR instead.
 
 ```bash
+export WEB_AUTH_ENABLED=true
+export WEB_AUTH_USERNAME=admin
+export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
 python run_dev.py
 ```
