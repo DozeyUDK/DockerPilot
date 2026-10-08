@@ -25,4 +25,7 @@ def test_vite_proxy_defaults_to_loopback_and_requires_auth_for_external_bind():
     assert "process.env.VITE_HOST || '127.0.0.1'" in vite
     assert "host: '0.0.0.0'" not in vite
     assert "WEB_AUTH_ENABLED" in vite
+    assert "command === 'serve'" in vite
     assert "Refusing non-loopback Vite dev bind" in vite
+    assert "process.argv.some" in vite
+    assert "Refusing Vite --host override" in vite
