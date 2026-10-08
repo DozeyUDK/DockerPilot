@@ -90,6 +90,7 @@ export AUTH_LOGIN_WINDOW_SECONDS=60
 # IP/CIDR so X-Forwarded-For can be used for per-client login limiting.
 # Example for nginx proxy_pass to 127.0.0.1:5000:
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
+export CORS_ORIGINS="https://your-domain.com"
 
 # Required for stable production sessions (do not use a generated-per-start value)
 export SECRET_KEY=replace-with-a-long-random-value
@@ -397,6 +398,7 @@ server {
     # Use a dedicated hostname and proxy the entire root.
     location / {
         proxy_pass http://127.0.0.1:5000/;
+        proxy_read_timeout 360s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
