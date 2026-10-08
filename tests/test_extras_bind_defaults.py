@@ -44,6 +44,8 @@ def test_reverse_proxy_recipe_enables_web_auth_before_trusting_forwarded_clients
     assert "export WEB_AUTH_PASSWORD=" in section
     assert 'export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"' in section
     assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app" in section
+    assert "export SECRET_KEY=" in section
+    assert "secrets.token_urlsafe(64)" in section
     assert "export SESSION_COOKIE_SECURE=true" in section
     assert "listen 443 ssl;" in section
     assert "proxy_set_header X-Forwarded-Proto https;" in section
