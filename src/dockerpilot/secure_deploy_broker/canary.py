@@ -91,18 +91,6 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 _AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@]+@")
-_AUDIT_ANSI_ESCAPE_RE = re.compile(
-    r"(?:"
-    r"\x1B(?:"
-    r"\[[0-?]*[ -/]*[@-~]"
-    r"|\][^\x07\x1B]*(?:\x07|\x1B\\)"
-    r"|[PX^_][\s\S]*?\x1B\\"
-    r"|[\x30-\x7E]"
-    r")"
-    r"|\x9B[0-?]*[ -/]*[@-~]"
-    r"|[\x90\x98\x9D\x9E\x9F][^\x07\x9C]*(?:\x07|\x9C)"
-    r")"
-)
 
 
 @dataclass(frozen=True)
@@ -669,8 +657,100 @@ class CanaryLedger:
         return self._with_lock(op)
 
 
+def _strip_ansi_sequences(value: str) -> str:
+    """Remove complete ECMA-48 escape/control sequences before secret matching."""
+
+    output: list[str] = []
+    index = 0
+    length = len(value)
+
+    def consume_string_control(start: int, *, allow_bel: bool) -> int:
+        cursor = start
+        while cursor < length:
+            if value[cursor] == "\x9c":
+                return cursor + 1
+            if (
+                value[cursor] == "\x1b"
+                and cursor + 1 < length
+                and value[cursor + 1] == "\\"
+            ):
+                return cursor + 2
+            if allow_bel and value[cursor] == "\x07":
+                return cursor + 1
+            cursor += 1
+        return length
+
+    while index < length:
+        char = value[index]
+        codepoint = ord(char)
+
+        if char == "\x1b":
+            if index + 1 >= length:
+                index += 1
+                continue
+
+            introducer = value[index + 1]
+
+            # 7-bit CSI.
+            if introducer == "[":
+                cursor = index + 2
+                while cursor < length and 0x30 <= ord(value[cursor]) <= 0x3F:
+                    cursor += 1
+                while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                    cursor += 1
+                if cursor < length and 0x40 <= ord(value[cursor]) <= 0x7E:
+                    index = cursor + 1
+                else:
+                    index = length
+                continue
+
+            # 7-bit OSC/DCS/SOS/PM/APC string controls.
+            if introducer in "]PX^_":
+                index = consume_string_control(
+                    index + 2,
+                    allow_bel=introducer == "]",
+                )
+                continue
+
+            # Generic ESC sequence: zero or more intermediate bytes, then final.
+            cursor = index + 1
+            while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                cursor += 1
+            if cursor < length and 0x30 <= ord(value[cursor]) <= 0x7E:
+                index = cursor + 1
+            else:
+                index += 1
+            continue
+
+        # 8-bit C1 CSI.
+        if codepoint == 0x9B:
+            cursor = index + 1
+            while cursor < length and 0x30 <= ord(value[cursor]) <= 0x3F:
+                cursor += 1
+            while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                cursor += 1
+            if cursor < length and 0x40 <= ord(value[cursor]) <= 0x7E:
+                index = cursor + 1
+            else:
+                index = length
+            continue
+
+        # 8-bit C1 DCS/SOS/OSC/PM/APC.
+        if codepoint in {0x90, 0x98, 0x9D, 0x9E, 0x9F}:
+            index = consume_string_control(
+                index + 1,
+                allow_bel=codepoint == 0x9D,
+            )
+            continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
+
+
 def _normalize_audit_controls(value: str) -> str:
-    value = _AUDIT_ANSI_ESCAPE_RE.sub("", value)
+    value = _strip_ansi_sequences(value)
     normalized: list[str] = []
     for ch in value:
         if unicodedata.category(ch) not in {"Cc", "Cf"}:
