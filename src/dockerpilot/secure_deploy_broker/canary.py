@@ -90,7 +90,7 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
-_AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@:]+:[^\s/@]+@")
+_AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@]+@")
 
 
 @dataclass(frozen=True)
