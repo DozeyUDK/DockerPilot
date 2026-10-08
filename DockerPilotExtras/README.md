@@ -362,7 +362,7 @@ export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
 export HOST=0.0.0.0
-gunicorn --bind 0.0.0.0:5000 backend.app:app
+gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 0.0.0.0:5000 backend.app:app
 ```
 
 The Vite development server also defaults to loopback. If it must be exposed directly, set
@@ -378,7 +378,7 @@ export WEB_AUTH_ENABLED=true
 export WEB_AUTH_USERNAME=admin
 export WEB_AUTH_PASSWORD='replace-with-a-strong-secret'
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
-gunicorn --bind 127.0.0.1:5000 backend.app:app
+gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app
 ```
 
 Then configure nginx to append the real client address:
