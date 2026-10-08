@@ -8,6 +8,7 @@ from flask_cors import CORS
 from flask_restful import Api, Resource
 import atexit
 import os
+import ipaddress
 import json
 import yaml
 import subprocess
@@ -249,18 +250,31 @@ DEMO_ALLOW_MUTATIONS = os.environ.get(
     'DOCKERPILOT_DEMO_ALLOW_MUTATIONS', 'false'
 ).lower() == 'true'
 
-# Flask CLI and external WSGI servers choose their own bind independently of HOST.
-# An unauthenticated instance is supported only through the guarded direct entrypoint.
-if not WEB_AUTH_ENABLED and __name__ != '__main__':
-    raise RuntimeError(
-        "Unauthenticated Extras requires the guarded backend.app direct entrypoint; "
-        "Flask CLI and external WSGI servers must enable WEB_AUTH_ENABLED=true"
-    )
-
 if EXTRAS_HOST not in {'127.0.0.1', 'localhost', '::1'} and not WEB_AUTH_ENABLED:
     raise RuntimeError(
         "Refusing non-loopback DockerPilot Extras bind without WEB_AUTH_ENABLED=true"
     )
+
+if (
+    not WEB_AUTH_ENABLED
+    and os.environ.get('FLASK_RUN_FROM_CLI', '').lower() == 'true'
+):
+    raise RuntimeError(
+        "Unauthenticated DockerPilot Extras is not supported through Flask CLI; "
+        "use run_dev.py on loopback or enable WEB_AUTH_ENABLED=true"
+    )
+
+
+def _is_loopback_client(address: str | None) -> bool:
+    if not address:
+        return False
+    value = str(address).strip().strip('[]')
+    if '%' in value:
+        value = value.split('%', 1)[0]
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return value.lower() == 'localhost'
 _login_rate_limiter = SlidingWindowRateLimiter(
     max_failures=AUTH_LOGIN_MAX_FAILURES,
     window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
@@ -446,6 +460,25 @@ PUBLIC_API_PATHS = {
     '/api/auth/login',
     '/api/auth/status',
 }
+
+
+@app.before_request
+def enforce_unauthenticated_loopback_only():
+    if WEB_AUTH_ENABLED:
+        return None
+
+    # A local reverse proxy can otherwise hide a remote client behind loopback.
+    # Unauthenticated mode is intentionally direct-loopback only.
+    if any(
+        request.headers.get(name)
+        for name in ('Forwarded', 'X-Forwarded-For', 'X-Real-IP')
+    ):
+        return {'error': 'Web authentication is required for proxied access'}, 403
+
+    if not _is_loopback_client(request.remote_addr):
+        return {'error': 'Web authentication is required for non-loopback access'}, 403
+
+    return None
 
 
 @app.before_request
