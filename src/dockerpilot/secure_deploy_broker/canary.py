@@ -91,6 +91,9 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 _AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@]+@")
+_AUDIT_ANSI_ESCAPE_RE = re.compile(
+    r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))"
+)
 
 
 @dataclass(frozen=True)
@@ -658,6 +661,7 @@ class CanaryLedger:
 
 
 def _normalize_audit_controls(value: str) -> str:
+    value = _AUDIT_ANSI_ESCAPE_RE.sub("", value)
     normalized: list[str] = []
     for ch in value:
         if unicodedata.category(ch) not in {"Cc", "Cf"}:
