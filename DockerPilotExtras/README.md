@@ -352,6 +352,9 @@ export PORT=5000
 python run_dev.py
 ```
 
+Unauthenticated mode is intentionally direct-loopback only. Do not expose it through
+`flask run`, an external WSGI bind, or a reverse proxy; enable web authentication first.
+
 For direct LAN/non-loopback exposure, enable web auth first and opt into the bind explicitly:
 
 ```bash
