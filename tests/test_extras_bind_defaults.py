@@ -29,3 +29,4 @@ def test_vite_proxy_defaults_to_loopback_and_requires_auth_for_external_bind():
     assert "Refusing non-loopback Vite dev bind" in vite
     assert "process.argv.some" in vite
     assert "Refusing Vite --host override" in vite
+    assert "xfwd: true" in vite
