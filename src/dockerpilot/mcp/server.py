@@ -41,6 +41,26 @@ def create_app(config: MCPConfig | None = None):
         except Exception as exc:
             raise ToolError(str(exc))
 
+    # ---- Read-only CI watch (no workflow mutations) ----
+
+    @app.tool(name="dockerpilot_github_actions_get_run")
+    def dockerpilot_github_actions_get_run(repository: str, run_id: int) -> dict:
+        return _call(tools.dockerpilot_github_actions_get_run, repository=repository, run_id=run_id)
+
+    @app.tool(name="dockerpilot_github_actions_watch_run")
+    def dockerpilot_github_actions_watch_run(
+        repository: str,
+        run_id: int,
+        cursor: Optional[str] = None,
+        wait_seconds: int = 0,
+        include_logs: bool = False,
+    ) -> dict:
+        return _call(
+            tools.dockerpilot_github_actions_watch_run,
+            repository=repository, run_id=run_id, cursor=cursor,
+            wait_seconds=wait_seconds, include_logs=include_logs,
+        )
+
     # ---- Read-only tools ----
 
     @app.tool(name="dockerpilot_system_summary")

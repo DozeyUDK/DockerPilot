@@ -8,6 +8,9 @@
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
 
+**GitHub Actions live CI watch:** DockerPilot MCP provides read-only workflow/job/step monitoring and bounded log deltas with a resumable cursor. See [GitHub Actions watcher](docs/GITHUB_ACTIONS_WATCH.md) for setup and limitations.
+
+
 ## Live Demo (GitHub Codespaces)
 
 Launch an isolated DockerPilot demo directly from the current repository checkout:

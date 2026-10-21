@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .context import MCPConfig
+from dockerpilot.ci.github_actions import GitHubActionsWatcher
 from .diagnostics import detect_unhealthy, diagnose_container, diagnose_stack, explain_container_state
 from .docker_ops import DockerClientProvider, DockerOps
 from .migration import MigrationOps
@@ -23,11 +24,29 @@ class DockerPilotTools:
         self._provider = DockerClientProvider(config)
         self._ops = DockerOps(self._provider)
         self._migration: Optional[MigrationOps] = None
+        self._github_actions: Optional[GitHubActionsWatcher] = None
 
     def _migration_ops(self) -> MigrationOps:
         if self._migration is None:
             self._migration = MigrationOps(self._provider.client(), self._config)
         return self._migration
+
+    def _github_watcher(self) -> GitHubActionsWatcher:
+        if self._github_actions is None:
+            self._github_actions = GitHubActionsWatcher()
+        return self._github_actions
+
+    def dockerpilot_github_actions_get_run(self, repository: str, run_id: int) -> dict[str, Any]:
+        return self._github_watcher().get_run(repository, run_id)
+
+    def dockerpilot_github_actions_watch_run(
+        self, repository: str, run_id: int, cursor: Optional[str] = None,
+        wait_seconds: int = 0, include_logs: bool = False,
+    ) -> dict[str, Any]:
+        return self._github_watcher().watch_run(
+            repository, run_id, cursor=cursor, wait_seconds=wait_seconds,
+            include_logs=include_logs,
+        )
 
     # ---- Read-only tools ----
 
