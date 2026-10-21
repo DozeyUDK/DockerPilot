@@ -9,7 +9,6 @@ from flask_restful import Api, Resource
 import atexit
 import os
 import ipaddress
-import ipaddress
 import json
 import yaml
 import subprocess
