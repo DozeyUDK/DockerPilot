@@ -1532,7 +1532,9 @@ class CanaryManager:
                 else:
                     last = {"running": running, "healthy": healthy, "state": state, "health": health}
             self.sleep(min(self.policy.health_poll_interval_seconds, max(0.0, deadline - self.monotonic())))
-        raise VerificationError("canary_health", f"canary health failed: {last}")
+        # Sanitize the structured values before repr() escapes newlines/tabs:
+        # once escaped, e.g. '\\nBearer', credentials lose their word boundary.
+        raise VerificationError("canary_health", f"canary health failed: {redact_event(last)}")
 
     def _terminal(self, record: Dict[str, Any], state: str, **fields: Any) -> Dict[str, Any]:
         updated = dict(record)
