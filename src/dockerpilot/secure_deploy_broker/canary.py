@@ -81,14 +81,14 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
     r"""['"]?(password|passwd|passphrase|token|secret|api[_-]?key|credential|authorization)['"]?
         \s*[:=]\s*
         (?:
-            "(?:\\.|[^"])*"
+            "(?:\\.|[^"\\])*"
             |
-            '(?:\\.|[^'])*'
+            '(?:\\.|[^'\\])*'
             |
             # Truncated/unclosed quoted values: fail closed to end of diagnostic.
-            "(?:\\.|[^"])*\Z
+            "(?:\\.|[^"\\])*\Z
             |
-            '(?:\\.|[^'])*\Z
+            '(?:\\.|[^'\\])*\Z
             |
             [^\s,;]+
         )
