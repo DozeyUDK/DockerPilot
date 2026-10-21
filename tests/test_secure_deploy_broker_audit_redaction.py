@@ -39,6 +39,11 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "quoted_space": '{"password":" hunter2-leading-space"}',
         "short_bearer": "authentication failed for Bearer abc123",
         "ansi_auth_no_space": "Authorization: Bearer\x1b[31mlive-token-123",
+        "ansi_before_bearer": "request failed\x1b[0mBearer ansi-before-bearer-token",
+        "ansi_before_basic": "request failed\x1b]0;title\x07Basic ansi-before-basic-token",
+        "multi_ansi_before_bearer": "request failed\x1b[0m\x1b[31mBearer multi-ansi-bearer-token",
+        "c1_before_bearer": "request failed\u009b0mBearer c1-before-bearer-token",
+        "ansi_in_sensitive_key": "pass\x1b[0mword=ansi-split-key-token",
         "c1_dcs_no_space": "Authorization: Bearer\u0090payload\u009clive-c1-dcs-token",
         "c1_apc_no_space": "Basic\u009fpayload\u009clive-c1-apc-token",
         "unclosed_double_quote": 'password=" leaked-unclosed-double',
@@ -102,6 +107,11 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "split-key-token-123",
         "leaked-dangling-double",
         "leaked-dangling-single",
+        "ansi-before-bearer-token",
+        "ansi-before-basic-token",
+        "multi-ansi-bearer-token",
+        "c1-before-bearer-token",
+        "ansi-split-key-token",
     ):
         assert secret not in text
 
@@ -120,6 +130,11 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "control_key_split": "pass\x00word=control-key-secret",
             "quoted_space": '{"password":" persisted-leading-space"}',
             "ansi_auth_no_space": "Authorization: Bearer\x1b[31mpersisted-ansi-token",
+            "ansi_before_bearer": "request failed\x1b[0mBearer persisted-ansi-before-bearer",
+            "ansi_before_basic": "request failed\x1b]0;title\x07Basic persisted-ansi-before-basic",
+            "multi_ansi_before_bearer": "request failed\x1b[0m\x1b[31mBearer persisted-multi-ansi",
+            "c1_before_bearer": "request failed\u009b0mBearer persisted-c1-before-bearer",
+            "ansi_in_sensitive_key": "pass\x1b[0mword=persisted-ansi-split-key",
             "short_auth": "Bearer z9",
             "control_scheme_separator": "Basic\x00persisted-basic-token",
             "ansi_auth": "Bearer\x1b[0m persisted-ansi-token",
@@ -181,6 +196,11 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         "persisted-split-key",
         "persisted-dangling-double",
         "persisted-dangling-single",
+        "persisted-ansi-before-bearer",
+        "persisted-ansi-before-basic",
+        "persisted-multi-ansi",
+        "persisted-c1-before-bearer",
+        "persisted-ansi-split-key",
     ):
         assert secret not in text
 
