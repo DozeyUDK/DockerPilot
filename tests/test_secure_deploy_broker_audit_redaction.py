@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 src = ROOT / "src"
@@ -160,3 +161,31 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         assert secret not in text
 
     assert "[REDACTED]" in text
+
+def test_quoted_assignment_redaction_handles_adversarial_backslashes(tmp_path):
+    # The escaped-char and ordinary-char branches must not overlap: a few
+    # dozen backslashes used to produce exponential regex backtracking.
+    escaped_run = "\\\\" * 2048
+    messages = [
+        'password="' + escaped_run,
+        "token='" + escaped_run,
+        '{"password":"' + escaped_run + '"}',
+        "{'token':'" + escaped_run + "'}",
+    ]
+
+    start = time.monotonic()
+    for message in messages:
+        redacted = redact_event({"diagnostic": message})
+        assert escaped_run not in repr(redacted)
+        assert "[REDACTED]" in repr(redacted)
+
+    ledger = CanaryLedger(tmp_path / "canary")
+    for message in messages:
+        ledger.append_audit({"detail": message})
+    persisted = (tmp_path / "canary" / "audit.jsonl").read_text(encoding="utf-8")
+    assert escaped_run not in persisted
+    assert persisted.count("[REDACTED]") == len(messages)
+
+    # Generous bound: regression should finish in milliseconds, and certainly
+    # must not stall a runner on a bounded subprocess diagnostic.
+    assert time.monotonic() - start < 5.0
