@@ -25,6 +25,7 @@ def test_vite_proxy_defaults_to_loopback_and_requires_auth_for_external_bind():
     assert "process.env.VITE_HOST || '127.0.0.1'" in vite
     assert "host: '0.0.0.0'" not in vite
     assert "WEB_AUTH_ENABLED" in vite
+    assert "isLoopbackHost(devHost)" in vite
     assert "command === 'serve'" in vite
     assert "Refusing non-loopback Vite dev bind" in vite
     assert "process.argv.some" in vite
@@ -43,6 +44,7 @@ def test_reverse_proxy_recipe_enables_web_auth_before_trusting_forwarded_clients
     assert "export WEB_AUTH_ENABLED=true" in section
     assert "export WEB_AUTH_PASSWORD=" in section
     assert 'export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"' in section
+    assert 'export CORS_ORIGINS="https://your-domain.com"' in section
     assert "gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app" in section
     assert "export SECRET_KEY=" in section
     assert "secrets.token_urlsafe(64)" in section
