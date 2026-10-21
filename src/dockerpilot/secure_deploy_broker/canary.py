@@ -86,9 +86,9 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
             '(?:\\.|[^'\\])*'
             |
             # Truncated/unclosed quoted values: fail closed to end of diagnostic.
-            "(?:\\.|[^"\\])*\Z
+            "(?:\\.|[^"\\])*(?:\\)?\Z
             |
-            '(?:\\.|[^'\\])*\Z
+            '(?:\\.|[^'\\])*(?:\\)?\Z
             |
             [^\s,;]+
         )
@@ -762,17 +762,27 @@ def _normalize_audit_controls(value: str) -> str:
         value,
     )
     value = _strip_ansi_sequences(value)
+    # Cache the next non-control position to preserve the boundary before a
+    # standalone auth scheme without quadratic scans of repeated controls.
+    controls = [unicodedata.category(ch) in {"Cc", "Cf"} for ch in value]
+    next_visible = [len(value)] * (len(value) + 1)
+    for index in range(len(value) - 1, -1, -1):
+        next_visible[index] = next_visible[index + 1] if controls[index] else index
+
     normalized: list[str] = []
-    for ch in value:
-        if unicodedata.category(ch) not in {"Cc", "Cf"}:
+    for index, ch in enumerate(value):
+        if not controls[index]:
             normalized.append(ch)
             continue
 
-        # Preserve the separator required by auth-scheme syntax while removing
-        # controls elsewhere so split sensitive keys collapse before matching.
+        # Retain auth-scheme boundaries on either side of a control run.
+        # Otherwise collapse controls so split sensitive keys ("pass\nword")
+        # cannot evade the assignment detector.
         prefix = "".join(normalized[-6:]).lower()
-        if prefix.endswith("bearer") or prefix.endswith("basic"):
-            normalized.append(" ")
+        scheme_follows = _AUDIT_BEARER_RE.match(value, next_visible[index + 1])
+        if prefix.endswith(("bearer", "basic")) or scheme_follows:
+            if not normalized or normalized[-1] != " ":
+                normalized.append(" ")
 
     return "".join(normalized)
 
