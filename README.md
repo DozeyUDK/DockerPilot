@@ -8,6 +8,82 @@
 
 **Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
 
+
+## Architecture
+
+DockerPilot provides three distinct entry points: a local **CLI/TUI**, an optional **Extras** web panel, and an optional **MCP** server for AI-assisted operations. They share Docker as a runtime target but have different access and security paths.
+
+```mermaid
+flowchart TB
+    subgraph Actors["USERS AND AUTOMATION"]
+        direction LR
+        Operator["Operator"]
+        Assistant["AI assistant"]
+    end
+
+    subgraph Entry["ENTRY POINTS"]
+        direction LR
+        CLI["CLI and TUI"]
+        Web["Extras web UI<br/>React"]
+        MCP["MCP server<br/>stdio"]
+    end
+
+    subgraph App["APPLICATION SERVICES"]
+        direction LR
+        Core["DockerPilot core<br/>containers / images / deploy / monitor"]
+        API["Extras API<br/>Flask / REST"]
+        MCPPolicy["MCP policy and DockerOps<br/>read-only by default"]
+        Pipelines["CI/CD pipeline generator"]
+    end
+
+    subgraph Secure["OPTIONAL SECURE DEPLOY BOUNDARY"]
+        direction LR
+        Plan["Validate, plan and approve"]
+        Broker["Privileged broker<br/>independent verification"]
+        Guard["Dozeyguard and approval checks"]
+    end
+
+    subgraph Targets["RUNTIME AND OUTPUTS"]
+        direction LR
+        Docker[("Docker Engine")]
+        Store[("File state / optional PostgreSQL")]
+        CI["Generated pipeline files<br/>GitHub Actions / GitLab CI / Jenkins"]
+    end
+
+    Operator --> CLI
+    Operator --> Web
+    Assistant --> MCP
+    CLI --> Core
+    Web --> API
+    API --> Core
+    MCP --> MCPPolicy
+    Core --> Docker
+    MCPPolicy --> Docker
+    Core --> Store
+    API --> Store
+    Core --> Pipelines
+    API --> Pipelines
+    Pipelines --> CI
+    API -. "secure requests" .-> Plan
+    Plan -. "local Unix socket" .-> Broker
+    Broker --> Guard
+    Broker --> Docker
+
+    classDef entry fill:#e9f2ff,stroke:#5485bc,color:#193653,stroke-width:1px
+    classDef app fill:#e8f6f0,stroke:#438d74,color:#183e33,stroke-width:1px
+    classDef secure fill:#fff0e2,stroke:#be8254,color:#553319,stroke-width:1px
+    classDef target fill:#f1eef9,stroke:#8473b1,color:#342853,stroke-width:1px
+    class CLI,Web,MCP entry
+    class Core,API,MCPPolicy,Pipelines app
+    class Plan,Broker,Guard secure
+    class Docker,Store,CI target
+```
+
+**Reading the diagram:** Solid arrows show normal runtime or data flows; dashed arrows show the optional Secure Deploy route. The MCP server uses its own policy-gated Docker operations rather than passing through the interactive CLI. Secure Deploy crosses a separate Unix-socket broker boundary, where plans are independently verified before limited Docker actions. Pipeline generation writes CI configuration files; it does **not** mean DockerPilot runs a GitHub Actions, GitLab CI, or Jenkins runner.
+
+Related details: [MCP integration](docs/mcp.md), [DockerPilotExtras](DockerPilotExtras/README.md), and the [Secure Deploy threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md).
+
+
 ## Live Demo (GitHub Codespaces)
 
 Launch an isolated DockerPilot demo directly from the current repository checkout:
@@ -155,6 +231,7 @@ chmod +x setup_extras.sh && ./setup_extras.sh
 
 ## Table of Contents
 
+- [Architecture](#architecture)
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [Container Management](#container-management)
