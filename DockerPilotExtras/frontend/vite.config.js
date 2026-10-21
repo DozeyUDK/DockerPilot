@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { isLoopbackHost } from './src/utils/loopback-host.mjs'
 
 // Read backend port from the environment or fall back to 5000
 const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT || '5000'
@@ -9,7 +10,7 @@ const webAuthEnabled = (process.env.WEB_AUTH_ENABLED || 'false').toLowerCase() =
 export default defineConfig(({ command }) => {
   if (
     command === 'serve' &&
-    !['127.0.0.1', 'localhost', '::1'].includes(devHost) &&
+    !isLoopbackHost(devHost) &&
     !webAuthEnabled
   ) {
     throw new Error(
