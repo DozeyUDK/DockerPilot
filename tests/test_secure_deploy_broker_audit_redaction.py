@@ -43,6 +43,12 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "c1_apc_no_space": "Basic\u009fpayload\u009clive-c1-apc-token",
         "unclosed_double_quote": 'password=" leaked-unclosed-double',
         "unclosed_single_quote": "authorization=\' leaked-unclosed-single",
+        "newline_bearer": "request failed\nBearer newline-token-123",
+        "tab_basic": "request failed\tBasic tab-basic-token-123",
+        "null_bearer": "request failed\x00Bearer null-token-123",
+        "split_key_stays_redacted": "pass\nword=split-key-token-123",
+        "dangling_escape_double": 'password=" leaked-dangling-double\\',
+        "dangling_escape_single": "authorization=' leaked-dangling-single\\",
         "short_basic": "authentication failed for Basic dTpw",
         "nested": {
             "note": "token=abc123456789",
@@ -90,6 +96,12 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "live-c1-apc-token",
         "leaked-unclosed-double",
         "leaked-unclosed-single",
+        "newline-token-123",
+        "tab-basic-token-123",
+        "null-token-123",
+        "split-key-token-123",
+        "leaked-dangling-double",
+        "leaked-dangling-single",
     ):
         assert secret not in text
 
@@ -126,6 +138,12 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "c1_apc_no_space": "Basic\u009fpayload\u009cpersisted-c1-apc-boundary-token",
             "unclosed_double_quote": 'password=" persisted-unclosed-double',
             "unclosed_single_quote": "authorization=\' persisted-unclosed-single",
+            "newline_bearer": "request failed\nBearer persisted-newline-token",
+            "tab_basic": "request failed\tBasic persisted-tab-basic",
+            "null_bearer": "request failed\x00Bearer persisted-null-token",
+            "split_key_stays_redacted": "pass\nword=persisted-split-key",
+            "dangling_escape_double": 'password=" persisted-dangling-double\\',
+            "dangling_escape_single": "authorization=' persisted-dangling-single\\",
         }
     )
 
@@ -157,6 +175,12 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         "persisted-c1-apc-boundary-token",
         "persisted-unclosed-double",
         "persisted-unclosed-single",
+        "persisted-newline-token",
+        "persisted-tab-basic",
+        "persisted-null-token",
+        "persisted-split-key",
+        "persisted-dangling-double",
+        "persisted-dangling-single",
     ):
         assert secret not in text
 
@@ -171,6 +195,8 @@ def test_quoted_assignment_redaction_handles_adversarial_backslashes(tmp_path):
         "token='" + escaped_run,
         '{"password":"' + escaped_run + '"}',
         "{'token':'" + escaped_run + "'}",
+        'password="' + escaped_run + "\\",
+        "token='" + escaped_run + "\\",
     ]
 
     start = time.monotonic()
