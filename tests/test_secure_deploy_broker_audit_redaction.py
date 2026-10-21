@@ -38,6 +38,10 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "quoted_space": '{"password":" hunter2-leading-space"}',
         "short_bearer": "authentication failed for Bearer abc123",
         "ansi_auth_no_space": "Authorization: Bearer\x1b[31mlive-token-123",
+        "c1_dcs_no_space": "Authorization: Bearer\u0090payload\u009clive-c1-dcs-token",
+        "c1_apc_no_space": "Basic\u009fpayload\u009clive-c1-apc-token",
+        "unclosed_double_quote": 'password=" leaked-unclosed-double',
+        "unclosed_single_quote": "authorization=\' leaked-unclosed-single",
         "short_basic": "authentication failed for Basic dTpw",
         "nested": {
             "note": "token=abc123456789",
@@ -81,6 +85,10 @@ def test_redact_event_scrubs_sensitive_keys_and_secret_shaped_values():
         "live-token-123",
         "list-token-123456",
         "opaque-secret",
+        "live-c1-dcs-token",
+        "live-c1-apc-token",
+        "leaked-unclosed-double",
+        "leaked-unclosed-single",
     ):
         assert secret not in text
 
@@ -113,6 +121,10 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
             "unicode_key": "pass\u0085word=persisted-unicode-secret",
             "format_key": "pass\u200bword=persisted-format-secret",
             "token_url": "https://ghp_PERSISTED@example.com/repo.git",
+            "c1_dcs_no_space": "Bearer\u0090payload\u009cpersisted-c1-boundary-token",
+            "c1_apc_no_space": "Basic\u009fpayload\u009cpersisted-c1-apc-boundary-token",
+            "unclosed_double_quote": 'password=" persisted-unclosed-double',
+            "unclosed_single_quote": "authorization=\' persisted-unclosed-single",
         }
     )
 
@@ -140,6 +152,10 @@ def test_canary_audit_file_never_contains_secret_shaped_values(tmp_path):
         "persisted-unicode-secret",
         "persisted-format-secret",
         "ghp_PERSISTED",
+        "persisted-c1-boundary-token",
+        "persisted-c1-apc-boundary-token",
+        "persisted-unclosed-double",
+        "persisted-unclosed-single",
     ):
         assert secret not in text
 
