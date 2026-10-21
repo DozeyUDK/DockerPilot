@@ -26,11 +26,12 @@ def test_vite_proxy_defaults_to_loopback_and_requires_auth_for_external_bind():
     assert "host: '0.0.0.0'" not in vite
     assert "WEB_AUTH_ENABLED" in vite
     assert "isLoopbackHost(devHost)" in vite
+    assert "loopbackProxyTarget(process.env.HOST, backendPort)" in vite
     assert "command === 'serve'" in vite
     assert "Refusing non-loopback Vite dev bind" in vite
     assert "process.argv.some" in vite
     assert "Refusing Vite --host override" in vite
-    assert "target: `http://127.0.0.1:${backendPort}`" in vite
+    assert "target: backendProxyTarget" in vite
     assert "target: `http://localhost:${backendPort}`" not in vite
     assert "xfwd: true" in vite
 
