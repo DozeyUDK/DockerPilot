@@ -374,6 +374,7 @@ export SECRET_KEY='replace-with-a-persistent-random-secret'
 export SESSION_COOKIE_SECURE=true
 export FLASK_ENV=production
 export AUTH_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
+export CORS_ORIGINS="https://your-domain.com"
 gunicorn --worker-class gthread --threads 4 --timeout 360 --bind 127.0.0.1:5000 backend.app:app
 ```
 
