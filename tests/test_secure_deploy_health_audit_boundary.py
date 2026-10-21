@@ -29,9 +29,10 @@ def test_health_diagnostics_safe_before_repr_and_audit(tmp_path, diagnostic):
     manager._run_owned = lambda _: SimpleNamespace(
         timed_out=False, returncode=1, stderr=diagnostic
     )
-    with pytest.raises(VerificationError, match="canary_health") as err:
+    with pytest.raises(VerificationError, match="canary health failed") as err:
         manager._health()
 
+    assert err.value.code == "canary_health"
     assert "test-health-credential" not in str(err.value)
     assert "[REDACTED" in str(err.value)
     ledger.append_audit({"primary_error": str(err.value)})
