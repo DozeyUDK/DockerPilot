@@ -85,6 +85,11 @@ _AUDIT_ASSIGNMENT_RE = re.compile(
             |
             '(?:\\.|[^'])*'
             |
+            # Truncated/unclosed quoted values: fail closed to end of diagnostic.
+            "(?:\\.|[^"])*\Z
+            |
+            '(?:\\.|[^'])*\Z
+            |
             [^\s,;]+
         )
     """,
@@ -752,7 +757,7 @@ def _strip_ansi_sequences(value: str) -> str:
 def _normalize_audit_controls(value: str) -> str:
     # Preserve the auth-scheme delimiter when an ANSI sequence takes its place.
     value = re.sub(
-        r"(?i)\b(Bearer|Basic)(?=\x1b|\x9b)",
+        r"(?i)\b(Bearer|Basic)(?=[\x1b\x90\x98\x9b\x9d-\x9f])",
         lambda match: match.group(1) + " ",
         value,
     )
