@@ -259,6 +259,8 @@ Inject token/password/API-key/Bearer-shaped data into reachable failure channels
 
 **Expected:** no reusable secret value in API response, job registry, UI-safe structured details or broker audit log.
 
+**Broker-audit regression:** broker audit events redact both sensitive field names and secret-shaped values embedded under neutral fields, including Authorization/Bearer/Basic values, password/token/API-key assignments and URL credentials.
+
 ### AT-27 — malicious control characters / oversized output
 
 Return control characters and oversized stderr/stdout from broker-owned subprocesses and health paths.

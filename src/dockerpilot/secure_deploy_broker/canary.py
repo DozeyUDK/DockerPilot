@@ -17,6 +17,7 @@ import socket
 import subprocess
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -64,6 +65,37 @@ MAX_BUNDLE_RECORDS = 1000
 HTTP_BODY_LIMIT = 4096
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 _EXEC_RE = re.compile(r"^exec_[A-Fa-f0-9]{24}$")
+_AUDIT_SENSITIVE_KEY_RE = re.compile(
+    r"(?:password|passwd|passphrase|token|secret|api[_-]?key|credential|authorization)",
+    re.IGNORECASE,
+)
+_AUDIT_AUTH_HEADER_RE = re.compile(
+    r"\bAuthorization\s*:\s*(?:Bearer|Basic)\s+[^\s,;]+",
+    re.IGNORECASE,
+)
+_AUDIT_BEARER_RE = re.compile(
+    r"\b(?:Bearer|Basic)\s+[^\s,;]+",
+    re.IGNORECASE,
+)
+_AUDIT_ASSIGNMENT_RE = re.compile(
+    r"""['"]?(password|passwd|passphrase|token|secret|api[_-]?key|credential|authorization)['"]?
+        \s*[:=]\s*
+        (?:
+            "(?:\\.|[^"\\])*"
+            |
+            '(?:\\.|[^'\\])*'
+            |
+            # Truncated/unclosed quoted values: fail closed to end of diagnostic.
+            "(?:\\.|[^"\\])*(?:\\)?\Z
+            |
+            '(?:\\.|[^'\\])*(?:\\)?\Z
+            |
+            [^\s,;]+
+        )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_AUDIT_URL_CREDENTIAL_RE = re.compile(r"://[^\s/@]+@")
 
 
 @dataclass(frozen=True)
@@ -630,15 +662,158 @@ class CanaryLedger:
         return self._with_lock(op)
 
 
+def _strip_ansi_sequences(value: str) -> str:
+    """Remove ECMA-48 sequences, retaining a control marker at each boundary.
+
+    Control markers are later collapsed or converted to auth-scheme separators.
+    Dropping the sequences entirely would join e.g. 'failed' with 'Bearer'.
+    """
+
+    output: list[str] = []
+    index = 0
+    length = len(value)
+
+    def consume_string_control(start: int, *, allow_bel: bool) -> int:
+        cursor = start
+        while cursor < length:
+            if value[cursor] == "\x9c":
+                return cursor + 1
+            if (
+                value[cursor] == "\x1b"
+                and cursor + 1 < length
+                and value[cursor + 1] == "\\"
+            ):
+                return cursor + 2
+            if allow_bel and value[cursor] == "\x07":
+                return cursor + 1
+            cursor += 1
+        return length
+
+    while index < length:
+        char = value[index]
+        codepoint = ord(char)
+
+        if char == "\x1b":
+            output.append("\x00")
+            if index + 1 >= length:
+                index += 1
+                continue
+
+            introducer = value[index + 1]
+
+            # 7-bit CSI.
+            if introducer == "[":
+                cursor = index + 2
+                while cursor < length and 0x30 <= ord(value[cursor]) <= 0x3F:
+                    cursor += 1
+                while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                    cursor += 1
+                if cursor < length and 0x40 <= ord(value[cursor]) <= 0x7E:
+                    index = cursor + 1
+                else:
+                    index = length
+                continue
+
+            # 7-bit OSC/DCS/SOS/PM/APC string controls.
+            if introducer in "]PX^_":
+                index = consume_string_control(
+                    index + 2,
+                    allow_bel=introducer == "]",
+                )
+                continue
+
+            # Generic ESC sequence: zero or more intermediate bytes, then final.
+            cursor = index + 1
+            while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                cursor += 1
+            if cursor < length and 0x30 <= ord(value[cursor]) <= 0x7E:
+                index = cursor + 1
+            else:
+                index += 1
+            continue
+
+        # 8-bit C1 CSI.
+        if codepoint == 0x9B:
+            output.append("\x00")
+            cursor = index + 1
+            while cursor < length and 0x30 <= ord(value[cursor]) <= 0x3F:
+                cursor += 1
+            while cursor < length and 0x20 <= ord(value[cursor]) <= 0x2F:
+                cursor += 1
+            if cursor < length and 0x40 <= ord(value[cursor]) <= 0x7E:
+                index = cursor + 1
+            else:
+                index = length
+            continue
+
+        # 8-bit C1 DCS/SOS/OSC/PM/APC.
+        if codepoint in {0x90, 0x98, 0x9D, 0x9E, 0x9F}:
+            output.append("\x00")
+            index = consume_string_control(
+                index + 1,
+                allow_bel=codepoint == 0x9D,
+            )
+            continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
+
+
+def _normalize_audit_controls(value: str) -> str:
+    # Preserve the auth-scheme delimiter when an ANSI sequence takes its place.
+    value = re.sub(
+        r"(?i)\b(Bearer|Basic)(?=[\x1b\x90\x98\x9b\x9d-\x9f])",
+        lambda match: match.group(1) + " ",
+        value,
+    )
+    value = _strip_ansi_sequences(value)
+    # Cache the next non-control position to preserve the boundary before a
+    # standalone auth scheme without quadratic scans of repeated controls.
+    controls = [unicodedata.category(ch) in {"Cc", "Cf"} for ch in value]
+    next_visible = [len(value)] * (len(value) + 1)
+    for index in range(len(value) - 1, -1, -1):
+        next_visible[index] = next_visible[index + 1] if controls[index] else index
+
+    normalized: list[str] = []
+    for index, ch in enumerate(value):
+        if not controls[index]:
+            normalized.append(ch)
+            continue
+
+        # Retain auth-scheme boundaries on either side of a control run.
+        # Otherwise collapse controls so split sensitive keys ("pass\nword")
+        # cannot evade the assignment detector.
+        prefix = "".join(normalized[-6:]).lower()
+        scheme_follows = _AUDIT_BEARER_RE.match(value, next_visible[index + 1])
+        if prefix.endswith(("bearer", "basic")) or scheme_follows:
+            if not normalized or normalized[-1] != " ":
+                normalized.append(" ")
+
+    return "".join(normalized)
+
+
+def _redact_audit_text(value: str) -> str:
+    text = _normalize_audit_controls(value)
+    text = _AUDIT_AUTH_HEADER_RE.sub("Authorization: [REDACTED]", text)
+    text = _AUDIT_BEARER_RE.sub("[REDACTED-AUTH]", text)
+    text = _AUDIT_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _AUDIT_URL_CREDENTIAL_RE.sub("://[REDACTED]@", text)
+    return text
+
+
 def redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
     def scrub(value: Any) -> Any:
         if isinstance(value, dict):
             return {
-                key: "[REDACTED]" if any(word in key.lower() for word in ("secret", "token", "password")) else scrub(item)
+                key: "[REDACTED]" if _AUDIT_SENSITIVE_KEY_RE.search(str(key)) else scrub(item)
                 for key, item in value.items()
             }
         if isinstance(value, list):
             return [scrub(item) for item in value]
+        if isinstance(value, str):
+            return _redact_audit_text(value)
         return value
 
     return scrub(event)
@@ -1357,7 +1532,9 @@ class CanaryManager:
                 else:
                     last = {"running": running, "healthy": healthy, "state": state, "health": health}
             self.sleep(min(self.policy.health_poll_interval_seconds, max(0.0, deadline - self.monotonic())))
-        raise VerificationError("canary_health", f"canary health failed: {last}")
+        # Sanitize the structured values before repr() escapes newlines/tabs:
+        # once escaped, e.g. '\\nBearer', credentials lose their word boundary.
+        raise VerificationError("canary_health", f"canary health failed: {redact_event(last)}")
 
     def _terminal(self, record: Dict[str, Any], state: str, **fields: Any) -> Dict[str, Any]:
         updated = dict(record)
