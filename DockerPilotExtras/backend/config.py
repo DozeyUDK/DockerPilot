@@ -24,7 +24,7 @@ class Config:
     # Flask settings
     PORT = int(os.environ.get('PORT', 5000))
     DEBUG = os.environ.get('FLASK_ENV') == 'development'
-    HOST = os.environ.get('HOST', '0.0.0.0')
+    HOST = os.environ.get('HOST', '127.0.0.1')
 
 
 class ProductionConfig(Config):
