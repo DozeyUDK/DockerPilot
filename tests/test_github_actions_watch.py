@@ -109,7 +109,60 @@ def test_reject_untrusted_log_redirect():
                 return Response(status=302, headers={"Location": "http://127.0.0.1/secret"})
             return super().get(url, **kwargs)
     w.session = EvilSession()
-    assert "refused" in w._logs("DozeyUDK/kafka-python-monitor", 10)
+    with pytest.raises(GitHubWatchError, match="refused"):
+        w._logs("DozeyUDK/kafka-python-monitor", 10)
+
+
+
+def test_failed_signed_log_is_retried_on_next_cursor():
+    w, session = watcher()
+    session.state = "completed"
+
+    class FlakySignedLog(Session):
+        def __init__(self):
+            super().__init__()
+            self.state = "completed"
+            self.fail_once = True
+        def get(self, url, **kwargs):
+            if url.startswith("https://log.actions.githubusercontent.com/") and self.fail_once:
+                self.fail_once = False
+                return Response(status=503)
+            return super().get(url, **kwargs)
+
+    w.session = FlakySignedLog()
+    first = w.watch_run("DozeyUDK/kafka-python-monitor", 5, include_logs=True)
+    assert first["logs_delta"] == []
+    retry = w.watch_run("DozeyUDK/kafka-python-monitor", 5,
+                        cursor=first["next_cursor"], include_logs=True)
+    assert len(retry["logs_delta"]) == 1
+    third = w.watch_run("DozeyUDK/kafka-python-monitor", 5,
+                        cursor=retry["next_cursor"], include_logs=True)
+    assert third["logs_delta"] == []
+
+
+def test_large_matrix_cursor_can_be_replayed():
+    class MatrixSession(Session):
+        def get(self, url, **kwargs):
+            if url.endswith("?per_page=100&page=1"):
+                jobs = [
+                    {"id": 1000 + i, "name": "job-" + str(i), "status": "completed",
+                     "conclusion": "success",
+                     "steps": [
+                         {"number": j, "name": "step-" + str(j),
+                          "status": "completed", "conclusion": "success"}
+                         for j in range(10)
+                     ]}
+                    for i in range(40)
+                ]
+                return Response({"jobs": jobs, "total_count": 40})
+            return super().get(url, **kwargs)
+    w = GitHubActionsWatcher(allowed_repos=["DozeyUDK/kafka-python-monitor"],
+                             session=MatrixSession())
+    first = w.watch_run("DozeyUDK/kafka-python-monitor", 5)
+    assert len(first["next_cursor"]) < 8192
+    replay = w.watch_run("DozeyUDK/kafka-python-monitor", 5, cursor=first["next_cursor"])
+    assert not replay["changed"]
+    assert len(replay["jobs"]) == 40
 
 
 def test_wait_seconds_guard():

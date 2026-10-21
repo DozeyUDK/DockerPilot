@@ -6,10 +6,12 @@ logs after jobs finish, so live feedback uses job/step statuses first.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import time
+import zlib
 from urllib.parse import urlsplit
 
 import requests
@@ -22,6 +24,8 @@ _SECRET = re.compile(
 )
 _MAX_JOBS = 200
 _MAX_LOG_BYTES = 32768
+_MAX_CURSOR_CHARS = 32768
+_MAX_CURSOR_JSON_BYTES = 500000
 
 
 class GitHubWatchError(ValueError):
@@ -114,17 +118,17 @@ class GitHubActionsWatcher:
         base = f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs"
         with self._request(base) as redirect:
             if redirect.status_code != 302:
-                return "(GitHub job logs not available yet)"
+                raise GitHubWatchError("GitHub job logs not available yet")
             signed_url = redirect.headers.get("Location", "")
         destination = urlsplit(signed_url)
         host = (destination.hostname or "").lower()
         allowed = host.endswith(".actions.githubusercontent.com") or host.endswith(".blob.core.windows.net")
         if destination.scheme != "https" or not allowed or destination.username or destination.password:
-            return "(GitHub log redirect refused: untrusted host)"
+            raise GitHubWatchError("GitHub log redirect refused: untrusted host")
         # Do not forward GitHub auth, cookies, or other headers to the signed host.
         with self.session.get(signed_url, timeout=12, stream=True, allow_redirects=False) as response:
             if response.status_code != 200:
-                return "(GitHub logs HTTP %d)" % response.status_code
+                raise GitHubWatchError("GitHub logs HTTP %d" % response.status_code)
             chunks, total = [], 0
             for chunk in response.iter_content(chunk_size=4096):
                 if total + len(chunk) > _MAX_LOG_BYTES:
@@ -149,11 +153,19 @@ class GitHubActionsWatcher:
         if cursor is None:
             previous = {}
         else:
-            if not isinstance(cursor, str) or len(cursor) > 8192:
+            if not isinstance(cursor, str) or len(cursor) > _MAX_CURSOR_CHARS:
                 raise GitHubWatchError("Invalid cursor")
             try:
-                previous = json.loads(cursor)
-            except (ValueError, TypeError):
+                compressed = base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True)
+                decompressor = zlib.decompressobj()
+                content = decompressor.decompress(compressed, _MAX_CURSOR_JSON_BYTES + 1)
+                if (len(content) > _MAX_CURSOR_JSON_BYTES or not decompressor.eof
+                        or decompressor.unused_data or decompressor.unconsumed_tail):
+                    raise ValueError("Cursor payload limit exceeded")
+                previous = json.loads(content)
+                if not isinstance(previous, dict):
+                    raise ValueError("Cursor must be an object")
+            except (ValueError, TypeError, UnicodeError, zlib.error):
                 raise GitHubWatchError("Invalid cursor") from None
             if previous.get("repo") != repo or previous.get("run") != run_id:
                 raise GitHubWatchError("Cursor does not match repository/run")
@@ -175,14 +187,19 @@ class GitHubActionsWatcher:
                     body = self._logs(repo, job["id"])
                 except (requests.RequestException, GitHubWatchError):
                     body = "(Job log temporarily unavailable)"
-                if body.startswith("(GitHub job logs not available") or body.startswith("(Job log temporarily"):
+                if body == "(Job log temporarily unavailable)":
                     continue  # Retry on next invocation, not a permanent missed log.
                 logs.append({"job_id": job["id"], "job": job["name"], "text": body})
                 done_logs.add(job["id"])
-        current_cursor = json.dumps({
+        payload = json.dumps({
             "repo": repo, "run": run_id, "signature": signature,
             "logged": sorted(done_logs),
-        }, separators=(",", ":"))
+        }, separators=(",", ":")).encode("utf-8")
+        if len(payload) > _MAX_CURSOR_JSON_BYTES:
+            raise GitHubWatchError("Too many job/step states to serialize")
+        current_cursor = base64.urlsafe_b64encode(zlib.compress(payload, level=6)).decode("ascii")
+        if len(current_cursor) > _MAX_CURSOR_CHARS:
+            raise GitHubWatchError("Workflow cursor exceeds supported limit")
         states = {"success": "✓", "failure": "✗", "in_progress": "▶", "queued": "○"}
         summary = [
             "%s %s (%s)" % (
