@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { isLoopbackHost } from './src/utils/loopback-host.mjs'
+import { isLoopbackHost, loopbackProxyTarget } from './src/utils/loopback-host.mjs'
 
 // Read backend port from the environment or fall back to 5000
 const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT || '5000'
 const devHost = process.env.VITE_HOST || '127.0.0.1'
+const backendProxyTarget = loopbackProxyTarget(process.env.HOST, backendPort)
 const webAuthEnabled = (process.env.WEB_AUTH_ENABLED || 'false').toLowerCase() === 'true'
 
 export default defineConfig(({ command }) => {
@@ -38,7 +39,7 @@ export default defineConfig(({ command }) => {
     ],
     proxy: {
       '/api': {
-        target: `http://127.0.0.1:${backendPort}`,
+        target: backendProxyTarget,
         changeOrigin: true,
         xfwd: true
       }
