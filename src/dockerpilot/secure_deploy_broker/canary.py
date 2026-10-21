@@ -663,7 +663,11 @@ class CanaryLedger:
 
 
 def _strip_ansi_sequences(value: str) -> str:
-    """Remove complete ECMA-48 escape/control sequences before secret matching."""
+    """Remove ECMA-48 sequences, retaining a control marker at each boundary.
+
+    Control markers are later collapsed or converted to auth-scheme separators.
+    Dropping the sequences entirely would join e.g. 'failed' with 'Bearer'.
+    """
 
     output: list[str] = []
     index = 0
@@ -690,6 +694,7 @@ def _strip_ansi_sequences(value: str) -> str:
         codepoint = ord(char)
 
         if char == "\x1b":
+            output.append("\x00")
             if index + 1 >= length:
                 index += 1
                 continue
@@ -729,6 +734,7 @@ def _strip_ansi_sequences(value: str) -> str:
 
         # 8-bit C1 CSI.
         if codepoint == 0x9B:
+            output.append("\x00")
             cursor = index + 1
             while cursor < length and 0x30 <= ord(value[cursor]) <= 0x3F:
                 cursor += 1
@@ -742,6 +748,7 @@ def _strip_ansi_sequences(value: str) -> str:
 
         # 8-bit C1 DCS/SOS/OSC/PM/APC.
         if codepoint in {0x90, 0x98, 0x9D, 0x9E, 0x9F}:
+            output.append("\x00")
             index = consume_string_control(
                 index + 1,
                 allow_bel=codepoint == 0x9D,
