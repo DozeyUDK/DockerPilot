@@ -148,7 +148,11 @@ def error_context(console: Any, logger: Any, operation: str, container_name: Opt
 
 
 def parse_multi_target(target_string: str) -> list[str]:
-    """Parse a comma-separated container/image target list."""
+    """Parse unique comma-separated targets, preserving first-seen order."""
     if not target_string:
         return []
-    return [target.strip() for target in target_string.split(",") if target.strip()]
+    targets = [target.strip() for target in target_string.split(",") if target.strip()]
+    # Avoid rebuilding the result for the common case of already-unique targets.
+    if len(targets) == len(set(targets)):
+        return targets
+    return list(dict.fromkeys(targets))
