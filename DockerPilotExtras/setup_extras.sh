@@ -33,6 +33,9 @@ if [ ! -f "$VENV_DIR/bin/pip" ]; then
 fi
 echo "Installing Python dependencies (Flask, etc.)..."
 "$VENV_DIR/bin/pip" install -q -r requirements.txt
+# Install the repository package and its runtime dependencies (including Rich).
+# This also makes dockerpilot.ui_icons available to standalone Extras scripts.
+"$VENV_DIR/bin/pip" install -q -e "$SCRIPT_DIR/.."
 echo "[OK] Python dependencies installed in .venv"
 echo ""
 

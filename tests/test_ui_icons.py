@@ -70,3 +70,10 @@ def test_no_legacy_emoji_in_gui_or_python_presentation():
             assert not broad_emoji.search(text), f"Unmapped emoji: {file.relative_to(ROOT)}"
     for file in (ROOT / "install.sh",):
         assert not broad_emoji.search(file.read_text(encoding="utf-8")), f"Unmapped emoji: {file.relative_to(ROOT)}"
+
+
+def test_extras_setup_installs_shared_package_into_its_venv():
+    """Extras scripts import dockerpilot.ui_icons, so their venv needs DockerPilot."""
+    script = (ROOT / "DockerPilotExtras/setup_extras.sh").read_text(encoding="utf-8")
+    assert '"$VENV_DIR/bin/pip" install -q -r requirements.txt' in script
+    assert '"$VENV_DIR/bin/pip" install -q -e "$SCRIPT_DIR/.."' in script
