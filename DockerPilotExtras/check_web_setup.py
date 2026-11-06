@@ -9,14 +9,16 @@ import os
 import subprocess
 from pathlib import Path
 
+from dockerpilot.ui_icons import icon
+
 
 def check_python_version():
     """Check Python version"""
     version = sys.version_info
     if version.major < 3 or (version.major == 3 and version.minor < 10):
-        print(f"❌ Python 3.10+ required. Found: {version.major}.{version.minor}")
+        print(f"{icon('error')} Python 3.10+ required. Found: {version.major}.{version.minor}")
         return False
-    print(f"✓ Python {version.major}.{version.minor}.{version.micro}")
+    print(f"{icon('success')} Python {version.major}.{version.minor}.{version.micro}")
     return True
 
 
@@ -31,9 +33,9 @@ def check_python_dependencies():
         try:
             package_import = package.replace('-', '_')
             __import__(package_import)
-            print(f"✓ {package}")
+            print(f"{icon('success')} {package}")
         except ImportError:
-            print(f"❌ {package} - missing")
+            print(f"{icon('error')} {package} - missing")
             missing.append(package)
     
     if missing:
@@ -53,7 +55,7 @@ def check_node():
             timeout=5
         )
         if result.returncode == 0:
-            print(f"✓ Node.js: {result.stdout.strip()}")
+            print(f"{icon('success')} Node.js: {result.stdout.strip()}")
             
             # Check npm
             result_npm = subprocess.run(
@@ -63,12 +65,12 @@ def check_node():
                 timeout=5
             )
             if result_npm.returncode == 0:
-                print(f"✓ npm: {result_npm.stdout.strip()}")
+                print(f"{icon('success')} npm: {result_npm.stdout.strip()}")
                 return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     
-    print("❌ Node.js/npm - not found")
+    print(f"{icon('error')} Node.js/npm - not found")
     print("   Install Node.js: https://nodejs.org/")
     return False
 
@@ -79,10 +81,10 @@ def check_frontend_dependencies():
     node_modules = frontend_dir / "node_modules"
     
     if node_modules.exists():
-        print("✓ Frontend dependencies installed")
+        print(f"{icon('success')} Frontend dependencies installed")
         return True
     else:
-        print("⚠ Frontend dependencies are not installed")
+        print(f"{icon('warning')} Frontend dependencies are not installed")
         print("   Run: cd frontend && npm install")
         return False
 
@@ -97,12 +99,12 @@ def check_docker():
             timeout=5
         )
         if result.returncode == 0:
-            print(f"✓ Docker: {result.stdout.strip()}")
+            print(f"{icon('success')} Docker: {result.stdout.strip()}")
             return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     
-    print("❌ Docker - not found")
+    print(f"{icon('error')} Docker - not found")
     print("   Install Docker: https://docs.docker.com/get-docker/")
     return False
 
@@ -118,12 +120,12 @@ def check_dockerpilot():
         )
         if result.returncode == 0:
             version = result.stdout.strip()
-            print(f"✓ DockerPilot: {version}")
+            print(f"{icon('success')} DockerPilot: {version}")
             return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     
-    print("❌ DockerPilot - not found")
+    print(f"{icon('error')} DockerPilot - not found")
     print("   Install DockerPilot: https://github.com/DozeyUDK/DockerPilot")
     return False
 
@@ -156,15 +158,15 @@ def main():
     print("\n" + "=" * 60)
     
     if all(results):
-        print("\n✅ All requirements met!")
+        print(f"\n{icon('success')} All requirements met!")
         if warnings:
-            print(f"⚠ Warnings: {', '.join(warnings)}")
+            print(f"{icon('warning')} Warnings: {', '.join(warnings)}")
         print("\nYou can run the application:")
         print("  Backend:  python run_dev.py")
         print("  Frontend: cd frontend && npm run dev")
         return 0
     else:
-        print("\n❌ Some requirements are not met")
+        print(f"\n{icon('error')} Some requirements are not met")
         print("Fix the issues above before running the application")
         return 1
 

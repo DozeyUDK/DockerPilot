@@ -7,6 +7,8 @@ This will assign all containers to DEV environment.
 import docker
 import yaml
 from pathlib import Path
+
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 import json
 import sys
@@ -166,8 +168,8 @@ def main():
     deployments_dir = config_dir / "deployments"
     deployments_dir.mkdir(exist_ok=True, parents=True)
     
-    print(f"📦 Preparing DEV configurations for all running containers...")
-    print(f"📁 Deployments directory: {deployments_dir}\n")
+    print(f"{icon('package')} Preparing DEV configurations for all running containers...")
+    print(f"{icon('folder')} Deployments directory: {deployments_dir}\n")
     
     # Get all running containers
     containers = client.containers.list(filters={'status': 'running'})
@@ -187,7 +189,7 @@ def main():
         # Get container info
         container_info = get_container_info(client, container_name)
         if not container_info:
-            print(f"  ⚠️  Skipped: Could not get container info")
+            print(f"  {icon('warning')}  Skipped: Could not get container info")
             continue
         
         # Create deployment config
@@ -198,12 +200,12 @@ def main():
                 'config': str(config_path),
                 'image': container_info['image']
             })
-            print(f"  ✅ Created: {config_path}")
+            print(f"  {icon('success')} Created: {config_path}")
         except Exception as e:
-            print(f"  ❌ Error creating config: {e}")
+            print(f"  {icon('error')} Error creating config: {e}")
     
     print(f"\n{'='*60}")
-    print(f"✅ Successfully created {len(created_configs)} DEV configuration(s)")
+    print(f"{icon('success')} Successfully created {len(created_configs)} DEV configuration(s)")
     print(f"{'='*60}\n")
     
     # Summary

@@ -12,6 +12,8 @@ from pathlib import Path
 # Add parent directory to path to import dockerpilot
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from dockerpilot.ui_icons import icon
+
 from dockerpilot.pilot import DockerPilotEnhanced
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -91,22 +93,22 @@ def promote_all_containers(from_env: str, to_env: str, dry_run: bool = False):
                 success = pilot.environment_promotion(from_env, to_env, config_path)
                 
                 if success:
-                    progress.update(task, description=f"[{i}/{len(configs)}] ✅ {container_name} promoted successfully")
+                    progress.update(task, description=f"[{i}/{len(configs)}] {icon('success')} {container_name} promoted successfully")
                     results['success'].append(container_name)
                 else:
-                    progress.update(task, description=f"[{i}/{len(configs)}] ❌ {container_name} promotion failed")
+                    progress.update(task, description=f"[{i}/{len(configs)}] {icon('error')} {container_name} promotion failed")
                     results['failed'].append(container_name)
                     
             except Exception as e:
-                progress.update(task, description=f"[{i}/{len(configs)}] ❌ {container_name} error: {str(e)[:50]}")
+                progress.update(task, description=f"[{i}/{len(configs)}] {icon('error')} {container_name} error: {str(e)[:50]}")
                 results['failed'].append((container_name, str(e)))
                 console.print(f"[red]Error promoting {container_name}: {e}[/red]")
     
     # Summary
     console.print(f"\n[bold]Promotion Summary:[/bold]")
-    console.print(f"[green]✅ Successfully promoted: {len(results['success'])}[/green]")
+    console.print(f"[green]{icon('success')} Successfully promoted: {len(results['success'])}[/green]")
     if results['failed']:
-        console.print(f"[red]❌ Failed: {len(results['failed'])}[/red]")
+        console.print(f"[red]{icon('error')} Failed: {len(results['failed'])}[/red]")
         for item in results['failed']:
             if isinstance(item, tuple):
                 console.print(f"  - {item[0]}: {item[1]}")

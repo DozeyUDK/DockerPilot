@@ -26,7 +26,7 @@ for arg in "$@"; do
     fi
 done
 
-echo "🚀 Docker Pilot Installation Script"
+echo "[DEPLOY] Docker Pilot Installation Script"
 echo "===================================="
 echo ""
 
@@ -37,14 +37,14 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 if [ "$INSTALL_EXTRAS" = true ]; then
-    echo "📦 Full stack mode enabled: DockerPilot CLI + DockerPilotExtras"
+    echo "[PACKAGE] Full stack mode enabled: DockerPilot CLI + DockerPilotExtras"
     echo ""
 fi
 
 # Check Python version
-echo "📋 Checking prerequisites..."
+echo "[PREPARE] Checking prerequisites..."
 if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}❌ Python 3 is not installed. Please install Python 3.10 or higher.${NC}"
+    echo -e "${RED}[ERROR] Python 3 is not installed. Please install Python 3.10 or higher.${NC}"
     exit 1
 fi
 
@@ -52,15 +52,15 @@ PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info[0])')
 PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info[1])')
 
 if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]); then
-    echo -e "${RED}❌ Python 3.10 or higher is required. Found: $PYTHON_MAJOR.$PYTHON_MINOR${NC}"
+    echo -e "${RED}[ERROR] Python 3.10 or higher is required. Found: $PYTHON_MAJOR.$PYTHON_MINOR${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Python $PYTHON_MAJOR.$PYTHON_MINOR found${NC}"
+echo -e "${GREEN}[OK] Python $PYTHON_MAJOR.$PYTHON_MINOR found${NC}"
 
 # Check Docker
 if ! command -v docker &> /dev/null; then
-    echo -e "${YELLOW}⚠️  Docker is not installed or not in PATH${NC}"
+    echo -e "${YELLOW}[WARN]  Docker is not installed or not in PATH${NC}"
     echo "   Docker is required for Docker Pilot to work."
     echo "   Please install Docker: https://docs.docker.com/get-docker/"
     read -p "Continue anyway? (y/N) " -n 1 -r
@@ -69,14 +69,14 @@ if ! command -v docker &> /dev/null; then
         exit 1
     fi
 else
-    echo -e "${GREEN}✅ Docker found${NC}"
+    echo -e "${GREEN}[OK] Docker found${NC}"
 fi
 
 # Check if Docker daemon is running
 if docker info &> /dev/null; then
-    echo -e "${GREEN}✅ Docker daemon is running${NC}"
+    echo -e "${GREEN}[OK] Docker daemon is running${NC}"
 else
-    echo -e "${YELLOW}⚠️  Docker daemon is not running${NC}"
+    echo -e "${YELLOW}[WARN]  Docker daemon is not running${NC}"
     echo "   Please start Docker and run this script again."
     read -p "Continue anyway? (y/N) " -n 1 -r
     echo
@@ -92,7 +92,7 @@ cd "$SCRIPT_DIR"
 if [ "$INSTALL_SYSTEM" = true ]; then
     # System-wide install (for developers or when you explicitly want it)
     echo ""
-    echo "📦 Installing Docker Pilot + TUI (system-wide, --break-system-packages)..."
+    echo "[PACKAGE] Installing Docker Pilot + TUI (system-wide, --break-system-packages)..."
     pip3 install -e ".[tui]" --break-system-packages
     DOCKERPILOT_CMD="dockerpilot"
 else
@@ -100,9 +100,9 @@ else
     VENV_DIR="$SCRIPT_DIR/.venv"
     if [ ! -d "$VENV_DIR" ]; then
         echo ""
-        echo "📦 Creating virtual environment..."
+        echo "[PACKAGE] Creating virtual environment..."
         if ! python3 -m venv "$VENV_DIR"; then
-            echo -e "${RED}❌ Failed to create venv. Install: sudo apt install python3-venv python3-full (Debian/Ubuntu)${NC}"
+            echo -e "${RED}[ERROR] Failed to create venv. Install: sudo apt install python3-venv python3-full (Debian/Ubuntu)${NC}"
             exit 1
         fi
     fi
@@ -112,7 +112,7 @@ else
         "$VENV_DIR/bin/python" -m ensurepip --upgrade
     fi
     echo ""
-    echo "📦 Installing Docker Pilot + TUI (in venv)..."
+    echo "[PACKAGE] Installing Docker Pilot + TUI (in venv)..."
     "$VENV_DIR/bin/python" -m pip install -e ".[tui]"
     DOCKERPILOT_BIN="$VENV_DIR/bin/dockerpilot"
     mkdir -p "$HOME/.local/bin"
@@ -124,29 +124,29 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}✅ Installation completed successfully!${NC}"
+echo -e "${GREEN}[OK] Installation completed successfully!${NC}"
 echo ""
 
 # Verify installation
-echo "🔍 Verifying installation..."
+echo "[SEARCH] Verifying installation..."
 if $DOCKERPILOT_CMD --help &> /dev/null; then
-    echo -e "${GREEN}✅ Docker Pilot is ready!${NC}"
+    echo -e "${GREEN}[OK] Docker Pilot is ready!${NC}"
 else
-    echo -e "${YELLOW}⚠️  Try: $DOCKERPILOT_CMD --help${NC}"
+    echo -e "${YELLOW}[WARN]  Try: $DOCKERPILOT_CMD --help${NC}"
 fi
 
 if [ "$INSTALL_EXTRAS" = true ]; then
     echo ""
-    echo "🌐 Installing DockerPilotExtras..."
+    echo "[NETWORK] Installing DockerPilotExtras..."
     if [ ! -x "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh" ]; then
         chmod +x "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh"
     fi
     "$SCRIPT_DIR/DockerPilotExtras/setup_extras.sh"
-    echo -e "${GREEN}✅ DockerPilotExtras setup completed${NC}"
+    echo -e "${GREEN}[OK] DockerPilotExtras setup completed${NC}"
 fi
 
 echo ""
-echo "🚀 Quick Start:"
+echo "[DEPLOY] Quick Start:"
 echo "   $DOCKERPILOT_CMD                    # Interactive mode"
 echo "   $DOCKERPILOT_CMD --help             # Show help"
 echo "   $DOCKERPILOT_CMD validate           # Check system"
@@ -157,11 +157,11 @@ if [ "$INSTALL_SYSTEM" != true ]; then
 fi
 if [ "$INSTALL_EXTRAS" = true ]; then
     echo ""
-    echo "🌐 DockerPilotExtras:"
+    echo "[NETWORK] DockerPilotExtras:"
     echo "   cd DockerPilotExtras && .venv/bin/python loader.py"
 fi
 echo ""
-echo "📚 Documentation: README.md"
+echo "[FILE] Documentation: README.md"
 echo ""
 
 # Optional: Install GitPython for Git integration
@@ -173,8 +173,8 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     else
         "$VENV_DIR/bin/python" -m pip install GitPython
     fi
-    echo -e "${GREEN}✅ GitPython installed${NC}"
+    echo -e "${GREEN}[OK] GitPython installed${NC}"
 fi
 
 echo ""
-echo "🎉 Setup complete! Happy deploying!"
+echo "[DONE] Setup complete! Happy deploying!"

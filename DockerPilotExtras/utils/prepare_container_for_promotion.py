@@ -19,6 +19,8 @@ import yaml
 # Add parent directory to path to import dockerpilot
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from dockerpilot.ui_icons import icon
+
 from dockerpilot.pilot import DockerPilotEnhanced
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -188,29 +190,29 @@ def prepare_container_for_promotion(container_name, dry_run=False):
         try:
             container = client.containers.get(container_name)
         except docker.errors.NotFound:
-            console.print(f"[red]❌ Container '{container_name}' not found[/red]")
+            console.print(f"[red]{icon('error')} Container '{container_name}' not found[/red]")
             return False
         
-        console.print(f"[cyan]📦 Preparing container: {container_name}[/cyan]")
+        console.print(f"[cyan]{icon('package')} Preparing container: {container_name}[/cyan]")
         
         # Step 1: Skip backup - can be done separately to avoid hanging on system paths
         # Use: dockerpilot backup container-data <container_name>
         if not dry_run:
-            console.print(f"[yellow]💾 Step 1: Backup skipped (use 'dockerpilot backup container-data {container_name}' separately if needed)[/yellow]")
+            console.print(f"[yellow]{icon('save')} Step 1: Backup skipped (use 'dockerpilot backup container-data {container_name}' separately if needed)[/yellow]")
         else:
-            console.print(f"[yellow]💾 [DRY RUN] Would backup container data for {container_name}[/yellow]")
+            console.print(f"[yellow]{icon('save')} [DRY RUN] Would backup container data for {container_name}[/yellow]")
         
         # Step 2: Extract container configuration
-        console.print(f"[yellow]🔍 Step 2: Extracting container configuration...[/yellow]")
+        console.print(f"[yellow]{icon('search')} Step 2: Extracting container configuration...[/yellow]")
         container_config = extract_container_config(container)
         
-        console.print(f"[green]✓ Image: {container_config['image_tag']}[/green]")
-        console.print(f"[green]✓ Ports: {len(container_config['port_mapping'])} mapped[/green]")
-        console.print(f"[green]✓ Volumes: {len(container_config['volumes'])} mounted[/green]")
-        console.print(f"[green]✓ Environment vars: {len(container_config['environment'])}[/green]")
+        console.print(f"[green]{icon('success')} Image: {container_config['image_tag']}[/green]")
+        console.print(f"[green]{icon('success')} Ports: {len(container_config['port_mapping'])} mapped[/green]")
+        console.print(f"[green]{icon('success')} Volumes: {len(container_config['volumes'])} mounted[/green]")
+        console.print(f"[green]{icon('success')} Environment vars: {len(container_config['environment'])}[/green]")
         
         # Step 3: Create deployment-dev.yml
-        console.print(f"[yellow]📝 Step 3: Creating deployment-dev.yml...[/yellow]")
+        console.print(f"[yellow]{icon('file')} Step 3: Creating deployment-dev.yml...[/yellow]")
         deployment_config = create_deployment_config(container_config, env='dev')
         
         # Save to unified deployment directory structure
@@ -281,12 +283,12 @@ def prepare_container_for_promotion(container_name, dry_run=False):
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
-        console.print(f"[green]✅ Configuration saved to: {config_path}[/green]")
+        console.print(f"[green]{icon('success')} Configuration saved to: {config_path}[/green]")
         
         return True
         
     except Exception as e:
-        console.print(f"[red]❌ Error preparing {container_name}: {e}[/red]")
+        console.print(f"[red]{icon('error')} Error preparing {container_name}: {e}[/red]")
         import traceback
         console.print(f"[red]{traceback.format_exc()}[/red]")
         return False
@@ -319,17 +321,17 @@ def main():
             success = prepare_container_for_promotion(container_name, dry_run)
             
             if success:
-                progress.update(task, description=f"[{i}/{len(container_names)}] ✅ {container_name}")
+                progress.update(task, description=f"[{i}/{len(container_names)}] {icon('success')} {container_name}")
                 results['success'].append(container_name)
             else:
-                progress.update(task, description=f"[{i}/{len(container_names)}] ❌ {container_name}")
+                progress.update(task, description=f"[{i}/{len(container_names)}] {icon('error')} {container_name}")
                 results['failed'].append(container_name)
     
     # Summary
     console.print(f"\n[bold]Preparation Summary:[/bold]")
-    console.print(f"[green]✅ Successfully prepared: {len(results['success'])}[/green]")
+    console.print(f"[green]{icon('success')} Successfully prepared: {len(results['success'])}[/green]")
     if results['failed']:
-        console.print(f"[red]❌ Failed: {len(results['failed'])}[/red]")
+        console.print(f"[red]{icon('error')} Failed: {len(results['failed'])}[/red]")
         for name in results['failed']:
             console.print(f"  - {name}")
     
