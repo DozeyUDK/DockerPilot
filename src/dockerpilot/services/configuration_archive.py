@@ -6,6 +6,8 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from .safe_tar import extract_safe
+
 
 DEFAULT_CONFIG_FILES = (
     "deployment.yml",
@@ -44,7 +46,7 @@ def import_configuration(console: Any, logger: Any, config_archive: str) -> bool
             return False
 
         with tarfile.open(config_archive, "r:gz") as archive:
-            archive.extractall(".")
+            extract_safe(archive, Path.cwd(), allowed_files=DEFAULT_CONFIG_FILES)
             console.print("[green]Configuration files imported[/green]")
             for member in archive.getmembers():
                 if member.isfile():
