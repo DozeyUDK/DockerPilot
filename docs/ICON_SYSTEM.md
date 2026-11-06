@@ -32,3 +32,13 @@ Commit the catalog and generated files together. Do not add emoji to user-facing
 See icons/THIRD_PARTY_NOTICES.md for license attribution.
 
 To regenerate the font subset from a checksum-pinned upstream release: install fonttools==4.60.1 and brotli==1.1.0 in a temporary development environment, then run python3 tools/icons/build_font.py. Do not install these tooling dependencies in production.
+
+## Repository-wide emoji policy
+
+All tracked text, including documentation and test fixtures, must remain emoji-free.
+User-facing icons should be referenced by semantic name in the generated Python/JS registries.
+Run python3 tools/icons/check_no_emoji.py before committing; it also rejects
+hardcoded Nerd Fonts glyphs in React source outside the generated icon map.
+
+The removed legacy emoji-to-icon translation table was a migration-only artifact
+and is not needed at runtime.

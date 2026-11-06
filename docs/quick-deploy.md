@@ -55,13 +55,13 @@ dockerpilot deploy quick --yaml-config quick-deploy.yml
 
 ## What Quick Deploy Does
 
-1. ✅ Checks existing container and image
-2. 🔨 Builds new image from Dockerfile
-3. 🛑 Stops old container
-4. 🗑️ Removes old container
-5. 🧹 Removes old image (if not used elsewhere)
-6. 🚀 Starts new container
-7. 🩺 Performs health check
+1. Checks existing container and image
+2. Builds new image from Dockerfile
+3. Stops old container
+4. Removes old container
+5. Removes old image (if not used elsewhere)
+6. Starts new container
+7. Performs health check
 
 ## Interactive Mode
 
@@ -106,13 +106,13 @@ dockerpilot deploy quick \
 
 ## When to Use Quick Deploy
 
-✅ **Use Quick Deploy for:**
+**Use Quick Deploy for:**
 - Local development
 - Testing new features
 - Simple deployments
 - Fast iterations
 
-❌ **Don't use Quick Deploy for:**
+**Don't use Quick Deploy for:**
 - Production environments (use `blue-green` or `rolling` deployment)
 - Zero-downtime requirements
 - Complex rollback scenarios

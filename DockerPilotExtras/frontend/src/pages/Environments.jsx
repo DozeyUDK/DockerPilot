@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { ICONS } from '../icons.mjs'
 import { environmentAPI, statusAPI, fileBrowserAPI, serversAPI } from '../services/api'
 import Modal from '../components/Modal'
 import { useTheme } from '../contexts/ThemeContext'
@@ -1257,7 +1258,7 @@ function Environments() {
             
             if (shouldSkip) {
               const confirmSkip = window.confirm(
-                ` Are you sure you want to SKIP the backup?\n\n` +
+                'WARNING: Are you sure you want to SKIP the backup?\n\n' +
                 `This means the container data WILL NOT be protected before promotion!\n\n` +
                 `Promote ${containerName} from ${sourceLabel} to ${targetLabel} WITHOUT backup?`
               )
@@ -1447,7 +1448,7 @@ function Environments() {
           }}
           title="Refresh environment data"
         >
-          {loadingStatus ? ' Refreshing...' : ' Refresh'}
+          {loadingStatus ? `${ICONS.loading} Refreshing...` : `${ICONS.refresh} Refresh`}
         </button>
       </div>
       
@@ -1509,7 +1510,7 @@ function Environments() {
           fontSize: '0.9rem',
           color: 'var(--text-secondary)'
         }}>
-          <strong>Tip:</strong> Server selection can be changed in the navigation menu (top right corner). Currently selected server: <strong>{selectedServer === 'local' ? ' Local' : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
+          <strong>Tip:</strong> Server selection can be changed in the navigation menu (top right corner). Currently selected server: <strong>{selectedServer === 'local' ? `${ICONS.home} Local` : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
         </div>
 
         {/* Server List */}
@@ -1530,7 +1531,7 @@ function Environments() {
                   <div className="server-list-main">
                     <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                       {server.name}
-                      {selectedServer === server.id && <span style={{ marginLeft: '0.5rem', color: '#007bff' }}></span>}
+                      {selectedServer === server.id && <span style={{ marginLeft: '0.5rem', color: '#007bff' }}>{ICONS.success}</span>}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                       {server.username}@{server.hostname}:{server.port} ({server.auth_type})
@@ -1601,7 +1602,7 @@ function Environments() {
             borderRadius: '4px',
             color: testingServerResult.success ? '#28a745' : '#dc3545'
           }}>
-            {testingServerResult.success ? ' ' : ' '}
+            {testingServerResult.success ? `${ICONS.success} ` : `${ICONS.error} `}
             {testingServerResult.message || testingServerResult.error || 'Test result'}
           </div>
         )}
@@ -1614,7 +1615,7 @@ function Environments() {
           color: 'var(--text-primary)'
         }}>
           <h4 style={{ marginTop: 0, color: 'var(--text-primary)' }}>
-             Deployment Progress {promotingContainer && `- ${promotingContainer}`}
+            {ICONS.deploy} Deployment Progress {promotingContainer && `- ${promotingContainer}`}
           </h4>
           <div style={{ marginBottom: '10px' }}>
             <div style={{ 
@@ -1677,7 +1678,7 @@ function Environments() {
                       fontWeight: 'bold'
                     }}
                   >
-                    {showDeploymentLogs ? ' Hide logs' : ` Show logs (${deploymentLogs.length})`}
+                    {showDeploymentLogs ? `${ICONS.hide} Hide logs` : `${ICONS.list} Show logs (${deploymentLogs.length})`}
                   </button>
                 )}
                 {promotingContainer && 
@@ -1700,7 +1701,7 @@ function Environments() {
                       opacity: cancellingContainer === promotingContainer ? 0.6 : 1
                     }}
                   >
-                    {cancellingContainer === promotingContainer ? 'Cancelling...' : ' Stop Deployment'}
+                    {cancellingContainer === promotingContainer ? 'Cancelling...' : `${ICONS.stop} Stop Deployment`}
                   </button>
                 )}
               </div>
@@ -1975,7 +1976,7 @@ function Environments() {
           )}
         </div>
         <p style={{ marginTop: '0.75rem', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-           Click an environment tile (DEV/Pre-Prod/PROD) to prepare configs or promote a single container.
+          {ICONS.tip} Click an environment tile (DEV/Pre-Prod/PROD) to prepare configs or promote a single container.
         </p>
       </div>
 
@@ -2048,7 +2049,7 @@ function Environments() {
                   fontWeight: configMode === 'generate' ? '600' : 'normal'
                 }}
               >
-                 Generate from container
+                {ICONS.package} Generate from container
               </button>
               <button
                 onClick={() => {
@@ -2069,7 +2070,7 @@ function Environments() {
                   fontWeight: configMode === 'select' ? '600' : 'normal'
                 }}
               >
-                 Select from file
+                {ICONS.folder} Select from file
               </button>
               
               <button
@@ -2090,14 +2091,14 @@ function Environments() {
                   fontWeight: configMode === 'stage-single' ? '600' : 'normal'
                 }}
               >
-                 Promote single
+                {ICONS.deploy} Promote single
               </button>
             </div>
 
             {configMode === 'stage-single' ? (
               <>
                 <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontWeight: 'bold' }}>
-                   Promote single: Select a container from {selectedEnv === 'dev' ? 'DEV' : selectedEnv === 'staging' ? 'Pre-Prod' : 'PROD'} to promote it to {selectedEnv === 'dev' ? 'Pre-Prod' : selectedEnv === 'staging' ? 'PROD' : '(none)'}
+                  {ICONS.deploy} Promote single: Select a container from {selectedEnv === 'dev' ? 'DEV' : selectedEnv === 'staging' ? 'Pre-Prod' : 'PROD'} to promote it to {selectedEnv === 'dev' ? 'Pre-Prod' : selectedEnv === 'staging' ? 'PROD' : '(none)'}
                 </p>
                 <p style={{ color: 'var(--text-tertiary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
                   The container will be prepared and promoted automatically ({selectedEnv === 'dev' ? 'DEV → Pre-Prod' : selectedEnv === 'staging' ? 'Pre-Prod → PROD' : 'no action'})
@@ -2189,8 +2190,8 @@ function Environments() {
                               {migrationStartingContainer === container.name
                                 ? 'Starting…'
                                 : migrationJob && migratingContainer === container.name
-                                ? isTerminalMigration(migrationJob) ? ' View result' : ' View migration'
-                                : ' Migrate'}
+                                ? isTerminalMigration(migrationJob) ? `${ICONS.view} View result` : `${ICONS.view} View migration`
+                                : `${ICONS.package} Migrate`}
                             </button>
                             {selectedEnv === 'prod' ? (
                               <button
@@ -2207,7 +2208,7 @@ function Environments() {
                                 }}
                                 title="Generate deployment-prod.yml for this container"
                               >
-                                {loading[`prepare_${container.name}`] ? 'Preparing...' : ' Prepare config'}
+                                {loading[`prepare_${container.name}`] ? 'Preparing...' : `${ICONS.clipboard} Prepare config`}
                               </button>
                             ) : (
                               <button
@@ -2223,7 +2224,7 @@ function Environments() {
                                   fontWeight: '600'
                                 }}
                               >
-                                {promotingContainer === container.name ? 'Promoting...' : ` ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
+                                {promotingContainer === container.name ? 'Promoting...' : `${ICONS.deploy} ${selectedEnv === 'dev' ? 'Pre-Prod' : 'PROD'}`}
                               </button>
                             )}
                             
@@ -2243,7 +2244,7 @@ function Environments() {
                                 }}
                                 title="Stop deployment"
                               >
-                                {cancellingContainer === container.name ? ' Cancelling...' : ' STOP'}
+                                {cancellingContainer === container.name ? `${ICONS.loading} Cancelling...` : `${ICONS.stop} STOP`}
                               </button>
                             )}
                           </div>
@@ -2345,8 +2346,8 @@ function Environments() {
                               {migrationStartingContainer === container.name
                                 ? 'Starting…'
                                 : migrationJob && migratingContainer === container.name
-                                ? isTerminalMigration(migrationJob) ? ' View result' : ' View migration'
-                                : ' Migrate'}
+                                ? isTerminalMigration(migrationJob) ? `${ICONS.view} View result` : `${ICONS.view} View migration`
+                                : `${ICONS.package} Migrate`}
                             </button>
                             <button
                               onClick={() => handlePrepareConfig(container.name)}
@@ -2464,8 +2465,8 @@ function Environments() {
                                   {migrationStartingContainer === container.name
                                     ? 'Starting…'
                                     : migrationJob && migratingContainer === container.name
-                                    ? isTerminalMigration(migrationJob) ? ' View result' : ' View migration'
-                                    : ' Migrate'}
+                                    ? isTerminalMigration(migrationJob) ? `${ICONS.view} View result` : `${ICONS.view} View migration`
+                                    : `${ICONS.package} Migrate`}
                                 </button>
                                 <button
                                   onClick={() => handleSelectContainerForFile(container.name)}
@@ -2479,7 +2480,7 @@ function Environments() {
                                     fontWeight: '600'
                                   }}
                                 >
-                                   Select file
+                                  {ICONS.folder} Select file
                                 </button>
                               </div>
                             </div>
@@ -2645,7 +2646,7 @@ function Environments() {
                           }}
                         >
                           <span style={{ fontSize: '1.2rem' }}>
-                            {item.is_dir ? '' : ''}
+                            {item.is_dir ? ICONS.folder : ICONS.file}
                           </span>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontWeight: item.is_dir ? 'bold' : 'normal' }}>
@@ -3008,7 +3009,7 @@ function Environments() {
                   borderRadius: '4px',
                   color: testingServerResult.success ? '#28a745' : '#dc3545'
                 }}>
-                  {testingServerResult.success ? ' ' : ' '}
+                  {testingServerResult.success ? `${ICONS.success} ` : `${ICONS.error} `}
                   {testingServerResult.message || testingServerResult.error || 'Test result'}
                   {testingServerResult.host_key_required && testingServerResult.host_key_fingerprint && (
                     <div style={{ marginTop: '0.75rem' }}>
@@ -3128,10 +3129,10 @@ function Environments() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{ marginTop: 0, color: sudoModalMeta.requiresSudo ? '#dc3545' : '#ff9800' }}>
-              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ? ' Privileged backup authorization +  Large disks' :
-               sudoModalMeta.requiresSudo ? ' Privileged backup authorization required' :
-               sudoModalMeta.hasLargeMounts ? ' Large disks detected' :
-               ' Backup configuration'}
+              {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ? `${ICONS.lock} Privileged backup authorization + ${ICONS.warning} Large disks` :
+               sudoModalMeta.requiresSudo ? `${ICONS.lock} Privileged backup authorization required` :
+               sudoModalMeta.hasLargeMounts ? `${ICONS.warning} Large disks detected` :
+               `${ICONS.lock} Backup configuration`}
             </h2>
             <p style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>
               {sudoModalMeta.requiresSudo && sudoModalMeta.hasLargeMounts ?
@@ -3153,7 +3154,7 @@ function Environments() {
                 color: theme === 'dark' ? '#ff9800' : '#856404',
                 border: `1px solid ${theme === 'dark' ? '#ff9800' : '#ffc107'}`
               }}>
-                <strong> Large disks detected (total {sudoModalMeta.totalSizeTB.toFixed(2)} TB):</strong>
+                <strong>{ICONS.warning} Large disks detected (total {sudoModalMeta.totalSizeTB.toFixed(2)} TB):</strong>
                 <ul style={{ margin: '0.5rem 0', paddingLeft: '1.5rem' }}>
                   {sudoModalMeta.largeMounts.slice(0, 3).map((mount, idx) => (
                     <li key={idx} style={{ wordBreak: 'break-all' }}>
@@ -3285,7 +3286,7 @@ function Environments() {
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>
-                 Container Migration
+                {ICONS.package} Container Migration
               </h3>
               <button
                 onClick={closeMigrationModal}
@@ -3307,7 +3308,7 @@ function Environments() {
                 Migrate container <strong>{migratingContainer}</strong> to another server.
               </p>
               <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-                Source server: <strong>{selectedServer === 'local' ? ' Local' : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
+                Source server: <strong>{selectedServer === 'local' ? `${ICONS.home} Local` : servers.find(s => s.id === selectedServer)?.name || selectedServer}</strong>
               </p>
             </div>
 
@@ -3331,7 +3332,7 @@ function Environments() {
                   }}
                 >
                   <option value="">-- Select server --</option>
-                  <option value="local"> Local</option>
+                  <option value="local">{ICONS.home} Local</option>
                   {servers.map((server) => (
                     server.id !== selectedServer && (
                       <option key={server.id} value={server.id}>
@@ -3377,7 +3378,7 @@ function Environments() {
                 fontSize: '0.9rem',
                 color: 'var(--text-secondary)'
               }}>
-                <strong> Information:</strong> Migration exports Docker image from container and its configuration (ports, environment variables, volumes), then imports and starts container on target server.
+                <strong>{ICONS.info} Information:</strong> Migration exports Docker image from container and its configuration (ports, environment variables, volumes), then imports and starts container on target server.
               </div>
 
               {migrationTrackingError && (
@@ -3501,7 +3502,7 @@ function Environments() {
                       fontWeight: '600'
                     }}
                   >
-                    {cancellingMigrationId === migrationJob.id ? 'Cancelling…' : ' Cancel migration'}
+                    {cancellingMigrationId === migrationJob.id ? 'Cancelling…' : `${ICONS.stop} Cancel migration`}
                   </button>
                 )}
                 <button

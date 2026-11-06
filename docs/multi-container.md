@@ -117,8 +117,8 @@ dockerpilot container stop fa90f84e0007,5c867ecaebaf
 
 - Operations continue even if one container fails
 - Summary displayed after completion:
-  - ✅ "All operations completed successfully"
-  - ⚠️ "Some operations failed"
+  - "All operations completed successfully"
+  - "Some operations failed"
 
 ## Interactive Mode
 
