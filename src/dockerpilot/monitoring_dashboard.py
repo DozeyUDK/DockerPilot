@@ -1,5 +1,6 @@
 """Monitoring dashboard, history persistence and summary rendering."""
 
+from dockerpilot.ui_icons import icon
 import json
 import time
 from dataclasses import asdict
@@ -19,11 +20,11 @@ def monitor_containers_dashboard(host: Any, containers: List[str] = None, durati
         # Monitor all running containers
         running_containers = [c.name for c in host.client.containers.list() if c.status == "running"]
         if not running_containers:
-            host.console.print("[yellow]⚠️ No running containers found[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')} No running containers found[/yellow]")
             return
         containers = running_containers
 
-    host.console.print(f"[cyan]🔍 Starting monitoring dashboard for {len(containers)} containers[/cyan]")
+    host.console.print(f"[cyan]{icon('search')} Starting monitoring dashboard for {len(containers)} containers[/cyan]")
     host.console.print(f"[yellow]Duration: {duration}s | Press Ctrl+C to stop[/yellow]\n")
 
     start_time = time.time()
@@ -33,7 +34,7 @@ def monitor_containers_dashboard(host: Any, containers: List[str] = None, durati
         with Live(console=host.console, refresh_per_second=1) as live:
             while time.time() - start_time < duration:
                 # Create dynamic table
-                table = Table(title="📊 Container Monitoring Dashboard", show_header=True)
+                table = Table(title=f"{icon('stats')} Container Monitoring Dashboard", show_header=True)
                 table.add_column("Container", style="bold green", width=15)
                 table.add_column("Status", style="bright_blue", width=10)
                 table.add_column("CPU %", style="red", width=8)
@@ -107,14 +108,14 @@ def monitor_containers_dashboard(host: Any, containers: List[str] = None, durati
                 remaining = duration - elapsed
                 timestamp = datetime.now().strftime("%H:%M:%S")
 
-                footer = f"🕐 {timestamp} | ⏱️ Remaining: {remaining}s | 📈 Collecting metrics..."
+                footer = f"{icon('clock')} {timestamp} | {icon('clock')} Remaining: {remaining}s | {icon('stats')} Collecting metrics..."
                 table.caption = footer
 
                 live.update(table)
                 time.sleep(1)
 
     except KeyboardInterrupt:
-        host.console.print("\n[yellow]⚠️ Monitoring stopped by user[/yellow]")
+        host.console.print(f"\n[yellow]{icon('warning')} Monitoring stopped by user[/yellow]")
 
     # Save metrics to file
     host._save_metrics_history(metrics_history)
@@ -144,7 +145,7 @@ def save_metrics_history(host: Any, metrics_history: Dict):
 
 def show_monitoring_summary(host: Any, metrics_history: Dict):
     """Show monitoring summary statistics."""
-    host.console.print("\n[bold cyan]📈 Monitoring Summary[/bold cyan]")
+    host.console.print(f"\n[bold cyan]{icon('stats')} Monitoring Summary[/bold cyan]")
 
     summary_table = Table(show_header=True, header_style="bold blue")
     summary_table.add_column("Container", style="green")

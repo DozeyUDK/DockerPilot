@@ -1,3 +1,14 @@
+/* Bundled Nerd Fonts Symbols Mono: see icons/THIRD_PARTY_NOTICES.md.
+   Only Private Use Area codepoints use the icon font; normal UI typography is unchanged. */
+@font-face {
+  font-family: 'DockerPilot Nerd Symbols';
+  src: url('./assets/SymbolsNerdFontMono-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -5,7 +16,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+  font-family: 'DockerPilot Nerd Symbols', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
   -webkit-font-smoothing: antialiased;

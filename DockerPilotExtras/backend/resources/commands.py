@@ -250,7 +250,7 @@ def create_command_resources(*, Resource, request):
                                     if (
                                         line.strip().startswith("┏")
                                         or line.strip().startswith("┡")
-                                        or "🐳" in line
+                                        or chr(0x1F433) in line
                                     ):
                                         in_banner = False
                                         filtered_lines.append(line)
@@ -316,7 +316,7 @@ def create_command_resources(*, Resource, request):
                     if exec_converted_to_simple:
                         suggestions = {
                             "message": (
-                                '💡 Note: Command "exec" was automatically converted to "exec-simple" '
+                                'Note: Command "exec" was automatically converted to "exec-simple" '
                                 "(interactive shell is not available in web CLI)."
                             ),
                             "commands": ["exec-simple <container> <command> - execute command in container"],
@@ -348,7 +348,7 @@ def create_command_resources(*, Resource, request):
 
                             if first_cmd in docker_aliases:
                                 suggestions = {
-                                    "message": f'💡 Wskazówka: "{first_cmd}" to komenda Docker. W DockerPilot użyj:',
+                                    "message": f'Wskazówka: "{first_cmd}" to komenda Docker. W DockerPilot użyj:',
                                     "commands": [docker_aliases[first_cmd]],
                                 }
                             else:

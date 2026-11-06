@@ -1,5 +1,6 @@
 """Blue/green deployment strategy extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ def blue_green_deploy(
         build_config: Build configuration
         skip_backup: Skip data backup (faster but risky for production)
     """
-    host.console.print(f"\n[bold cyan]🔵🟢 BLUE-GREEN DEPLOYMENT STARTED[/bold cyan]")
+    host.console.print(f"\n[bold cyan]{icon('blue')}{icon('green')} BLUE-GREEN DEPLOYMENT STARTED[/bold cyan]")
 
     deployment_start = datetime.now()
     deployment_id = f"bg_deploy_{int(deployment_start.timestamp())}"
@@ -89,7 +90,7 @@ def blue_green_deploy(
 
     # CHECKPOINT 1: Check for cancellation before backup
     if host._check_cancel_flag():
-        host.console.print("[yellow]🛑 Deployment cancelled by user (before backup)[/yellow]")
+        host.console.print(f"[yellow]{icon('stop')} Deployment cancelled by user (before backup)[/yellow]")
         host._current_deployment_container = None
         # Clean up any orphaned backup containers
         host._cleanup_backup_containers()
@@ -98,14 +99,14 @@ def blue_green_deploy(
     # Backup OUTSIDE Progress context to avoid "Only one live display" error
     backup_path = None
     if active_container and not skip_backup:
-        host._update_progress('backup', 5, '💾 Creating data backup...')
-        host.console.print(f"[cyan]💾 Backing up container data...[/cyan]")
+        host._update_progress('backup', 5, f'{icon("save")} Creating data backup...')
+        host.console.print(f"[cyan]{icon('save')} Backing up container data...[/cyan]")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = f"backup_{config.container_name}_pre_deploy_{timestamp}"
 
         # Try to reuse existing backup first (reuse_existing=True by default, max age 24 hours)
         if host.backup_container_data(active_container.name, backup_path, reuse_existing=True, max_backup_age_hours=24):
-            host._update_progress('backup', 20, '✅ Backup completed')
+            host._update_progress('backup', 20, f'{icon("success")} Backup completed')
             # Check if backup was reused or newly created
             backup_dir = Path(backup_path)
             if backup_dir.exists() and (backup_dir / 'backup_metadata.json').exists():
@@ -119,15 +120,15 @@ def blue_green_deploy(
                             backup_time = backup_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
                         age_seconds = (datetime.now(backup_time.tzinfo) - backup_time).total_seconds()
                         if age_seconds > 60:  # More than 1 minute old, it was reused
-                            host.console.print(f"[green]💾 Using existing backup: {backup_path}[/green]")
+                            host.console.print(f"[green]{icon('save')} Using existing backup: {backup_path}[/green]")
                         else:
-                            host.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+                            host.console.print(f"[green]{icon('save')} Data backup saved to: {backup_path}[/green]")
                 except:
-                    host.console.print(f"[green]💾 Data backup saved to: {backup_path}[/green]")
+                    host.console.print(f"[green]{icon('save')} Data backup saved to: {backup_path}[/green]")
             else:
-                host.console.print(f"[green]💾 Using existing backup[/green]")
+                host.console.print(f"[green]{icon('save')} Using existing backup[/green]")
         else:
-            host.console.print("[red]❌ Data backup failed; aborting production deployment[/red]")
+            host.console.print(f"[red]{icon('error')} Data backup failed; aborting production deployment[/red]")
             host.logger.error(
                 "Data backup failed before blue-green deployment; refusing unbacked promotion"
             )
@@ -135,13 +136,13 @@ def blue_green_deploy(
             host._cleanup_backup_containers()
             return False
     elif skip_backup and active_container:
-        host.console.print("[yellow]⚠️ Skipping data backup (--skip-backup flag)[/yellow]")
+        host.console.print(f"[yellow]{icon('warning')} Skipping data backup (--skip-backup flag)[/yellow]")
     else:
-        host.console.print("[cyan]ℹ️ No active container to backup[/cyan]")
+        host.console.print(f"[cyan]{icon('info')} No active container to backup[/cyan]")
 
     # CHECKPOINT 2: Check for cancellation after backup
     if host._check_cancel_flag():
-        host.console.print("[yellow]🛑 Deployment cancelled by user (after backup)[/yellow]")
+        host.console.print(f"[yellow]{icon('stop')} Deployment cancelled by user (after backup)[/yellow]")
         host._current_deployment_container = None
         # Clean up any orphaned backup containers
         host._cleanup_backup_containers()
@@ -155,36 +156,36 @@ def blue_green_deploy(
 
         # Add backup status to progress display
         if backup_path:
-            progress.add_task(f"✅ Data backed up to {backup_path}", total=None)
+            progress.add_task(f"{icon('success')} Data backed up to {backup_path}", total=None)
 
         # Build or pull image
-        build_task = progress.add_task("🔨 Preparing image...", total=None)
+        build_task = progress.add_task(f"{icon('build')} Preparing image...", total=None)
         try:
             success, message = host._prepare_image(config.image_tag, build_config, config.container_name)
             if not success:
-                progress.update(build_task, description=f"❌ {message}")
-                host.console.print(f"[bold red]❌ {message}[/bold red]")
+                progress.update(build_task, description=f"{icon('error')} {message}")
+                host.console.print(f"[bold red]{icon('error')} {message}[/bold red]")
                 return False
-            progress.update(build_task, description=f"✅ {message}")
+            progress.update(build_task, description=f"{icon('success')} {message}")
         except Exception as e:
-            progress.update(build_task, description="❌ Image preparation failed")
+            progress.update(build_task, description=f"{icon('error')} Image preparation failed")
             host.logger.error(f"Image preparation failed: {e}")
-            host.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
+            host.console.print(f"[bold red]{icon('error')} Image preparation failed: {e}[/bold red]")
             return False
 
         # Clean up existing target container
-        cleanup_task = progress.add_task(f"🧹 Cleaning up {target_name} slot...", total=None)
+        cleanup_task = progress.add_task(f"{icon('clean')} Cleaning up {target_name} slot...", total=None)
         try:
             old_target = host.client.containers.get(target_container_name)
             old_target.stop()
             old_target.remove()
         except docker.errors.NotFound:
             pass
-        progress.update(cleanup_task, description=f"✅ {target_name.title()} slot cleaned")
+        progress.update(cleanup_task, description=f"{icon('success')} {target_name.title()} slot cleaned")
 
         # Deploy to target slot
-        host._update_progress('deploy', 50, f'🚀 Deploying to slot {target_name}...')
-        deploy_task = progress.add_task(f"🚀 Deploying to {target_name} slot...", total=None)
+        host._update_progress('deploy', 50, f'{icon("deploy")} Deploying to slot {target_name}...')
+        deploy_task = progress.add_task(f"{icon('deploy')} Deploying to {target_name} slot...", total=None)
 
         # Prepare container creation parameters
         normalized_volumes = host._normalize_volumes(config.volumes)
@@ -250,8 +251,8 @@ def blue_green_deploy(
         try:
             target_container = host.client.containers.run(**container_kwargs)
 
-            progress.update(deploy_task, description=f"✅ {target_name.title()} container deployed")
-            host._update_progress('deploy', 60, f'✅ Kontener {target_name} wdrożony')
+            progress.update(deploy_task, description=f"{icon('success')} {target_name.title()} container deployed")
+            host._update_progress('deploy', 60, f'{icon("success")} Kontener {target_name} wdrożony')
 
             # Longer startup grace period for databases and services with slow startup
             startup_grace = 5
@@ -265,7 +266,7 @@ def blue_green_deploy(
 
             # CHECKPOINT 3: Check for cancellation after container creation
             if host._check_cancel_flag():
-                host.console.print("[yellow]🛑 Deployment cancelled by user (after container creation)[/yellow]")
+                host.console.print(f"[yellow]{icon('stop')} Deployment cancelled by user (after container creation)[/yellow]")
                 # Cleanup new container
                 try:
                     target_container.stop()
@@ -279,21 +280,21 @@ def blue_green_deploy(
 
             # Migrate data from active container to new container
             if active_container and active_container.status == "running":
-                migrate_task = progress.add_task("📦 Migrating data to new container...", total=None)
+                migrate_task = progress.add_task(f"{icon('package')} Migrating data to new container...", total=None)
                 try:
                     migration_success = host._migrate_container_data(active_container, target_container, config)
                     if migration_success:
-                        progress.update(migrate_task, description="✅ Data migration completed")
+                        progress.update(migrate_task, description=f"{icon('success')} Data migration completed")
                     else:
-                        progress.update(migrate_task, description="⚠️ Data migration had issues (continuing...)")
+                        progress.update(migrate_task, description=f"{icon('warning')} Data migration had issues (continuing...)")
                         host.logger.warning("Data migration completed with warnings, continuing deployment")
                 except Exception as e:
                     host.logger.error(f"Data migration failed: {e}")
-                    progress.update(migrate_task, description="⚠️ Data migration failed (continuing...)")
+                    progress.update(migrate_task, description=f"{icon('warning')} Data migration failed (continuing...)")
                     # Don't fail deployment if migration fails - just log warning
 
         except Exception as e:
-            progress.update(deploy_task, description=f"❌ {target_name.title()} deployment failed")
+            progress.update(deploy_task, description=f"{icon('error')} {target_name.title()} deployment failed")
             host.logger.error(f"Container creation failed: {e}")
             host.logger.error(f"Container kwargs: {container_kwargs}")
             # Try to get more details about the error
@@ -302,8 +303,8 @@ def blue_green_deploy(
             return False
 
         # Comprehensive validation of new deployment
-        host._update_progress('health_check', 70, f'🩺 Checking container health {target_name}...')
-        health_task = progress.add_task(f"🔍 Comprehensive validation of {target_name} deployment...", total=None)
+        host._update_progress('health_check', 70, f'{icon("health")} Checking container health {target_name}...')
+        health_task = progress.add_task(f"{icon('search')} Comprehensive validation of {target_name} deployment...", total=None)
 
         # Determine port for validation
         validation_port = None
@@ -319,11 +320,11 @@ def blue_green_deploy(
             # Check if this is a non-HTTP service (endpoint is None)
             if config.health_check_endpoint is None:
                 # Skip HTTP health check for non-HTTP services (SSH, Redis, infrastructure, etc.)
-                progress.update(health_task, description=f"ℹ️ Skipping HTTP health check (non-HTTP service)")
+                progress.update(health_task, description=f"{icon('info')} Skipping HTTP health check (non-HTTP service)")
                 host.logger.info(f"Skipping HTTP health check for {target_name} (non-HTTP service)")
             else:
                 # First, do basic health check to ensure service is responding
-                progress.update(health_task, description=f"🩺 Basic health check ({target_name})...")
+                progress.update(health_task, description=f"{icon('health')} Basic health check ({target_name})...")
 
                 # Increase retries for slow-starting services (databases, etc.)
                 health_retries = config.health_check_retries
@@ -345,7 +346,7 @@ def blue_green_deploy(
                     config.health_check_timeout,
                     health_retries
                 ):
-                    progress.update(health_task, description=f"❌ {target_name.title()} basic health check failed")
+                    progress.update(health_task, description=f"{icon('error')} {target_name.title()} basic health check failed")
                     try:
                         target_container.stop()
                         target_container.remove()
@@ -354,13 +355,13 @@ def blue_green_deploy(
                     return False
 
             # Then, comprehensive validation
-            progress.update(health_task, description=f"🔍 Comprehensive validation ({target_name})...")
+            progress.update(health_task, description=f"{icon('search')} Comprehensive validation ({target_name})...")
             is_valid, error_msg = host._comprehensive_container_validation(
                 target_container, config, validation_port, target_name
             )
 
             if not is_valid:
-                progress.update(health_task, description=f"❌ {target_name.title()} validation failed")
+                progress.update(health_task, description=f"{icon('error')} {target_name.title()} validation failed")
                 host.logger.error(f"Container validation failed: {error_msg}")
 
                 # Get container logs for debugging
@@ -379,17 +380,17 @@ def blue_green_deploy(
 
                 return False
 
-            progress.update(health_task, description=f"✅ {target_name.title()} validation passed")
-            host._update_progress('health_check', 80, f'✅ Validation of {target_name} completed successfully')
+            progress.update(health_task, description=f"{icon('success')} {target_name.title()} validation passed")
+            host._update_progress('health_check', 80, f'{icon("success")} Validation of {target_name} completed successfully')
         else:
             host.logger.warning("No ports mapped for validation, skipping comprehensive check")
-            progress.update(health_task, description=f"⚠️ {target_name.title()} no ports to validate")
+            progress.update(health_task, description=f"{icon('warning')} {target_name.title()} no ports to validate")
 
             # Still do basic container status check
             try:
                 target_container.reload()
                 if target_container.status != "running":
-                    progress.update(health_task, description=f"❌ {target_name.title()} container not running")
+                    progress.update(health_task, description=f"{icon('error')} {target_name.title()} container not running")
                     try:
                         target_container.stop()
                         target_container.remove()
@@ -401,13 +402,13 @@ def blue_green_deploy(
 
         # Parallel testing phase (optional)
         if host._should_run_parallel_tests():
-            test_task = progress.add_task("🧪 Running parallel tests...", total=None)
+            test_task = progress.add_task(f"{icon('test')} Running parallel tests...", total=None)
             # Check if container has ports for testing
             has_ports = config.port_mapping and len(config.port_mapping) > 0
 
             if not has_ports:
                 host.logger.warning("No ports mapped, skipping parallel tests")
-                progress.update(test_task, description="⚠️ No ports to test")
+                progress.update(test_task, description=f"{icon('warning')} No ports to test")
             else:
                 # Determine test port based on network mode
                 if runtime_network == 'host':
@@ -418,7 +419,7 @@ def blue_green_deploy(
                     test_port = list(config.port_mapping.values())[0]
 
                 if not host._run_parallel_tests(test_port, config):
-                    progress.update(test_task, description="❌ Parallel tests failed")
+                    progress.update(test_task, description=f"{icon('error')} Parallel tests failed")
                     # Cleanup and abort
                     try:
                         target_container.stop()
@@ -426,11 +427,11 @@ def blue_green_deploy(
                     except:
                         pass
                     return False
-                progress.update(test_task, description="✅ Parallel tests passed")
+                progress.update(test_task, description=f"{icon('success')} Parallel tests passed")
 
         # CHECKPOINT 4: Check for cancellation before traffic switch
         if host._check_cancel_flag():
-            host.console.print("[yellow]🛑 Deployment cancelled by user (before traffic switch)[/yellow]")
+            host.console.print(f"[yellow]{icon('stop')} Deployment cancelled by user (before traffic switch)[/yellow]")
             # Cleanup target container
             try:
                 target_container.stop()
@@ -441,8 +442,8 @@ def blue_green_deploy(
             return False
 
         # Traffic switch with zero-downtime
-        host._update_progress('traffic_switch', 90, '🔄 Switching traffic (zero-downtime)...')
-        switch_task = progress.add_task("🔄 Zero-downtime traffic switch...", total=None)
+        host._update_progress('traffic_switch', 90, f'{icon("refresh")} Switching traffic (zero-downtime)...')
+        switch_task = progress.add_task(f"{icon('refresh')} Zero-downtime traffic switch...", total=None)
 
         try:
             # Stop target container temporarily
@@ -452,10 +453,10 @@ def blue_green_deploy(
             # CRITICAL: Stop old container BEFORE creating final container with original ports
             # Otherwise we'll get "port is already allocated" error
             if active_container and active_container.status == "running":
-                host.console.print(f"[cyan]🛑 Stopping old container '{active_container.name}' to free ports...[/cyan]")
+                host.console.print(f"[cyan]{icon('stop')} Stopping old container '{active_container.name}' to free ports...[/cyan]")
                 try:
                     active_container.stop(timeout=10)
-                    host.console.print(f"[green]✅ Old container '{active_container.name}' stopped[/green]")
+                    host.console.print(f"[green]{icon('success')} Old container '{active_container.name}' stopped[/green]")
                     # Wait for ports to be released
                     time.sleep(2)
                 except Exception as e:
@@ -514,7 +515,7 @@ def blue_green_deploy(
                 error_msg = str(create_error)
                 # If port conflict and we have an active container, try to stop it and retry
                 if ('port is already allocated' in error_msg.lower() or 'bind for' in error_msg.lower()) and active_container:
-                    host.console.print(f"[yellow]⚠️ Port conflict detected, stopping old container '{active_container.name}' and retrying...[/yellow]")
+                    host.console.print(f"[yellow]{icon('warning')} Port conflict detected, stopping old container '{active_container.name}' and retrying...[/yellow]")
                     try:
                         # Force stop old container
                         active_container.stop(timeout=5)
@@ -522,7 +523,7 @@ def blue_green_deploy(
                         time.sleep(3)  # Wait for port to be released
                         # Retry creating final container
                         final_container = host.client.containers.run(**final_container_kwargs)
-                        host.console.print(f"[green]✅ Final container created after stopping old container[/green]")
+                        host.console.print(f"[green]{icon('success')} Final container created after stopping old container[/green]")
                     except Exception as retry_error:
                         host.logger.error(f"Failed to stop old container and retry: {retry_error}")
                         raise Exception(f"Port conflict: {error_msg}. Failed to resolve by stopping old container: {retry_error}")
@@ -548,13 +549,13 @@ def blue_green_deploy(
                     raise Exception("Final health check failed")
 
                 # Final comprehensive validation - critical check before traffic switch
-                host.console.print(f"[yellow]🔍 Final validation before traffic switch...[/yellow]")
+                host.console.print(f"[yellow]{icon('search')} Final validation before traffic switch...[/yellow]")
                 is_valid, error_msg = host._comprehensive_container_validation(
                     final_container, config, final_port, target_name
                 )
             else:
                 # No ports - just verify container is running
-                host.console.print(f"[yellow]🔍 Final validation before traffic switch (no ports)...[/yellow]")
+                host.console.print(f"[yellow]{icon('search')} Final validation before traffic switch (no ports)...[/yellow]")
                 try:
                     final_container.reload()
                     if final_container.status != "running":
@@ -586,15 +587,15 @@ def blue_green_deploy(
                 # Restart old container if it exists (rollback)
                 if active_container:
                     try:
-                        host.console.print(f"[yellow]🔄 Rolling back to previous container...[/yellow]")
+                        host.console.print(f"[yellow]{icon('refresh')} Rolling back to previous container...[/yellow]")
                         active_container.start()
-                        host.console.print(f"[green]✅ Rollback successful - previous container restarted[/green]")
+                        host.console.print(f"[green]{icon('success')} Rollback successful - previous container restarted[/green]")
                     except Exception as e:
                         host.logger.error(f"Rollback failed: {e}")
 
                 raise Exception(error_msg_full)
 
-            host.console.print(f"[green]✅ Final validation passed - deployment successful[/green]")
+            host.console.print(f"[green]{icon('success')} Final validation passed - deployment successful[/green]")
 
             # Old container was already stopped before creating final container
             # Now just remove it if it still exists
@@ -603,19 +604,19 @@ def blue_green_deploy(
                     if active_container.status != 'exited':
                         active_container.stop(timeout=10)
                     active_container.remove()
-                    host.console.print(f"[green]✅ Old container '{active_container.name}' removed[/green]")
+                    host.console.print(f"[green]{icon('success')} Old container '{active_container.name}' removed[/green]")
                 except docker.errors.NotFound:
                     # Already removed, that's fine
                     pass
                 except Exception as e:
                     host.logger.warning(f"Failed to remove old container: {e}")
 
-            progress.update(switch_task, description="✅ Traffic switched successfully")
-            host._update_progress('traffic_switch', 95, '✅ Traffic switch completed')
+            progress.update(switch_task, description=f"{icon('success')} Traffic switched successfully")
+            host._update_progress('traffic_switch', 95, f'{icon("success")} Traffic switch completed')
 
         except Exception as e:
-            progress.update(switch_task, description="❌ Traffic switch failed")
-            host._update_progress('traffic_switch', 0, f'❌ Traffic switch failed: {e}')
+            progress.update(switch_task, description=f"{icon('error')} Traffic switch failed")
+            host._update_progress('traffic_switch', 0, f'{icon("error")} Traffic switch failed: {e}')
             host.logger.error(f"Traffic switch failed: {e}")
             return False
 
@@ -627,8 +628,8 @@ def blue_green_deploy(
     # Clear deployment tracking
     host._current_deployment_container = None
 
-    host._update_progress('completed', 100, '🎉 Deployment completed successfully!')
-    host.console.print(f"\n[bold green]🎉 BLUE-GREEN DEPLOYMENT COMPLETED![/bold green]")
+    host._update_progress('completed', 100, f'{icon("celebrate")} Deployment completed successfully!')
+    host.console.print(f"\n[bold green]{icon('celebrate')} BLUE-GREEN DEPLOYMENT COMPLETED![/bold green]")
     host.console.print(f"[green]Active slot: {target_name}[/green]")
     host.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
 

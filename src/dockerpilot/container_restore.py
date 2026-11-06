@@ -1,5 +1,6 @@
 """Container restore helpers extracted from BackupRestoreMixin."""
 
+from dockerpilot.ui_icons import icon
 from pathlib import Path
 from typing import Any
 import json
@@ -22,18 +23,18 @@ def restore_container_data(host: Any, container_name: str, backup_path: str) -> 
     try:
         backup_dir = Path(backup_path)
         if not backup_dir.exists():
-            host.console.print(f"[red]❌ Backup directory not found: {backup_path}[/red]")
+            host.console.print(f"[red]{icon('error')} Backup directory not found: {backup_path}[/red]")
             return False
 
         metadata_file = backup_dir / 'backup_metadata.json'
         if not metadata_file.exists():
-            host.console.print(f"[red]❌ Backup metadata not found: {metadata_file}[/red]")
+            host.console.print(f"[red]{icon('error')} Backup metadata not found: {metadata_file}[/red]")
             return False
 
         with open(metadata_file, 'r') as f:
             backup_metadata = json.load(f)
 
-        host.console.print(f"[cyan]📦 Restoring data for container '{container_name}' from backup...[/cyan]")
+        host.console.print(f"[cyan]{icon('package')} Restoring data for container '{container_name}' from backup...[/cyan]")
         host.console.print(f"[cyan]Backup created: {backup_metadata.get('backup_time', 'unknown')}[/cyan]")
 
         container = host.client.containers.get(container_name)
@@ -49,7 +50,7 @@ def restore_container_data(host: Any, container_name: str, backup_path: str) -> 
                     backup_file = backup_dir / backup_file.name
 
                 if not backup_file.exists():
-                    host.console.print(f"[yellow]⚠️ Backup file not found: {volume_info['backup_file']}[/yellow]")
+                    host.console.print(f"[yellow]{icon('warning')} Backup file not found: {volume_info['backup_file']}[/yellow]")
                     continue
 
                 if volume_info['type'] == 'named_volume':
@@ -62,10 +63,10 @@ def restore_container_data(host: Any, container_name: str, backup_path: str) -> 
 
                         # Extract backup to volume
                         host._restore_from_tar(backup_file, volume_path)
-                        host.console.print(f"[green]✅ Restored volume '{volume_name}'[/green]")
+                        host.console.print(f"[green]{icon('success')} Restored volume '{volume_name}'[/green]")
                     except Exception as e:
                         host.logger.error(f"Failed to restore volume {volume_name}: {e}")
-                        host.console.print(f"[red]❌ Failed to restore volume '{volume_name}': {e}[/red]")
+                        host.console.print(f"[red]{icon('error')} Failed to restore volume '{volume_name}': {e}[/red]")
                         return False
 
                 elif volume_info['type'] == 'bind_mount':
@@ -83,23 +84,23 @@ def restore_container_data(host: Any, container_name: str, backup_path: str) -> 
 
                             # Extract backup
                             host._restore_from_tar(backup_file, source_path)
-                            host.console.print(f"[green]✅ Restored bind mount '{source_path}'[/green]")
+                            host.console.print(f"[green]{icon('success')} Restored bind mount '{source_path}'[/green]")
                         else:
-                            host.console.print(f"[yellow]⚠️ Bind mount path does not exist: {source_path}[/yellow]")
+                            host.console.print(f"[yellow]{icon('warning')} Bind mount path does not exist: {source_path}[/yellow]")
                     except Exception as e:
                         host.logger.error(f"Failed to restore bind mount {source_path}: {e}")
-                        host.console.print(f"[red]❌ Failed to restore bind mount '{source_path}': {e}[/red]")
+                        host.console.print(f"[red]{icon('error')} Failed to restore bind mount '{source_path}': {e}[/red]")
                         return False
 
-        host.console.print(f"[bold green]✅ Data restore completed![/bold green]")
+        host.console.print(f"[bold green]{icon('success')} Data restore completed![/bold green]")
         return True
 
     except docker.errors.NotFound:
-        host.console.print(f"[red]❌ Container '{container_name}' not found[/red]")
+        host.console.print(f"[red]{icon('error')} Container '{container_name}' not found[/red]")
         return False
     except Exception as e:
         host.logger.error(f"Container data restore failed: {e}")
-        host.console.print(f"[red]❌ Restore failed: {e}[/red]")
+        host.console.print(f"[red]{icon('error')} Restore failed: {e}[/red]")
         return False
 
 

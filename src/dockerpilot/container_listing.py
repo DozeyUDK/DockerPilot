@@ -1,5 +1,6 @@
 """Container listing and presentation helpers."""
 
+from dockerpilot.ui_icons import icon
 from typing import Any, List
 
 from rich.panel import Panel
@@ -49,7 +50,7 @@ def list_containers(host: Any, show_all: bool = True, format_output: str = "tabl
         available_width = max(80, terminal_width - 20)
 
         table = Table(
-            title="🐳 Docker Containers",
+            title=f"{icon('docker')} Docker Containers",
             show_header=True,
             header_style="bold blue",
             expand=True,
@@ -107,7 +108,7 @@ def list_containers(host: Any, show_all: bool = True, format_output: str = "tabl
         running = len([container for container in containers if container.status == "running"])
         stopped = len([container for container in containers if container.status == "exited"])
         total = len(containers)
-        summary = f"📊 Summary: {total} total, {running} running, {stopped} stopped"
+        summary = f"{icon('stats')} Summary: {total} total, {running} running, {stopped} stopped"
         host.console.print(Panel(summary, style="bright_blue"))
 
         return containers

@@ -1,4 +1,5 @@
 """Image management operations."""
+from dockerpilot.ui_icons import icon
 import docker
 from typing import List, Any
 from rich.table import Table
@@ -69,7 +70,7 @@ class ImageManager:
             # Calculate proportional widths based on content importance
             # Priority: Repository > Tag > Created > Size > ID > Used By > Nr
             table = Table(
-                title="📦 Docker Images", 
+                title=f"{icon('package')} Docker Images",
                 show_header=True, 
                 header_style="bold blue",
                 expand=True,  # Allow table to expand to terminal width
@@ -150,7 +151,7 @@ class ImageManager:
             total_size = sum(img.attrs.get('Size', 0) for img in images)
             total_size_formatted = format_image_size(total_size)
             
-            summary = f"📊 Summary: {len(images)} images, {total_size_formatted} total size"
+            summary = f"{icon('stats')} Summary: {len(images)} images, {total_size_formatted} total size"
             self.console.print(Panel(summary, style="bright_blue"))
             
             return images
@@ -160,7 +161,7 @@ class ImageManager:
         with self._error_handler("remove image", image_name):
             try:
                 self.client.images.remove(image=image_name, force=force, noprune=False)
-                self.console.print(f"[green]✅ Image {image_name} removed successfully[/green]")
+                self.console.print(f"[green]{icon('success')} Image {image_name} removed successfully[/green]")
                 self.logger.info(f"Image {image_name} removed successfully")
                 return True
             except docker.errors.ImageNotFound:
@@ -186,19 +187,19 @@ class ImageManager:
                 dangling_images = [img for img in all_images if not img.tags]
                 
                 if not dangling_images:
-                    self.console.print("[yellow]ℹ️ No dangling images found[/yellow]")
+                    self.console.print(f"[yellow]{icon('info')} No dangling images found[/yellow]")
                     return {'images_deleted': 0, 'space_reclaimed': 0}
                 
                 if dry_run:
                     total_size = sum(img.attrs.get('Size', 0) for img in dangling_images)
                     total_size_formatted = format_image_size(total_size)
-                    self.console.print(f"[cyan]🔍 Dry run: Would remove {len(dangling_images)} dangling images ({total_size_formatted})[/cyan]")
+                    self.console.print(f"[cyan]{icon('search')} Dry run: Would remove {len(dangling_images)} dangling images ({total_size_formatted})[/cyan]")
                     return {'images_deleted': len(dangling_images), 'space_reclaimed': total_size}
                 
                 # Show what will be removed
                 total_size = sum(img.attrs.get('Size', 0) for img in dangling_images)
                 total_size_formatted = format_image_size(total_size)
-                self.console.print(f"[cyan]🧹 Removing {len(dangling_images)} dangling images...[/cyan]")
+                self.console.print(f"[cyan]{icon('clean')} Removing {len(dangling_images)} dangling images...[/cyan]")
                 self.console.print(f"[cyan]Estimated space to reclaim: {total_size_formatted}[/cyan]")
                 
                 # Note: Loading indicator is handled by pilot.py's _with_loading context manager
@@ -227,11 +228,11 @@ class ImageManager:
                 space_formatted = format_image_size(space_reclaimed)
                 
                 if images_deleted > 0:
-                    self.console.print(f"[green]✅ Removed {images_deleted} dangling images[/green]")
-                    self.console.print(f"[green]💾 Space reclaimed: {space_formatted}[/green]")
+                    self.console.print(f"[green]{icon('success')} Removed {images_deleted} dangling images[/green]")
+                    self.console.print(f"[green]{icon('save')} Space reclaimed: {space_formatted}[/green]")
                     self.logger.info(f"Pruned {images_deleted} dangling images, reclaimed {space_formatted}")
                 else:
-                    self.console.print("[yellow]ℹ️ No dangling images were removed[/yellow]")
+                    self.console.print(f"[yellow]{icon('info')} No dangling images were removed[/yellow]")
                 
                 return {
                     'images_deleted': images_deleted,
@@ -264,7 +265,7 @@ class ImageManager:
                 buildargs=build_args or {}
             )
             
-            self.console.print(f"[green]✅ Image {tag} built successfully[/green]")
+            self.console.print(f"[green]{icon('success')} Image {tag} built successfully[/green]")
             self.logger.info(f"Image {tag} built successfully")
             return True
         except docker.errors.BuildError as e:

@@ -1205,7 +1205,7 @@ def create_migration_resource(
                             if not target_arch_for_run:
                                 target_arch_for_run = target_server_arch
                                 app.logger.error(
-                                    f"⚠️  CRITICAL: Could not detect image platform! "
+                                    f"WARN  CRITICAL: Could not detect image platform! "
                                     f"Using target server architecture as fallback: {target_arch_for_run}. "
                                     f"This may cause 'exec format error' if image architecture differs!"
                                 )
@@ -1214,7 +1214,7 @@ def create_migration_resource(
                     if image_platform and target_server_arch and image_platform != target_server_arch:
                         if target_arch_for_run != image_platform:
                             app.logger.warning(
-                                f"⚠️  Platform mismatch detected! "
+                                f"WARN  Platform mismatch detected! "
                                 f"Image platform ({image_platform}) differs from target server ({target_server_arch}). "
                                 f"Overriding target_arch_for_run to use image platform: {image_platform}"
                             )
@@ -1225,7 +1225,7 @@ def create_migration_resource(
                     # Check if migration is possible
                     migration_possible = arch_validation.get('migration_possible', True)
                     app.logger.info(
-                        f"🔍 Migration possibility check: "
+                        f"SEARCH Migration possibility check: "
                         f"migration_possible={migration_possible}, "
                         f"compatible={arch_validation.get('compatible')}, "
                         f"needs_emulation={arch_validation.get('needs_emulation')}, "
@@ -1240,7 +1240,7 @@ def create_migration_resource(
                             f"To enable emulation on Raspberry Pi, install: "
                             f"sudo apt-get update && sudo apt-get install -y qemu-user-static binfmt-support"
                         )
-                        app.logger.error(f"❌ BLOCKING MIGRATION: {error_msg}")
+                        app.logger.error(f"ERROR BLOCKING MIGRATION: {error_msg}")
                         update_progress('failed', 0, error_msg)
                         
                         # Explicit error payload for frontend to display a hard-blocking message
@@ -1264,7 +1264,7 @@ def create_migration_resource(
                             f"target={arch_validation.get('target_arch')}) and emulation not supported. "
                             f"Migration aborted to avoid exec format error."
                         )
-                        app.logger.error(f"❌ HARD BLOCK: {error_msg}")
+                        app.logger.error(f"ERROR HARD BLOCK: {error_msg}")
                         update_progress('failed', 0, error_msg)
                         return {
                             'success': False,
@@ -1282,7 +1282,7 @@ def create_migration_resource(
                     if arch_validation.get('needs_emulation'):
                         if arch_validation.get('emulation_supported'):
                             app.logger.warning(
-                                f"⚠️  Cross-architecture execution detected. "
+                                f"WARN  Cross-architecture execution detected. "
                                 f"Image ({arch_validation.get('image_platform')}) will run on "
                                 f"target server ({arch_validation.get('target_arch')}) with emulation. "
                                 f"{arch_validation.get('emulation_message', '')}"
@@ -1293,7 +1293,7 @@ def create_migration_resource(
                                 f"Cannot migrate: Emulation required but not available. "
                                 f"{arch_validation.get('emulation_message', '')}"
                             )
-                            app.logger.error(f"❌ {error_msg}")
+                            app.logger.error(f"ERROR {error_msg}")
                             update_progress('failed', 0, error_msg)
                             return {'error': error_msg}, 400
                     
@@ -1303,7 +1303,7 @@ def create_migration_resource(
                     # Final safety check: ensure target_arch_for_run is set
                     if not target_arch_for_run:
                         app.logger.error(
-                            f"❌ CRITICAL: target_arch_for_run is None! "
+                            f"ERROR CRITICAL: target_arch_for_run is None! "
                             f"This will cause 'exec format error'. "
                             f"Attempting emergency platform detection..."
                         )
@@ -1354,7 +1354,7 @@ def create_migration_resource(
                     # Verify that --platform flag is in the command
                     if target_arch_for_run and f'--platform {target_arch_for_run}' not in docker_run_cmd:
                         app.logger.error(
-                            f"❌ CRITICAL: --platform flag is missing from docker run command! "
+                            f"ERROR CRITICAL: --platform flag is missing from docker run command! "
                             f"target_arch_for_run={target_arch_for_run}"
                         )
                         # Force add the platform flag
@@ -2450,9 +2450,9 @@ def create_migration_resource(
                         if any('qemu' in line.lower() for line in (binfmt_check or '').splitlines()):
                             binfmt_misc_available = True
                             qemu_available = True
-                            app.logger.info("✓ binfmt_misc with QEMU found on remote server")
+                            app.logger.info("OK binfmt_misc with QEMU found on remote server")
                         else:
-                            app.logger.info("✗ binfmt_misc with QEMU NOT found on remote server")
+                            app.logger.info("ERROR binfmt_misc with QEMU NOT found on remote server")
                     except Exception as e:
                         app.logger.warning("Could not check binfmt_misc on remote server: %s", _safe_error_message(e))
                     
@@ -2466,9 +2466,9 @@ def create_migration_resource(
                         app.logger.debug(f"qemu-x86_64-static check output: {qemu_check}")
                         if (qemu_check or '').strip():
                             qemu_available = True
-                            app.logger.info("✓ qemu-x86_64-static found on remote server")
+                            app.logger.info("OK qemu-x86_64-static found on remote server")
                         else:
-                            app.logger.info("✗ qemu-x86_64-static NOT found on remote server")
+                            app.logger.info("ERROR qemu-x86_64-static NOT found on remote server")
                     except Exception as e:
                         app.logger.warning("Could not check qemu-x86_64-static on remote server: %s", _safe_error_message(e))
                 
@@ -2560,7 +2560,7 @@ def create_migration_resource(
                 # If emulation is needed, check if it's available
                 emulation_support = None
                 if needs_emulation:
-                    app.logger.info(f"🔍 Checking emulation support for cross-architecture migration (image: {image_platform}, target: {target_arch})...")
+                    app.logger.info(f"SEARCH Checking emulation support for cross-architecture migration (image: {image_platform}, target: {target_arch})...")
                     emulation_support = self._check_emulation_support(server_config)
                     app.logger.info(
                         f"Emulation check results: supported={emulation_support.get('supported')}, "
@@ -2570,7 +2570,7 @@ def create_migration_resource(
                     )
                     if not emulation_support.get('supported'):
                         app.logger.error(
-                            f"❌ CRITICAL: Cross-architecture migration requires emulation, but it's NOT available on target server. "
+                            f"ERROR CRITICAL: Cross-architecture migration requires emulation, but it's NOT available on target server. "
                             f"Image platform: {image_platform}, Target server: {target_arch}. "
                             f"Message: {emulation_support.get('message')}"
                         )
@@ -2617,16 +2617,16 @@ def create_migration_resource(
                 
                 # Log detailed information
                 if compatible:
-                    app.logger.info(f"Architecture compatibility: ✓ Image ({image_platform}) matches target server ({target_arch})")
+                    app.logger.info(f"Architecture compatibility: OK Image ({image_platform}) matches target server ({target_arch})")
                 else:
                     if emulation_support and emulation_support.get('supported'):
                         app.logger.warning(
-                            f"Architecture mismatch: ✗ Image ({image_platform}) does not match target server ({target_arch}). "
+                            f"Architecture mismatch: ERROR Image ({image_platform}) does not match target server ({target_arch}). "
                             f"Will use --platform {image_platform} with emulation. {emulation_support.get('message')}"
                         )
                     else:
                         app.logger.error(
-                            f"❌ Architecture mismatch: ✗ Image ({image_platform}) does not match target server ({target_arch}). "
+                            f"ERROR Architecture mismatch: ERROR Image ({image_platform}) does not match target server ({target_arch}). "
                             f"Emulation is NOT available: {emulation_support.get('message') if emulation_support else 'unknown'}. "
                             f"Migration will FAIL with 'exec format error'!"
                         )
@@ -2766,13 +2766,13 @@ def create_migration_resource(
             # The target_arch parameter should be the IMAGE's platform, not the target server's architecture
             if target_arch:
                 app.logger.info(
-                    f"✓ Adding --platform flag to docker run: {target_arch} "
+                    f"OK Adding --platform flag to docker run: {target_arch} "
                     f"(source server: {source_arch or 'unknown'})"
                 )
                 cmd_parts.extend(['--platform', target_arch])
             else:
                 app.logger.error(
-                    "❌ CRITICAL ERROR: No --platform flag will be added! "
+                    "ERROR CRITICAL ERROR: No --platform flag will be added! "
                     "target_arch is None. This WILL cause 'exec format error' if image architecture differs from target server. "
                     f"image_tag={image_tag}, container_name={container_name}"
                 )

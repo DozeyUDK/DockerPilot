@@ -1,4 +1,5 @@
 """Utility functions for Docker Pilot."""
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from typing import Dict, Any
 
@@ -135,9 +136,9 @@ def get_trend_indicator(values: list) -> str:
     avg_older = sum(values[:-len(recent)]) / len(values[:-len(recent)]) if len(values) > len(recent) else avg_recent
     
     if avg_recent > avg_older * 1.05:
-        return "↗️"
+        return f"{icon('uptrend')}"
     elif avg_recent < avg_older * 0.95:
-        return "↘️"
+        return f"{icon('downtrend')}"
     else:
         return "→"
 

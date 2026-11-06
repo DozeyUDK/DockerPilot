@@ -1,5 +1,6 @@
 """Live streaming container monitoring extracted from MonitoringManager."""
 
+from dockerpilot.ui_icons import icon
 import json
 import os
 import time
@@ -69,10 +70,10 @@ def monitor_container_live(host: Any, container_name: str, duration: int = 30) -
 
                     # Clear screen and display current stats
                     os.system('clear' if os.name == 'posix' else 'cls')
-                    host.console.print(f"[bold cyan]📊 Live Monitoring: {container_name}[/bold cyan]")
-                    host.console.print(f"[green]🖥️  CPU: {cpu_percent:.2f}%[/green]")
-                    host.console.print(f"[blue]💾 RAM: {mem_usage:.1f}MB / {mem_limit:.1f}MB ({mem_percent:.1f}%)[/blue]")
-                    host.console.print(f"[yellow]⏱️  Time: {int(current_time - start_time)}/{duration}s[/yellow]")
+                    host.console.print(f"[bold cyan]{icon('stats')} Live Monitoring: {container_name}[/bold cyan]")
+                    host.console.print(f"[green]{icon('server')}  CPU: {cpu_percent:.2f}%[/green]")
+                    host.console.print(f"[blue]{icon('save')} RAM: {mem_usage:.1f}MB / {mem_limit:.1f}MB ({mem_percent:.1f}%)[/blue]")
+                    host.console.print(f"[yellow]{icon('clock')}  Time: {int(current_time - start_time)}/{duration}s[/yellow]")
                     host.console.print(f"[dim]Press Ctrl+C to stop[/dim]")
 
                     prev_stats = stats
@@ -86,11 +87,11 @@ def monitor_container_live(host: Any, container_name: str, duration: int = 30) -
 
                 time.sleep(1)
 
-            host.console.print(f"\n[green]✅ Live monitoring completed[/green]")
+            host.console.print(f"\n[green]{icon('success')} Live monitoring completed[/green]")
             return True
 
         except KeyboardInterrupt:
-            host.console.print(f"\n[yellow]⚠️ Monitoring interrupted by user[/yellow]")
+            host.console.print(f"\n[yellow]{icon('warning')} Monitoring interrupted by user[/yellow]")
             return True
 
     return False

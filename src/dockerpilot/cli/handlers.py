@@ -1,5 +1,6 @@
 """CLI command dispatching for DockerPilot."""
 
+from dockerpilot.ui_icons import icon
 import json
 import sys
 
@@ -26,7 +27,7 @@ def _print_json_result(pilot, data) -> None:
 def run_cli(pilot) -> None:
     """Run the command-line interface for a pilot instance."""
     if not pilot.client or not pilot.container_manager:
-        pilot.console.print("[bold red]❌ Docker is not available![/bold red]")
+        pilot.console.print(f"[bold red]{icon('error')} Docker is not available![/bold red]")
         pilot.console.print("[yellow]Please ensure Docker is running and accessible.[/yellow]")
         sys.exit(1)
 
@@ -103,7 +104,7 @@ def dispatch_cli_args(pilot, args, parser) -> None:
             parser.print_help()
     except Exception as e:
         pilot.logger.error(f"CLI command failed: {e}")
-        pilot.console.print(f"[red]❌ Command failed: {e}[/red]")
+        pilot.console.print(f"[red]{icon('error')} Command failed: {e}[/red]")
         sys.exit(1)
 
 
@@ -116,7 +117,7 @@ def handle_container_cli(pilot, args):
     elif args.container_action == 'stop-remove':
         containers = pilot._parse_multi_target(args.name)
         if not containers:
-            pilot.console.print("[red]❌ No container names provided[/red]")
+            pilot.console.print(f"[red]{icon('error')} No container names provided[/red]")
             sys.exit(1)
 
         timeout = args.timeout if hasattr(args, 'timeout') else 10
@@ -128,9 +129,9 @@ def handle_container_cli(pilot, args):
                 all_success = False
 
         if not all_success:
-            pilot.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
+            pilot.console.print(f"\n[yellow]{icon('warning')} Some operations failed[/yellow]")
             sys.exit(1)
-        pilot.console.print("\n[green]✅ All operations completed successfully[/green]")
+        pilot.console.print(f"\n[green]{icon('success')} All operations completed successfully[/green]")
 
     elif args.container_action == 'exec-simple':
         success = pilot.exec_command_non_interactive(args.name, args.command)
@@ -145,7 +146,7 @@ def handle_container_cli(pilot, args):
     elif args.container_action in ['start', 'stop', 'restart', 'remove', 'pause', 'unpause']:
         containers = pilot._parse_multi_target(args.name)
         if not containers:
-            pilot.console.print("[red]❌ No container names provided[/red]")
+            pilot.console.print(f"[red]{icon('error')} No container names provided[/red]")
             sys.exit(1)
 
         kwargs = {}
@@ -162,14 +163,14 @@ def handle_container_cli(pilot, args):
                 all_success = False
 
         if not all_success:
-            pilot.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
+            pilot.console.print(f"\n[yellow]{icon('warning')} Some operations failed[/yellow]")
             sys.exit(1)
-        pilot.console.print("\n[green]✅ All operations completed successfully[/green]")
+        pilot.console.print(f"\n[green]{icon('success')} All operations completed successfully[/green]")
 
     elif args.container_action == 'exec':
         containers = pilot._parse_multi_target(args.name)
         if not containers:
-            pilot.console.print("[red]❌ No container names provided[/red]")
+            pilot.console.print(f"[red]{icon('error')} No container names provided[/red]")
             sys.exit(1)
 
         command = args.command if hasattr(args, 'command') else '/bin/bash'
@@ -177,7 +178,7 @@ def handle_container_cli(pilot, args):
             pilot.console.print(f"\n[cyan]Executing in container: {container}[/cyan]")
             success = pilot.exec_container(container, command)
             if not success:
-                pilot.console.print(f"[yellow]⚠️ Failed to exec in {container}, continuing...[/yellow]")
+                pilot.console.print(f"[yellow]{icon('warning')} Failed to exec in {container}, continuing...[/yellow]")
 
     elif args.container_action == 'logs':
         tail = args.tail if hasattr(args, 'tail') else 50
@@ -257,7 +258,7 @@ def handle_container_cli(pilot, args):
     elif args.container_action == 'remove-image':
         images = pilot._parse_multi_target(args.name)
         if not images:
-            pilot.console.print("[red]❌ No image names provided[/red]")
+            pilot.console.print(f"[red]{icon('error')} No image names provided[/red]")
             sys.exit(1)
 
         all_success = True
@@ -268,22 +269,22 @@ def handle_container_cli(pilot, args):
                 all_success = False
 
         if not all_success:
-            pilot.console.print("\n[yellow]⚠️ Some operations failed[/yellow]")
+            pilot.console.print(f"\n[yellow]{icon('warning')} Some operations failed[/yellow]")
             sys.exit(1)
-        pilot.console.print("\n[green]✅ All operations completed successfully[/green]")
+        pilot.console.print(f"\n[green]{icon('success')} All operations completed successfully[/green]")
 
     elif args.container_action == 'prune-images':
         dry_run = getattr(args, 'dry_run', False)
         result = pilot.prune_dangling_images(dry_run=dry_run)
         if not dry_run and result['images_deleted'] > 0:
-            pilot.console.print(f"\n[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+            pilot.console.print(f"\n[green]{icon('success')} Cleanup completed! Removed {result['images_deleted']} images[/green]")
         elif dry_run:
             if result['images_deleted'] > 0:
-                pilot.console.print(f"\n[cyan]ℹ️ Use without --dry-run to actually remove {result['images_deleted']} images[/cyan]")
+                pilot.console.print(f"\n[cyan]{icon('info')} Use without --dry-run to actually remove {result['images_deleted']} images[/cyan]")
             else:
-                pilot.console.print("\n[yellow]ℹ️ No dangling images to remove[/yellow]")
+                pilot.console.print(f"\n[yellow]{icon('info')} No dangling images to remove[/yellow]")
         elif result['images_deleted'] == 0:
-            pilot.console.print("\n[yellow]ℹ️ No dangling images were removed[/yellow]")
+            pilot.console.print(f"\n[yellow]{icon('info')} No dangling images were removed[/yellow]")
 
 
 def handle_monitor_cli(pilot, args):
@@ -362,7 +363,7 @@ def handle_deploy_cli(pilot, args):
         if not success:
             sys.exit(1)
     else:
-        pilot.console.print("[yellow]⚠️ Unknown deploy action[/yellow]")
+        pilot.console.print(f"[yellow]{icon('warning')} Unknown deploy action[/yellow]")
 
 
 def handle_backup_cli(pilot, args):
@@ -386,7 +387,7 @@ def handle_backup_cli(pilot, args):
         if not success:
             sys.exit(1)
     else:
-        pilot.console.print("[yellow]⚠️ Unknown backup action[/yellow]")
+        pilot.console.print(f"[yellow]{icon('warning')} Unknown backup action[/yellow]")
 
 
 def handle_config_cli(pilot, args):
@@ -400,7 +401,7 @@ def handle_config_cli(pilot, args):
         if not success:
             sys.exit(1)
     else:
-        pilot.console.print("[yellow]⚠️ Unknown config action[/yellow]")
+        pilot.console.print(f"[yellow]{icon('warning')} Unknown config action[/yellow]")
 
 
 def handle_pipeline_cli(pilot, args):
@@ -410,4 +411,4 @@ def handle_pipeline_cli(pilot, args):
         if not success:
             sys.exit(1)
     else:
-        pilot.console.print("[yellow]⚠️ Unknown pipeline action[/yellow]")
+        pilot.console.print(f"[yellow]{icon('warning')} Unknown pipeline action[/yellow]")

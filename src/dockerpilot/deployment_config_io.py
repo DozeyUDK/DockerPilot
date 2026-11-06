@@ -1,5 +1,6 @@
 """Deployment config/template file helpers."""
 
+from dockerpilot.ui_icons import icon
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ def create_dockerfile_template(host: Any, destination: str, template_name: str) 
         return False
 
     dockerfile_path.write_text(template_body, encoding="utf-8")
-    host.console.print(f"[green]✅ Created {template_name} Dockerfile template at {dockerfile_path}[/green]")
+    host.console.print(f"[green]{icon('success')} Created {template_name} Dockerfile template at {dockerfile_path}[/green]")
     host.logger.info(f"Created Dockerfile template '{template_name}' at {dockerfile_path}")
     return True
 
@@ -46,7 +47,7 @@ def create_deployment_config(host: Any, config_path: str = "deployment.yml") -> 
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(template_content)
 
-        host.console.print(f"[green]✅ Deployment configuration template created: {config_path}[/green]")
+        host.console.print(f"[green]{icon('success')} Deployment configuration template created: {config_path}[/green]")
         return True
     except Exception as e:
         host.logger.error(f"Failed to create config template: {e}")
