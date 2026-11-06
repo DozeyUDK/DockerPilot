@@ -14,6 +14,8 @@ import socket
 import shutil
 from pathlib import Path
 
+from dockerpilot.ui_icons import icon
+
 # Processes to manage
 backend_process = None
 frontend_process = None
@@ -22,7 +24,7 @@ backend_port = 5000  # Default port
 
 def signal_handler(sig, frame):
     """Handle interruption (Ctrl+C)"""
-    print("\n\n🛑 Stopping servers...")
+    print(f"\n\n{icon('stop')} Stopping servers...")
     
     if frontend_process and frontend_process.poll() is None:
         print("Stopping frontend (npm)...")
@@ -83,7 +85,7 @@ def signal_handler(sig, frame):
         except (OSError, ProcessLookupError):
             pass
     
-    print("✅ All servers stopped.")
+    print(f"{icon('success')} All servers stopped.")
     sys.exit(0)
 
 
@@ -132,7 +134,7 @@ def check_dependencies():
         errors.append(f"Missing Python dependency: {e.name}")
     
     if errors:
-        print("❌ Configuration errors:")
+        print(f"{icon('error')} Configuration errors:")
         for error in errors:
             print(f"   - {error}")
         print("\nInstall missing dependencies:")
@@ -159,23 +161,23 @@ def ask_for_port():
     """Asks user for a new port"""
     while True:
         try:
-            port_input = input("\n🔧 Port is in use. Enter a new port (or Enter for 5001): ").strip()
+            port_input = input("\nConfiguration: Port is in use. Enter a new port (or Enter for 5001): ").strip()
             if not port_input:
                 port_input = "5001"
             
             port = int(port_input)
             
             if port < 1024 or port > 65535:
-                print("❌ Port must be in range 1024-65535")
+                print(f"{icon('error')} Port must be in range 1024-65535")
                 continue
             
             if not is_port_available(port):
-                print(f"❌ Port {port} is also in use. Try another one.")
+                print(f"{icon('error')} Port {port} is also in use. Try another one.")
                 continue
             
             return port
         except ValueError:
-            print("❌ Invalid port number. Enter a number.")
+            print(f"{icon('error')} Invalid port number. Enter a number.")
         except KeyboardInterrupt:
             print("\n\nCancelled.")
             sys.exit(0)
@@ -190,12 +192,12 @@ def start_backend():
     
     # Check if default port is available
     if not is_port_available(backend_port):
-        print(f"⚠️  Port {backend_port} is in use.")
+        print(f"{icon('warning')}  Port {backend_port} is in use.")
         backend_port = ask_for_port()
     
     os.environ['PORT'] = str(backend_port)
     
-    print(f"🚀 Starting backend (Flask) on port {backend_port}...")
+    print(f"{icon('deploy')} Starting backend (Flask) on port {backend_port}...")
     
     try:
         backend_process = subprocess.Popen(
@@ -244,39 +246,39 @@ def start_backend():
                 os.environ['PORT'] = str(backend_port)
                 
                 # Restart with new port
-                print(f"\n🔄 Attempting to start on port {backend_port}...")
+                print(f"\n{icon('refresh')} Attempting to start on port {backend_port}...")
                 return start_backend()  # Recursive call with new port
             else:
-                print("❌ Backend did not start correctly!")
+                print(f"{icon('error')} Backend did not start correctly!")
                 return False
         
-        print(f"✅ Backend started on http://localhost:{backend_port}")
+        print(f"{icon('success')} Backend started on http://localhost:{backend_port}")
         return True
         
     except Exception as e:
-        print(f"❌ Error starting backend: {e}")
+        print(f"{icon('error')} Error starting backend: {e}")
         return False
 
 
 def fix_rollup_dependencies(frontend_dir):
     """Fixes rollup dependencies issue - removes node_modules and package-lock.json, reinstalls"""
-    print("🔧 Rollup issue detected. Fixing dependencies...")
+    print("Configuration: Rollup issue detected. Fixing dependencies...")
     
     try:
         # Remove package-lock.json
         package_lock = frontend_dir / 'package-lock.json'
         if package_lock.exists():
             package_lock.unlink()
-            print("   ✓ Removed package-lock.json")
+            print(f"   {icon('success')} Removed package-lock.json")
         
         # Remove node_modules
         node_modules = frontend_dir / 'node_modules'
         if node_modules.exists():
             shutil.rmtree(node_modules)
-            print("   ✓ Removed node_modules")
+            print(f"   {icon('success')} Removed node_modules")
         
         # Reinstall dependencies
-        print("   📦 Reinstalling dependencies...")
+        print(f"   {icon('package')} Reinstalling dependencies...")
         install_result = subprocess.run(
             ['npm', 'install'],
             cwd=str(frontend_dir),
@@ -286,14 +288,14 @@ def fix_rollup_dependencies(frontend_dir):
         )
         
         if install_result.returncode != 0:
-            print(f"❌ Error during reinstallation:\n{install_result.stderr}")
+            print(f"{icon('error')} Error during reinstallation:\n{install_result.stderr}")
             return False
         
-        print("✅ Dependencies fixed")
+        print(f"{icon('success')} Dependencies fixed")
         return True
         
     except Exception as e:
-        print(f"❌ Error fixing dependencies: {e}")
+        print(f"{icon('error')} Error fixing dependencies: {e}")
         return False
 
 
@@ -304,12 +306,12 @@ def start_frontend():
     frontend_dir = Path(__file__).parent / 'frontend'
     
     if not frontend_dir.exists():
-        print("❌ Frontend directory does not exist!")
+        print(f"{icon('error')} Frontend directory does not exist!")
         return False
     
     # Check if node_modules exists
     if not (frontend_dir / 'node_modules').exists():
-        print("⚠️  node_modules not found. Installing dependencies...")
+        print(f"{icon('warning')}  node_modules not found. Installing dependencies...")
         try:
             install_result = subprocess.run(
                 ['npm', 'install'],
@@ -319,14 +321,14 @@ def start_frontend():
                 timeout=120
             )
             if install_result.returncode != 0:
-                print(f"❌ Error installing dependencies:\n{install_result.stderr}")
+                print(f"{icon('error')} Error installing dependencies:\n{install_result.stderr}")
                 return False
-            print("✅ Dependencies installed")
+            print(f"{icon('success')} Dependencies installed")
         except subprocess.TimeoutExpired:
-            print("❌ Dependency installation timeout exceeded")
+            print(f"{icon('error')} Dependency installation timeout exceeded")
             return False
         except Exception as e:
-            print(f"❌ Error during installation: {e}")
+            print(f"{icon('error')} Error during installation: {e}")
             return False
     
     # Fix permissions for vite and other binaries if needed
@@ -340,7 +342,7 @@ def start_frontend():
         except Exception:
             pass  # Ignore permission errors
     
-    print("🚀 Starting frontend (npm)...")
+    print(f"{icon('deploy')} Starting frontend (npm)...")
     
     try:
         # Ustaw zmienną środowiskową dla portu backendu
@@ -380,14 +382,14 @@ def start_frontend():
                         print(f"[FRONTEND] {line.rstrip()}")
                         
                         # Detect frontend port from Vite output
-                        # Format: "➜  Local:   http://localhost:3001/"
+                        # Format: "->  Local:   http://localhost:3001/"
                         import re
                         port_match = re.search(r'Local:\s+http://localhost:(\d+)', line)
                         if port_match:
                             frontend_port = int(port_match.group(1))
                         
                         # Detect network address from Vite output
-                        # Format: "➜  Network: http://192.168.0.58:3001/"
+                        # Format: "->  Network: http://192.168.0.58:3001/"
                         network_match = re.search(r'Network:\s+http://([\d.]+):(\d+)', line)
                         if network_match:
                             network_address = f"http://{network_match.group(1)}:{network_match.group(2)}"
@@ -436,14 +438,14 @@ def start_frontend():
             # Rollup error detected - fix dependencies and try again
             if rollup_error_detected:
                 if fix_rollup_dependencies(frontend_dir):
-                    print("\n🔄 Attempting to restart frontend...")
+                    print(f"\n{icon('refresh')} Attempting to restart frontend...")
                     return start_frontend()  # Recursive call after fix
                 else:
-                    print("❌ Failed to fix rollup dependencies")
+                    print(f"{icon('error')} Failed to fix rollup dependencies")
                     return False
             elif process_exited:
                 # Process exited with other error
-                print("❌ Frontend did not start correctly!")
+                print(f"{icon('error')} Frontend did not start correctly!")
                 if output_lines:
                     print("   Last output lines:")
                     for line in output_lines[-5:]:
@@ -452,21 +454,21 @@ def start_frontend():
         
         # Display port information
         if frontend_port:
-            print(f"✅ Frontend started on http://localhost:{frontend_port}")
+            print(f"{icon('success')} Frontend started on http://localhost:{frontend_port}")
             if network_address:
                 print(f"   Also available at: {network_address}")
             print(f"   Backend running on http://localhost:{backend_port}")
-            print(f"\n   🌐 Open in browser:")
+            print(f"\n   {icon('network')} Open in browser:")
             print(f"      Local: http://localhost:{frontend_port}")
             if network_address:
                 print(f"      Network: {network_address}")
         else:
-            print("✅ Frontend started (check port in output above)")
+            print(f"{icon('success')} Frontend started (check port in output above)")
             print(f"   Backend running on http://localhost:{backend_port}")
         return True
         
     except Exception as e:
-        print(f"❌ Error starting frontend: {e}")
+        print(f"{icon('error')} Error starting frontend: {e}")
         return False
 
 
@@ -496,15 +498,15 @@ def main():
     # Start frontend
     frontend_ok = start_frontend()
     if not frontend_ok:
-        print("\n⚠️  Frontend did not start, but backend is running.")
+        print(f"\n{icon('warning')}  Frontend did not start, but backend is running.")
         print("   You can start frontend manually: cd frontend && npm run dev")
     
     print()
     print("=" * 60)
     if frontend_ok:
-        print("✅ Both servers are running!")
+        print(f"{icon('success')} Both servers are running!")
     else:
-        print("⚠️  Backend is running (frontend failed)")
+        print(f"{icon('warning')}  Backend is running (frontend failed)")
     print("=" * 60)
     print("\nPress Ctrl+C to stop both servers\n")
     
@@ -513,11 +515,11 @@ def main():
         while True:
             # Check if processes are still running
             if backend_process and backend_process.poll() is not None:
-                print("\n⚠️  Backend terminated unexpectedly")
+                print(f"\n{icon('warning')}  Backend terminated unexpectedly")
                 break
             
             if frontend_process and frontend_process.poll() is not None:
-                print("\n⚠️  Frontend terminated unexpectedly")
+                print(f"\n{icon('warning')}  Frontend terminated unexpectedly")
                 break
             
             time.sleep(1)

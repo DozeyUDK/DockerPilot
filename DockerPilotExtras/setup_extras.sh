@@ -12,20 +12,20 @@ echo "============================================================"
 echo ""
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "❌ Python 3.10 or higher is required, but python3 was not found."
+    echo "[ERROR] Python 3.10 or higher is required, but python3 was not found."
     exit 1
 fi
 if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
-    echo "❌ Python 3.10 or higher is required. Found: $(python3 --version 2>&1)"
+    echo "[ERROR] Python 3.10 or higher is required. Found: $(python3 --version 2>&1)"
     exit 1
 fi
-echo "✅ $(python3 --version 2>&1)"
+echo "[OK] $(python3 --version 2>&1)"
 echo ""
 
 # Python venv (avoids PEP 668 externally-managed-environment on Ubuntu/Debian 24.04+)
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv "$VENV_DIR" || { echo "❌ Failed. Install: sudo apt install python3-venv python3-full (Debian/Ubuntu)"; exit 1; }
+    python3 -m venv "$VENV_DIR" || { echo "[ERROR] Failed. Install: sudo apt install python3-venv python3-full (Debian/Ubuntu)"; exit 1; }
 fi
 if [ ! -f "$VENV_DIR/bin/pip" ]; then
     echo "Ensuring pip in venv..."
@@ -33,21 +33,24 @@ if [ ! -f "$VENV_DIR/bin/pip" ]; then
 fi
 echo "Installing Python dependencies (Flask, etc.)..."
 "$VENV_DIR/bin/pip" install -q -r requirements.txt
-echo "✅ Python dependencies installed in .venv"
+# Install the repository package and its runtime dependencies (including Rich).
+# This also makes dockerpilot.ui_icons available to standalone Extras scripts.
+"$VENV_DIR/bin/pip" install -q -e "$SCRIPT_DIR/.."
+echo "[OK] Python dependencies installed in .venv"
 echo ""
 
 # Node.js check
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    echo "✅ Node.js: $(node --version)  npm: $(npm --version)"
+    echo "[OK] Node.js: $(node --version)  npm: $(npm --version)"
     if [ ! -d "frontend/node_modules" ]; then
         echo "Installing frontend dependencies..."
         (cd frontend && npm install)
-        echo "✅ Frontend dependencies installed"
+        echo "[OK] Frontend dependencies installed"
     else
-        echo "✅ Frontend node_modules already present"
+        echo "[OK] Frontend node_modules already present"
     fi
 else
-    echo "⚠️  Node.js/npm not found. Install them to run the frontend:"
+    echo "[WARN]  Node.js/npm not found. Install them to run the frontend:"
     echo "   Debian/Ubuntu: sudo apt install nodejs npm"
     echo "   Or: https://nodejs.org/"
     echo "   Then run: cd frontend && npm install"

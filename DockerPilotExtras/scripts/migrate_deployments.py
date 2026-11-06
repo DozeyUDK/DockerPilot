@@ -9,6 +9,8 @@ import json
 import yaml
 import shutil
 from pathlib import Path
+
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 import hashlib
 import re
@@ -37,8 +39,8 @@ def migrate_deployment_configs():
     migrated = []
     skipped = []
     
-    print("🔄 Migrating deployment configs to unified structure...")
-    print(f"📁 Target directory: {deployments_dir}\n")
+    print(f"{icon('refresh')} Migrating deployment configs to unified structure...")
+    print(f"{icon('folder')} Target directory: {deployments_dir}\n")
     
     # Find all deployment configs
     for location in locations:
@@ -86,7 +88,7 @@ def migrate_deployment_configs():
                                 json.dump(metadata, f, indent=2)
                             
                             migrated.append(f"{config_path} -> {deployment_dir.name}/deployment-{env}.yml")
-                            print(f"✓ Migrated: {config_path.name} -> {deployment_dir.name}/")
+                            print(f"{icon('success')} Migrated: {config_path.name} -> {deployment_dir.name}/")
                         else:
                             skipped.append(f"{config_path} (missing container_name)")
                 except Exception as e:
@@ -144,7 +146,7 @@ def migrate_deployment_configs():
                             json.dump(metadata, f, indent=2)
                         
                         migrated.append(f"{main_config_path} -> {deployment_dir.name}/deployment.yml")
-                        print(f"✓ Migrated: {main_config_path.name} -> {deployment_dir.name}/")
+                        print(f"{icon('success')} Migrated: {main_config_path.name} -> {deployment_dir.name}/")
                     else:
                         skipped.append(f"{main_config_path} (missing container_name)")
             except Exception as e:
@@ -185,16 +187,16 @@ def migrate_deployment_configs():
                                 json.dump(metadata, f, indent=2)
                             
                             migrated.append(f"{config_path} -> {deployment_dir.name}/deployment.yml")
-                            print(f"✓ Migrated: {config_path.name} -> {deployment_dir.name}/")
+                            print(f"{icon('success')} Migrated: {config_path.name} -> {deployment_dir.name}/")
                         else:
                             skipped.append(f"{config_path} (missing container_name)")
                 except Exception as e:
                     skipped.append(f"{config_path} (error: {e})")
     
-    print(f"\n✅ Migration completed!")
-    print(f"📊 Migrated: {len(migrated)} configs")
+    print(f"\n{icon('success')} Migration completed!")
+    print(f"{icon('stats')} Migrated: {len(migrated)} configs")
     if skipped:
-        print(f"⚠️  Skipped: {len(skipped)} configs")
+        print(f"{icon('warning')}  Skipped: {len(skipped)} configs")
         for skip in skipped:
             print(f"   - {skip}")
     
@@ -203,6 +205,6 @@ def migrate_deployment_configs():
 if __name__ == '__main__':
     migrated, skipped = migrate_deployment_configs()
     if migrated:
-        print(f"\n💡 Note: Old configs remain in original locations.")
+        print(f"\n{icon('tip')} Note: Old configs remain in original locations.")
         print(f"   You can remove them after verifying everything works correctly.")
 
