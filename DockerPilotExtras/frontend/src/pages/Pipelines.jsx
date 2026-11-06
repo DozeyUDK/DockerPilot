@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { ICONS } from '../icons.mjs'
 import { pipelineAPI, dockerAPI, fileBrowserAPI } from '../services/api'
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import groovy from 'react-syntax-highlighter/dist/esm/languages/prism/groovy'
@@ -343,7 +344,7 @@ function Pipelines() {
             <div className="pipeline-stage-overview">
               {orderedStages(formData.stages).map(({ stage, selected }, index) => (
                 <span key={stage} className={selected ? 'stage-chip stage-chip-active' : 'stage-chip'}>
-                  {index + 1}. {stage}{selected ? ' ' : ''}
+                  {index + 1}. {stage}{selected ? ` ${ICONS.success}` : ''}
                 </span>
               ))}
             </div>
@@ -385,7 +386,7 @@ function Pipelines() {
                 }}
                 title="Refresh image list"
               >
-                {loadingImages ? '' : ''}
+                {loadingImages ? ICONS.loading : ICONS.refresh}
               </button>
               <button 
                 type="button"
@@ -398,7 +399,7 @@ function Pipelines() {
                 }}
                 title="Browse Docker images"
               >
-                
+                {ICONS.docker}
               </button>
             </label>
             <div style={{ position: 'relative' }}>
@@ -480,7 +481,7 @@ function Pipelines() {
                 }}
                 title="Refresh Dockerfile list"
               >
-                {loadingDockerfiles ? '' : ''}
+                {loadingDockerfiles ? ICONS.loading : ICONS.refresh}
               </button>
               <button 
                 type="button"
@@ -493,7 +494,7 @@ function Pipelines() {
                 }}
                 title="Browse files"
               >
-                
+                {ICONS.folder}
               </button>
             </label>
             <div style={{ position: 'relative' }}>
@@ -925,7 +926,7 @@ function Pipelines() {
                     }}
                   >
                     <span className="browser-item-icon" aria-hidden="true">
-                      {item.is_dir ? '' : isDockerfile ? '' : ''}
+                      {item.is_dir ? ICONS.folder : isDockerfile ? ICONS.docker : ICONS.file}
                     </span>
                     <span className="browser-item-content">
                       <span className="browser-item-name">{item.name}</span>
@@ -975,7 +976,7 @@ function Pipelines() {
                   className="browser-item"
                   onClick={() => selectImageFromBrowser(img.name)}
                 >
-                  <span className="browser-item-icon browser-item-icon-large" aria-hidden="true"></span>
+                  <span className="browser-item-icon browser-item-icon-large" aria-hidden="true">{ICONS.docker}</span>
                   <span className="browser-item-content">
                     <span className="browser-item-name">{img.name}</span>
                     <span className="browser-item-meta">

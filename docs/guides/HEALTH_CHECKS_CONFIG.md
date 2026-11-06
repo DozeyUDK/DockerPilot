@@ -65,10 +65,10 @@ nano src/dockerpilot/configs/health-checks-defaults.json
 ```
 
 **Benefits:**
-- ✅ No hardcoded values in Python code
-- ✅ Easy to update (just edit JSON)
-- ✅ Can be version controlled
-- ✅ Can be downloaded from URL (future feature)
+- No hardcoded values in Python code
+- Easy to update (just edit JSON)
+- Can be version controlled
+- Can be downloaded from URL (future feature)
 
 ## Customize Health Checks
 
@@ -113,7 +113,7 @@ Override health check in your deployment config:
 deployment:
   container_name: linuxlite-ssh
   image_tag: linux-lite-ssh-linuxlite:latest
-  health_check_endpoint: null  # ❌ Skip HTTP health check (non-HTTP service)
+  health_check_endpoint: null # Skip HTTP health check (non-HTTP service)
   # ... rest of config
 ```
 
@@ -122,7 +122,7 @@ deployment:
 deployment:
   container_name: my-api
   image_tag: my-custom-api:v1.2
-  health_check_endpoint: /custom/healthcheck  # ✅ Custom endpoint
+  health_check_endpoint: /custom/healthcheck # Custom endpoint
   # ... rest of config
 ```
 
@@ -228,11 +228,11 @@ health_checks:
 
 ## Best Practices
 
-1. ✅ **Use image patterns** (not container names) in mappings
-2. ✅ **Test health checks** before deploying to production
-3. ✅ **Document custom endpoints** in your team's config file
-4. ✅ **Version control** your health check config alongside deployments
-5. ❌ **Don't hardcode** health checks in container images - use config
+1. **Use image patterns** (not container names) in mappings
+2. **Test health checks** before deploying to production
+3. **Document custom endpoints** in your team's config file
+4. **Version control** your health check config alongside deployments
+5. **Don't hardcode** health checks in container images - use config
 
 ## Related Documentation
 

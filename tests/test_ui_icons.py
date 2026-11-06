@@ -45,31 +45,23 @@ def test_icon_catalog_codegen_is_current():
     assert result.returncode == 0, result.stderr
 
 
-def test_no_legacy_emoji_in_gui_or_python_presentation():
-    catalog = json.loads((ROOT / "icons/catalog.json").read_text(encoding="utf-8"))
-    symbols = tuple(catalog["legacy_visual_markers"])
-    import re
-    broad_emoji = re.compile("[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE0F\u20E3]")
-    directories = (
-        (ROOT / "DockerPilotExtras", (".py", ".sh")),
-        (ROOT / "scripts", (".sh",)),
-        (ROOT / "tools/searcher/templates", (".html",)),
-        (ROOT / "DockerPilotExtras/frontend/src", (".jsx", ".js", ".mjs")),
-        (ROOT / "src/dockerpilot", (".py",)),
-        (ROOT / "DockerPilotExtras/backend", (".py",)),
+def test_no_emoji_or_hardcoded_frontend_glyphs_in_repository():
+    """All tracked text, including docs and tests, must stay emoji-free."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/icons/check_no_emoji.py")],
+        cwd=ROOT, capture_output=True, text=True, check=False,
     )
-    exceptions = {"ui_icons.py", "icons.mjs"}
-    for directory, suffixes in directories:
-        for file in directory.rglob("*"):
-            if (not file.is_file() or file.suffix not in suffixes or file.name in exceptions
-                or any(part in {".venv", "venv", "node_modules", "__pycache__"} for part in file.parts)):
-                continue
-            text = file.read_text(encoding="utf-8")
-            leftovers = [symbol for symbol in symbols if symbol in text]
-            assert not leftovers, f"{file.relative_to(ROOT)}: {leftovers}"
-            assert not broad_emoji.search(text), f"Unmapped emoji: {file.relative_to(ROOT)}"
-    for file in (ROOT / "install.sh",):
-        assert not broad_emoji.search(file.read_text(encoding="utf-8")), f"Unmapped emoji: {file.relative_to(ROOT)}"
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_icon_catalog_uses_semantic_keys_only():
+    catalog = json.loads((ROOT / "icons/catalog.json").read_text(encoding="utf-8"))
+    assert "legacy_visual_markers" not in catalog
+    assert all(name.isascii() for name in catalog["icons"])
+
 
 
 def test_extras_setup_installs_shared_package_into_its_venv():

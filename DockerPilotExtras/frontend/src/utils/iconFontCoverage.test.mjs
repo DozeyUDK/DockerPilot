@@ -30,6 +30,10 @@ test('code and preformatted output keep the bundled icon font before their monos
 })
 
 test('icon-bearing console suggestion is inside an icon-aware font stack', () => {
-  assert.match(status, /suggestionText = [^\n]*[\uE000-\uF8FF]/)
+  assert.match(status, /suggestionText = [^\n]*ICONS\.tip/)
   assert.match(status, /fontFamily:\s*'"DockerPilot Nerd Symbols", "Consolas"/)
+})
+
+test('browser-native backup confirmation uses ASCII instead of a font-only glyph', () => {
+  assert.match(environments, /window\.confirm\(\s*'WARNING: Are you sure/)
 })

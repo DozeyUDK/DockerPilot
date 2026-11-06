@@ -1,6 +1,6 @@
 # Contributing to Docker Pilot
 
-Thank you for your interest in contributing to Docker Pilot! 🚀
+Thank you for your interest in contributing to Docker Pilot!
 
 ## Getting Started
 
@@ -110,4 +110,4 @@ When reporting bugs or requesting features:
 - Check existing documentation in README.md
 - Review closed issues for similar questions
 
-Thank you for contributing! 🙏
+Thank you for contributing!

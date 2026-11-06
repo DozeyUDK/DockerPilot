@@ -1,8 +1,8 @@
 # Guide: Promoting Containers to Production with DockerPilot
 
-## 🎯 What does promoting a container to production look like?
+## What does promoting a container to production look like?
 
-### 1️⃣ Configuration Preparation
+### 1. Configuration Preparation
 
 First, you need to prepare a deployment configuration file (e.g., `myapp-deployment.yml`):
 
@@ -14,7 +14,7 @@ dockerpilot deploy init --output myapp-deployment.yml
 nano myapp-deployment.yml
 ```
 
-### 2️⃣ Promotion Process
+### 2. Promotion Process
 
 #### Example scenario:
 ```
@@ -39,7 +39,7 @@ dockerpilot promote staging prod --config myapp-deployment.yml
 dockerpilot promote staging prod --config myapp-deployment.yml
 ```
 
-### 3️⃣ What happens during promotion?
+### 3. What happens during promotion?
 
 #### Automatic resource adjustments by environment:
 
@@ -51,24 +51,24 @@ dockerpilot promote staging prod --config myapp-deployment.yml
 
 #### Promotion process (steps):
 
-1. **✓ Pre-promotion checks** (before promotion):
+1. **Pre-promotion checks** (before promotion):
    - Check source environment health
    - Verify target environment readiness
    - Check if all required tests passed
    - Verify no blocking issues in monitoring
 
-2. **⬆️ Deployment strategy**:
+2. **Deployment strategy**:
    - For **production**: `blue-green deployment` (safest)
    - For **staging**: `rolling deployment` (zero-downtime)
    - Automatic switching between old and new environment
 
-3. **✓ Post-promotion validation** (after promotion):
+3. **Post-promotion validation** (after promotion):
    - Check health check endpoint (`/api/health`)
    - Verify all services are running correctly
    - Check performance metrics
    - Verify no errors in logs
 
-### 4️⃣ Example command output
+### 4. Example command output
 
 ```bash
 $ dockerpilot promote staging prod --config myapp-deployment.yml
@@ -88,28 +88,28 @@ $ dockerpilot promote staging prod --config myapp-deployment.yml
 
 Promoting from staging to prod...
 
-✓ Source environment (staging) is healthy
-✓ Target environment (prod) is ready
-✓ All required tests have passed
-✓ No blocking issues in monitoring systems
+OK Source environment (staging) is healthy
+OK Target environment (prod) is ready
+OK All required tests have passed
+OK No blocking issues in monitoring systems
 
-🔄 Starting Blue-Green Deployment...
+REFRESH Starting Blue-Green Deployment...
   [████████████████████████████████] 100% - Building green environment...
   
-✅ Green environment ready
-🔄 Switching traffic to green...
-✅ Traffic switched successfully
-🔄 Removing old blue environment...
+OK Green environment ready
+REFRESH Switching traffic to green...
+OK Traffic switched successfully
+REFRESH Removing old blue environment...
 
-✓ Application is responding to health checks
-✓ All services are running correctly
-✓ Performance metrics are within acceptable ranges
-✓ No error spikes in logs
+OK Application is responding to health checks
+OK All services are running correctly
+OK Performance metrics are within acceptable ranges
+OK No error spikes in logs
 
-✅ Successfully promoted to prod
+OK Successfully promoted to prod
 ```
 
-### 5️⃣ Configuration Example
+### 5. Configuration Example
 
 #### Resource changes during promotion to prod:
 - **CPU**: increased to 2.0 (from 1.0 in staging)
@@ -136,22 +136,22 @@ deployment:
   memory_limit: '2Gi'
 ```
 
-### 6️⃣ What to check before promotion?
+### 6. What to check before promotion?
 
-1. ✅ Is the container running correctly in the source environment
-2. ✅ Is data backed up (volume `app_data`)
-3. ✅ Is configuration correct (especially passwords and environment variables)
-4. ✅ Is port 8080 available in target environment
-5. ✅ Do you have sufficient resources (CPU, memory) for target environment
+1. Is the container running correctly in the source environment
+2. Is data backed up (volume `app_data`)
+3. Is configuration correct (especially passwords and environment variables)
+4. Is port 8080 available in target environment
+5. Do you have sufficient resources (CPU, memory) for target environment
 
-### 7️⃣ Rollback
+### 7. Rollback
 
 If something goes wrong, DockerPilot automatically:
 - Detects problems during health check
 - Rolls back changes
 - Restores previous version
 
-### 8️⃣ Monitoring
+### 8. Monitoring
 
 After promotion you can monitor the container:
 ```bash
@@ -162,14 +162,14 @@ dockerpilot monitor myapp --duration 300
 dockerpilot deploy history --limit 10
 ```
 
-## 📝 Notes
+## Notes
 
 - **IMPORTANT**: Make sure passwords and environment variables are properly configured for production
 - **Backup**: Always backup data before promoting to production (volume `app_data`)
 - **Testing**: Best to test promotion on staging first
 - **Monitoring**: Monitor container for several hours after promotion
 
-## 🔗 Related Commands
+## Related Commands
 
 ```bash
 # List containers

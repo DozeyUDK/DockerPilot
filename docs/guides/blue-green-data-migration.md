@@ -1,6 +1,6 @@
 # Blue-Green Deployment Data Migration
 
-## ✅ What Was Fixed
+## What Was Fixed
 
 ### Problem:
 Blue-green deployment was not migrating data from the active container to the new container, causing data and configuration loss.
@@ -25,7 +25,7 @@ Added automatic data migration during blue-green deployment:
    - Before validation and traffic switching
    - Both containers run in parallel during migration
 
-## 🔧 Added Functions
+## Added Functions
 
 ### `_migrate_container_data(source_container, target_container, config)`
 Main data migration function:
@@ -43,22 +43,22 @@ Copies data between bind mounts on the host.
 ### `_copy_container_files(source_container, target_container, source_path, container_name)`
 Copies files from one container to another using `docker cp`.
 
-## 📋 Supported Cases
+## Supported Cases
 
 ### Databases:
-- ✅ **DB2**: Copying `/database/config/` and `/database/data/`
-- ✅ **InfluxDB**: Copying `/etc/influxdb2/` and `/var/lib/influxdb2/`
-- ✅ **PostgreSQL**: Copying `/var/lib/postgresql/data/`
-- ✅ **MySQL**: Copying `/var/lib/mysql/`
-- ✅ **MongoDB**: Automatic detection
-- ✅ **Elasticsearch**: Automatic detection
+- **DB2**: Copying `/database/config/` and `/database/data/`
+- **InfluxDB**: Copying `/etc/influxdb2/` and `/var/lib/influxdb2/`
+- **PostgreSQL**: Copying `/var/lib/postgresql/data/`
+- **MySQL**: Copying `/var/lib/mysql/`
+- **MongoDB**: Automatic detection
+- **Elasticsearch**: Automatic detection
 
 ### Volume Types:
-- ✅ **Named volumes**: Full data migration
-- ✅ **Bind mounts**: Checking shared paths and copying if needed
-- ✅ **Shared volumes**: Automatic detection (no migration needed)
+- **Named volumes**: Full data migration
+- **Bind mounts**: Checking shared paths and copying if needed
+- **Shared volumes**: Automatic detection (no migration needed)
 
-## 🎯 How It Works
+## How It Works
 
 1. **Creating new container (blue/green)**
    - Container is created with the same volume definitions from config
@@ -76,21 +76,21 @@ Copies files from one container to another using `docker cp`.
    - Switching traffic to new container
    - Final container uses the same volumes, so data is available
 
-## ⚠️ Important Notes
+## Important Notes
 
 1. **Named volumes**: If volumes are different between containers, data is copied
 2. **Bind mounts**: If they use the same host paths, data is automatically available
 3. **Files inside container**: Only files in volumes are migrated - files in container without volumes are not moved (this is normal container behavior)
 4. **Migration errors**: If migration fails, deployment continues with a warning (does not block deployment)
 
-## 🚀 Benefits
+## Benefits
 
-- ✅ **Zero data loss** during blue-green deployment
-- ✅ **Automatic migration** - no manual intervention required
-- ✅ **Database support** - special handling for DB2, InfluxDB, etc.
-- ✅ **Safe** - migration does not block deployment if it fails
+- **Zero data loss** during blue-green deployment
+- **Automatic migration** - no manual intervention required
+- **Database support** - special handling for DB2, InfluxDB, etc.
+- **Safe** - migration does not block deployment if it fails
 
-## 📝 Usage Example
+## Usage Example
 
 ```bash
 dockerpilot promote staging prod --config myapp-deployment.yml
@@ -103,4 +103,4 @@ During this process:
 4. Traffic is switched
 5. Old container is removed
 
-All without data loss! 🎉
+All without data loss!
