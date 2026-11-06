@@ -1715,7 +1715,7 @@ function Environments() {
                 borderRadius: '6px',
                 border: '1px solid #334155',
                 padding: '10px',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontFamily: '"DockerPilot Nerd Symbols", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                 fontSize: '12px',
                 lineHeight: '1.45'
               }}>
@@ -2869,7 +2869,7 @@ function Environments() {
                         color: 'var(--text-primary)',
                         border: '1px solid var(--input-border)',
                         borderRadius: '4px',
-                        fontFamily: 'monospace',
+                        fontFamily: '"DockerPilot Nerd Symbols", monospace',
                         fontSize: '0.85rem',
                         boxSizing: 'border-box'
                       }}
@@ -2970,7 +2970,7 @@ function Environments() {
                     border: '1px solid var(--input-border)',
                     borderRadius: '4px',
                     boxSizing: 'border-box',
-                    fontFamily: 'monospace'
+                    fontFamily: '"DockerPilot Nerd Symbols", monospace'
                   }}
                 />
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
@@ -3012,7 +3012,7 @@ function Environments() {
                   {testingServerResult.message || testingServerResult.error || 'Test result'}
                   {testingServerResult.host_key_required && testingServerResult.host_key_fingerprint && (
                     <div style={{ marginTop: '0.75rem' }}>
-                      <div style={{ fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: '0.5rem' }}>
+                      <div style={{ fontFamily: '"DockerPilot Nerd Symbols", monospace', wordBreak: 'break-all', marginBottom: '0.5rem' }}>
                         {testingServerResult.host_key_fingerprint}
                       </div>
                       <button

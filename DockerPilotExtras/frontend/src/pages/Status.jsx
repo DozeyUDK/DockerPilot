@@ -798,7 +798,7 @@ function Status() {
               </button>
             </div>
             <div style={{
-              fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", Consolas, Monaco, "Courier New", monospace',
               fontSize: '0.85rem',
               whiteSpace: 'pre-wrap',
               color: '#333'
@@ -838,7 +838,7 @@ function Status() {
           ref={cliOutputRef}
           className="cli-output-container status-cli-output"
           style={{
-            fontFamily: '"Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
+            fontFamily: '"DockerPilot Nerd Symbols", "Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
             overflowY: 'auto',
             overflowX: 'auto',
             wordBreak: 'keep-all',
@@ -855,7 +855,7 @@ function Status() {
             <pre style={{
               margin: 0,
               padding: 0,
-              fontFamily: '"Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", "Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
               fontSize: '0.8rem',
               whiteSpace: 'pre',
               wordBreak: 'keep-all',
@@ -927,7 +927,7 @@ function Status() {
             disabled={cliLoading || !selectedServerReady}
             className="status-cli-input"
             style={{
-              fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", Consolas, Monaco, "Courier New", monospace',
               backgroundColor: cliLoading ? 'var(--bg-tertiary)' : 'var(--input-bg)',
               minWidth: 0 // Allows shrinking
             }}
