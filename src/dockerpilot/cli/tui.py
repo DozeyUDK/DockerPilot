@@ -1,6 +1,7 @@
 """Mouse-friendly Textual UI for DockerPilot."""
 
 from __future__ import annotations
+from dockerpilot.ui_icons import icon
 
 import argparse
 import asyncio
@@ -1277,7 +1278,7 @@ def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str]) ->
 def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
     """Launch the optional mouse-friendly terminal UI."""
     if not TEXTUAL_AVAILABLE:
-        pilot.console.print("[red]❌ Textual is not installed.[/red]")
+        pilot.console.print(f"[red]{icon('error')} Textual is not installed.[/red]")
         pilot.console.print(
             'Install it with: python -m pip install -e ".[tui]"',
             style="yellow",

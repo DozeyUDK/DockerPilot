@@ -1,5 +1,6 @@
 """Container data migration helpers extracted from BackupRestoreMixin."""
 
+from dockerpilot.ui_icons import icon
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ def migrate_container_data(host: Any, source_container, target_container, config
             host.logger.info("No source container to migrate data from")
             return True
 
-        host.console.print(f"[cyan]📦 Migrating data from '{source_container.name}' to '{target_container.name}'...[/cyan]")
+        host.console.print(f"[cyan]{icon('package')} Migrating data from '{source_container.name}' to '{target_container.name}'...[/cyan]")
 
         # Get mounts from both containers
         source_mounts = source_container.attrs.get('Mounts', [])
@@ -103,7 +104,7 @@ def migrate_container_data(host: Any, source_container, target_container, config
                 success = host._copy_volume_data(source_volume_name, target_volume_name, config.container_name)
                 if success:
                     migrated_count += 1
-                    host.console.print(f"[green]✅ Migrated volume '{source_volume_name}' to '{target_volume_name}'[/green]")
+                    host.console.print(f"[green]{icon('success')} Migrated volume '{source_volume_name}' to '{target_volume_name}'[/green]")
                 else:
                     host.logger.warning(f"Failed to migrate volume '{source_volume_name}', continuing...")
 
@@ -124,7 +125,7 @@ def migrate_container_data(host: Any, source_container, target_container, config
                     success = host._copy_bind_mount_data(source_path, target_path, config.container_name)
                     if success:
                         migrated_count += 1
-                        host.console.print(f"[green]✅ Migrated bind mount '{source_path}' to '{target_path}'[/green]")
+                        host.console.print(f"[green]{icon('success')} Migrated bind mount '{source_path}' to '{target_path}'[/green]")
                     else:
                         host.logger.warning(f"Failed to migrate bind mount '{source_path}', continuing...")
                 else:
@@ -134,7 +135,7 @@ def migrate_container_data(host: Any, source_container, target_container, config
         db_config = host._get_database_config(config.image_tag)
 
         if db_config:
-            host.console.print(f"[cyan]📋 Detected database container, migrating configuration files...[/cyan]")
+            host.console.print(f"[cyan]{icon('clipboard')} Detected database container, migrating configuration files...[/cyan]")
 
             # Get config paths from database configuration
             config_paths = db_config.get('config_paths', [])
@@ -142,14 +143,14 @@ def migrate_container_data(host: Any, source_container, target_container, config
             for config_path in config_paths:
                 success = host._copy_container_files(source_container, target_container, config_path, config.container_name)
                 if success:
-                    host.console.print(f"[green]✅ Migrated config from '{config_path}'[/green]")
+                    host.console.print(f"[green]{icon('success')} Migrated config from '{config_path}'[/green]")
 
-        host.console.print(f"[green]✅ Data migration completed: {migrated_count} volumes migrated, {skipped_count} skipped[/green]")
+        host.console.print(f"[green]{icon('success')} Data migration completed: {migrated_count} volumes migrated, {skipped_count} skipped[/green]")
         return True
 
     except Exception as e:
         host.logger.error(f"Data migration failed: {e}")
-        host.console.print(f"[yellow]⚠️ Data migration failed: {e}, continuing deployment...[/yellow]")
+        host.console.print(f"[yellow]{icon('warning')} Data migration failed: {e}, continuing deployment...[/yellow]")
         # Don't fail deployment if migration fails - just log warning
         return True  # Return True to not block deployment
 

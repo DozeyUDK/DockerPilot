@@ -1,6 +1,7 @@
 """Process/bootstrap helpers for the DockerPilot composition root."""
 
 from __future__ import annotations
+from dockerpilot.ui_icons import icon
 
 import json
 import logging
@@ -111,7 +112,7 @@ def initialize_docker_client(console: Any, logger: Any, max_retries: int = 3) ->
             if attempt == max_retries - 1:
                 logger.error(f"Failed to connect to Docker daemon after {max_retries} attempts ({error_type}): {error_msg}")
                 if console is not None:
-                    console.print("[bold red]❌ Cannot connect to Docker daemon![/bold red]")
+                    console.print(f"[bold red]{icon('error')} Cannot connect to Docker daemon![/bold red]")
                 return None
             time.sleep(2)
     return None

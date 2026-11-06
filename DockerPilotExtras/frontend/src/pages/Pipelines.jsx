@@ -343,7 +343,7 @@ function Pipelines() {
             <div className="pipeline-stage-overview">
               {orderedStages(formData.stages).map(({ stage, selected }, index) => (
                 <span key={stage} className={selected ? 'stage-chip stage-chip-active' : 'stage-chip'}>
-                  {index + 1}. {stage}{selected ? ' ✓' : ''}
+                  {index + 1}. {stage}{selected ? ' ' : ''}
                 </span>
               ))}
             </div>
@@ -385,7 +385,7 @@ function Pipelines() {
                 }}
                 title="Refresh image list"
               >
-                {loadingImages ? '⏳' : '🔄'}
+                {loadingImages ? '' : ''}
               </button>
               <button 
                 type="button"
@@ -398,7 +398,7 @@ function Pipelines() {
                 }}
                 title="Browse Docker images"
               >
-                🐳
+                
               </button>
             </label>
             <div style={{ position: 'relative' }}>
@@ -480,7 +480,7 @@ function Pipelines() {
                 }}
                 title="Refresh Dockerfile list"
               >
-                {loadingDockerfiles ? '⏳' : '🔄'}
+                {loadingDockerfiles ? '' : ''}
               </button>
               <button 
                 type="button"
@@ -493,7 +493,7 @@ function Pipelines() {
                 }}
                 title="Browse files"
               >
-                📁
+                
               </button>
             </label>
             <div style={{ position: 'relative' }}>
@@ -925,7 +925,7 @@ function Pipelines() {
                     }}
                   >
                     <span className="browser-item-icon" aria-hidden="true">
-                      {item.is_dir ? '📁' : isDockerfile ? '🐳' : '📄'}
+                      {item.is_dir ? '' : isDockerfile ? '' : ''}
                     </span>
                     <span className="browser-item-content">
                       <span className="browser-item-name">{item.name}</span>
@@ -975,7 +975,7 @@ function Pipelines() {
                   className="browser-item"
                   onClick={() => selectImageFromBrowser(img.name)}
                 >
-                  <span className="browser-item-icon browser-item-icon-large" aria-hidden="true">🐳</span>
+                  <span className="browser-item-icon browser-item-icon-large" aria-hidden="true"></span>
                   <span className="browser-item-content">
                     <span className="browser-item-name">{img.name}</span>
                     <span className="browser-item-meta">

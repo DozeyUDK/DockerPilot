@@ -1,3 +1,4 @@
+import { ICONS } from '../icons.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -13,8 +14,8 @@ test('server options always begin with local and preserve remote connection cont
   ])
 
   assert.deepEqual(options, [
-    { id: 'local', name: 'Local', detail: 'This DockerPilot host', icon: '🏠' },
-    { id: 'edge-1', name: 'Edge', label: 'Edge (edge.internal)', detail: 'deploy@edge.internal:22', icon: '🖥️' },
+    { id: 'local', name: 'Local', detail: 'This DockerPilot host', icon: ICONS.home },
+    { id: 'edge-1', name: 'Edge', label: 'Edge (edge.internal)', detail: 'deploy@edge.internal:22', icon: ICONS.server },
   ])
   assert.equal(getServerOptionLabel('edge-1', options), 'Edge (edge.internal)')
   assert.equal(getServerOptionLabel('missing', options), 'missing')

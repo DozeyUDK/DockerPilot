@@ -1,5 +1,6 @@
 """Environment promotion workflows extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,7 @@ def environment_promotion(
             if existing_prod_container and existing_prod_container.status == 'running':
                 # Container already exists in PROD - don't create duplicate for STAGING
                 # Just save config and record promotion without deploying
-                host.console.print(f"[yellow]⚠️ Container '{original_container_name}' already exists in PROD[/yellow]")
+                host.console.print(f"[yellow]{icon('warning')} Container '{original_container_name}' already exists in PROD[/yellow]")
                 host.console.print(f"[cyan]Saving STAGING configuration without creating new container...[/cyan]")
 
                 # Save config for staging (will be used for future deployments)
@@ -118,7 +119,7 @@ def environment_promotion(
                 deployment_config = host._deployment_config_from_dict(config['deployment'])
                 host._record_deployment(deployment_id, deployment_config, f'promotion-{target_env}', True, duration, target_env=target_env)
 
-                host.console.print(f"[green]✓ STAGING configuration saved. Container already running in PROD, no new deployment needed.[/green]")
+                host.console.print(f"[green]{icon('success')} STAGING configuration saved. Container already running in PROD, no new deployment needed.[/green]")
                 return True
 
         # Run pre-promotion checks
@@ -206,7 +207,7 @@ def run_pre_promotion_checks(host: Any, source_env: str, target_env: str) -> boo
     for check in checks:
         # Simulate check (replace with real logic)
         time.sleep(1)
-        host.console.print(f"[green]✓[/green] {check}")
+        host.console.print(f"[green]{icon('success')}[/green] {check}")
 
     return True
 
@@ -233,6 +234,6 @@ def run_post_promotion_validation(
     # Additional validation checks would go here
     for check in validation_checks:
         time.sleep(1)
-        host.console.print(f"[green]✓[/green] {check}")
+        host.console.print(f"[green]{icon('success')}[/green] {check}")
 
     return True

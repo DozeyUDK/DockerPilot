@@ -1,5 +1,6 @@
 """Rolling deployment strategy extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from typing import Any
 import time
@@ -13,7 +14,7 @@ from ..models import DeploymentConfig
 
 def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bool:
     """Enhanced rolling deployment with zero-downtime and full logging"""
-    host.console.print(f"\n[bold cyan]🚀 ROLLING DEPLOYMENT STARTED[/bold cyan]")
+    host.console.print(f"\n[bold cyan]{icon('deploy')} ROLLING DEPLOYMENT STARTED[/bold cyan]")
 
     deployment_start = datetime.now()
     deployment_id = f"deploy_{int(deployment_start.timestamp())}"
@@ -32,35 +33,35 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
     ) as progress:
 
         # Phase 1: Prepare image (check, pull, or build)
-        build_task = progress.add_task("🔨 Preparing image...", total=None)
+        build_task = progress.add_task(f"{icon('build')} Preparing image...", total=None)
         try:
             success, message = host._prepare_image(config.image_tag, build_config, config.container_name)
             if not success:
-                progress.update(build_task, description=f"❌ {message}")
-                host.console.print(f"[bold red]❌ {message}[/bold red]")
+                progress.update(build_task, description=f"{icon('error')} {message}")
+                host.console.print(f"[bold red]{icon('error')} {message}[/bold red]")
                 return False
-            progress.update(build_task, description=f"✅ {message}")
+            progress.update(build_task, description=f"{icon('success')} {message}")
         except Exception as e:
-            progress.update(build_task, description="❌ Image preparation failed")
+            progress.update(build_task, description=f"{icon('error')} Image preparation failed")
             host.logger.error(f"Image preparation failed: {e}")
-            host.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
+            host.console.print(f"[bold red]{icon('error')} Image preparation failed: {e}[/bold red]")
             return False
 
         # Phase 2: Check existing container
-        health_task = progress.add_task("🔍 Checking existing deployment...", total=None)
+        health_task = progress.add_task(f"{icon('search')} Checking existing deployment...", total=None)
         existing_container = None
         try:
             existing_container = host.client.containers.get(config.container_name)
             if existing_container.status == "running":
-                progress.update(health_task, description="✅ Found running container")
+                progress.update(health_task, description=f"{icon('success')} Found running container")
             else:
-                progress.update(health_task, description="⚠️ Container exists but not running")
+                progress.update(health_task, description=f"{icon('warning')} Container exists but not running")
         except docker.errors.NotFound:
-            progress.update(health_task, description="ℹ️ No existing container (first deployment)")
+            progress.update(health_task, description=f"{icon('info')} No existing container (first deployment)")
 
         # Phase 3: Create and start new container with temporary name
         temp_name = f"{config.container_name}_new_{deployment_id}"
-        deploy_task = progress.add_task("🚀 Deploying new version...", total=None)
+        deploy_task = progress.add_task(f"{icon('deploy')} Deploying new version...", total=None)
         try:
             # Add command if provided in config (for images that exit immediately without command)
             create_kwargs = {
@@ -83,9 +84,9 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
             # Start container
             try:
                 new_container.start()
-                progress.update(deploy_task, description="✅ New container started")
+                progress.update(deploy_task, description=f"{icon('success')} New container started")
             except Exception as e:
-                progress.update(deploy_task, description="❌ New container deployment failed")
+                progress.update(deploy_task, description=f"{icon('error')} New container deployment failed")
                 host.logger.error(f"Container start failed: {e}")
                 try:
                     logs = new_container.logs().decode()
@@ -112,13 +113,13 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
                 host.logger.warning(f"Could not verify container status: {e}")
 
         except Exception as e:
-            progress.update(deploy_task, description="❌ New container creation failed")
+            progress.update(deploy_task, description=f"{icon('error')} New container creation failed")
             host.logger.error(f"New container creation failed: {e}")
             return False
 
         # Phase 4: Health check new container (only if ports are mapped)
         if config.port_mapping:
-            health_check_task = progress.add_task("🩺 Health checking new deployment...", total=None)
+            health_check_task = progress.add_task(f"{icon('health')} Health checking new deployment...", total=None)
             host_port = list(config.port_mapping.values())[0]
 
             # Wait a bit more and verify container is running before health check
@@ -126,7 +127,7 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
             try:
                 new_container.reload()
                 if new_container.status != "running":
-                    progress.update(health_check_task, description="❌ Container not running")
+                    progress.update(health_check_task, description=f"{icon('error')} Container not running")
                     new_container.stop()
                     new_container.remove()
                     return False
@@ -139,7 +140,7 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
                 config.health_check_timeout,
                 config.health_check_retries
             ):
-                progress.update(health_check_task, description="❌ Health check failed - rolling back")
+                progress.update(health_check_task, description=f"{icon('error')} Health check failed - rolling back")
                 try:
                     logs = new_container.logs().decode()
                     host.logger.error(f"Health check failed. Container logs:\n{logs}")
@@ -153,21 +154,21 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
                 except Exception as e:
                     host.logger.error(f"Rollback failed: {e}")
                 return False
-            progress.update(health_check_task, description="✅ Health check passed")
+            progress.update(health_check_task, description=f"{icon('success')} Health check passed")
         else:
-            progress.add_task("🩺 No port mapping, skipping health check", total=None)
+            progress.add_task(f"{icon('health')} No port mapping, skipping health check", total=None)
 
         # Phase 5: Traffic switch (stop old, rename new)
-        switch_task = progress.add_task("🔄 Switching traffic...", total=None)
+        switch_task = progress.add_task(f"{icon('refresh')} Switching traffic...", total=None)
         try:
             if existing_container and existing_container.status == "running":
                 existing_container.stop(timeout=10)
                 existing_container.remove()
 
             new_container.rename(config.container_name)
-            progress.update(switch_task, description="✅ Traffic switched successfully")
+            progress.update(switch_task, description=f"{icon('success')} Traffic switched successfully")
         except Exception as e:
-            progress.update(switch_task, description="❌ Traffic switch failed")
+            progress.update(switch_task, description=f"{icon('error')} Traffic switch failed")
             host.logger.error(f"Traffic switch failed: {e}")
             return False
 
@@ -176,7 +177,7 @@ def rolling_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> b
     duration = deployment_end - deployment_start
     host._record_deployment(deployment_id, config, "rolling", True, duration)
 
-    host.console.print(f"\n[bold green]🎉 ROLLING DEPLOYMENT COMPLETED SUCCESSFULLY![/bold green]")
+    host.console.print(f"\n[bold green]{icon('celebrate')} ROLLING DEPLOYMENT COMPLETED SUCCESSFULLY![/bold green]")
     host.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
     if config.port_mapping:
         port = list(config.port_mapping.values())[0]

@@ -1,5 +1,6 @@
 """Container lifecycle operations extracted from ContainerManager."""
 
+from dockerpilot.ui_icons import icon
 from typing import Any
 import time
 
@@ -21,7 +22,7 @@ def container_operation(host: Any, operation: str, container_name: str, **kwargs
     }
 
     if operation not in operations:
-        host.console.print(f"[bold red]❌ Unknown operation: {operation}[/bold red]")
+        host.console.print(f"[bold red]{icon('error')} Unknown operation: {operation}[/bold red]")
         return False
 
     progress_verbs = {
@@ -55,12 +56,12 @@ def container_operation(host: Any, operation: str, container_name: str, **kwargs
         try:
             result = operations[operation](container_name, **kwargs)
             if result:
-                progress.update(task, description=f"✅ Container {container_name} {verb_past} successfully")
+                progress.update(task, description=f"{icon('success')} Container {container_name} {verb_past} successfully")
             else:
-                progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
+                progress.update(task, description=f"{icon('error')} Failed to {operation} container {container_name}")
             return result
         except Exception as exc:
-            progress.update(task, description=f"❌ Failed to {operation} container {container_name}")
+            progress.update(task, description=f"{icon('error')} Failed to {operation} container {container_name}")
             host.logger.error(f"Container {operation} failed: {exc}")
             return False
 
@@ -92,7 +93,7 @@ def start_container(host: Any, container_name: str, **kwargs) -> bool:
         container = host.client.containers.get(container_name)
 
         if container.status == "running":
-            host.console.print(f"[yellow]⚠️ Container {container_name} is already running[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')} Container {container_name} is already running[/yellow]")
             return True
 
         container.start()
@@ -107,7 +108,7 @@ def stop_container(host: Any, container_name: str, timeout: int = 10, **kwargs) 
         container = host.client.containers.get(container_name)
 
         if container.status == "exited":
-            host.console.print(f"[yellow]⚠️ Container {container_name} is already stopped[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')} Container {container_name} is already stopped[/yellow]")
             return True
 
         container.stop(timeout=timeout)
@@ -132,7 +133,7 @@ def remove_container(host: Any, container_name: str, force: bool = False, **kwar
 
         if container.status == "running" and not force:
             if not Confirm.ask(f"Container {container_name} is running. Force removal?"):
-                host.console.print("[yellow]❌ Removal cancelled[/yellow]")
+                host.console.print(f"[yellow]{icon('error')} Removal cancelled[/yellow]")
                 return False
 
         container.remove(force=force)
@@ -188,16 +189,16 @@ def stop_and_remove_container(host: Any, container_name: str, timeout: int = 10)
     with host._error_handler(f"stop and remove {container_name}", container_name):
         container = host.client.containers.get(container_name)
 
-        host.console.print(f"[cyan]🛑 Stopping container {container_name}...[/cyan]")
+        host.console.print(f"[cyan]{icon('stop')} Stopping container {container_name}...[/cyan]")
         if container.status == "running":
             container.stop(timeout=timeout)
-            host.console.print("[green]✅ Container stopped[/green]")
+            host.console.print(f"[green]{icon('success')} Container stopped[/green]")
         else:
-            host.console.print("[yellow]ℹ️ Container was not running[/yellow]")
+            host.console.print(f"[yellow]{icon('info')} Container was not running[/yellow]")
 
-        host.console.print(f"[cyan]🗑️ Removing container {container_name}...[/cyan]")
+        host.console.print(f"[cyan]{icon('delete')} Removing container {container_name}...[/cyan]")
         container.remove()
-        host.console.print(f"[green]✅ Container {container_name} removed[/green]")
+        host.console.print(f"[green]{icon('success')} Container {container_name} removed[/green]")
 
         host.logger.info(f"Container {container_name} stopped and removed")
         return True

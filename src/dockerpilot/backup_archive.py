@@ -1,5 +1,6 @@
 """Low-level backup archive/runtime helpers extracted from BackupRestoreMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,7 @@ def backup_volume_using_docker(host: Any, volume_name: str, backup_file: Path, c
                     process.kill()
                 host.logger.error(f"Volume backup timed out for {volume_name} after {elapsed:.1f}s")
                 if container_name:
-                    host._update_progress('backup', 95, f'❌ Backup timeout for volume: {volume_name}')
+                    host._update_progress('backup', 95, f'{icon("error")} Backup timeout for volume: {volume_name}')
                 # Clean up any orphaned backup containers
                 host._cleanup_backup_containers()
                 return False
@@ -103,7 +104,7 @@ def backup_volume_using_docker(host: Any, volume_name: str, backup_file: Path, c
                     process.kill()
                 if container_name:
                     progress_pct = min(90, int((elapsed / timeout) * 100))
-                    host._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {volume_name}')
+                    host._update_progress('backup', progress_pct, f'{icon("warning")} Backup cancelled: {volume_name}')
                 # Clean up any orphaned backup containers
                 host._cleanup_backup_containers()
                 return False
@@ -118,7 +119,7 @@ def backup_volume_using_docker(host: Any, volume_name: str, backup_file: Path, c
                 current_size = backup_file.stat().st_size if backup_file.exists() else 0
                 size_mb = current_size / (1024 * 1024) if current_size > 0 else 0
                 progress_pct = min(90, int((elapsed / timeout) * 100))
-                host._update_progress('backup', progress_pct, f'📦 Creating backup of volume: {volume_name}... ({int(elapsed)}s, {size_mb:.1f} MB)')
+                host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of volume: {volume_name}... ({int(elapsed)}s, {size_mb:.1f} MB)')
                 last_progress_update = elapsed
 
             # Log progress periodically (for console)
@@ -166,7 +167,7 @@ def backup_volume_using_docker(host: Any, volume_name: str, backup_file: Path, c
 
             host.logger.info(f"Volume {volume_name} backed up successfully using Docker")
             if container_name:
-                host._update_progress('backup', 90, f'✅ Zbackupowano volume: {volume_name}')
+                host._update_progress('backup', 90, f'{icon("success")} Zbackupowano volume: {volume_name}')
             return True
         else:
             # Log stderr but don't fail on socket warnings
@@ -323,7 +324,7 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
                 # Clean up any orphaned backup containers
                 host._cleanup_backup_containers()
                 if container_name:
-                    host._update_progress('backup', 95, f'❌ Backup timeout for {source.name}')
+                    host._update_progress('backup', 95, f'{icon("error")} Backup timeout for {source.name}')
                 return False
 
             # Check for cancellation
@@ -338,13 +339,13 @@ def backup_bind_mount_using_docker(host: Any, source_path: str, backup_file: Pat
                 host._cleanup_backup_containers()
                 if container_name:
                     progress_pct = min(90, int((elapsed / timeout) * 100))
-                    host._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {source.name}')
+                    host._update_progress('backup', progress_pct, f'{icon("warning")} Backup cancelled: {source.name}')
                 return False
 
             # Update progress periodically during backup
             if container_name and elapsed - last_progress_update >= progress_update_interval:
                 progress_pct = min(90, int((elapsed / timeout) * 100))
-                host._update_progress('backup', progress_pct, f'📦 Creating backup of {source.name}... ({int(elapsed)}s)')
+                host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of {source.name}... ({int(elapsed)}s)')
                 last_progress_update = elapsed
 
             # Check if process finished
@@ -476,7 +477,7 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                                 process.kill()
                             host.logger.error(f"Backup timed out for {source_path}")
                             if container_name:
-                                host._update_progress('backup', 95, f'❌ Backup timeout for {Path(source_path).name}')
+                                host._update_progress('backup', 95, f'{icon("error")} Backup timeout for {Path(source_path).name}')
                             return False
 
                         # Check for cancellation
@@ -488,13 +489,13 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                             except subprocess.TimeoutExpired:
                                 process.kill()
                             if container_name:
-                                host._update_progress('backup', int((elapsed / timeout) * 100), f'⚠️ Backup cancelled: {Path(source_path).name}')
+                                host._update_progress('backup', int((elapsed / timeout) * 100), f'{icon("warning")} Backup cancelled: {Path(source_path).name}')
                             return False
 
                         # Update progress periodically during backup
                         if container_name and elapsed - last_progress_update >= progress_update_interval:
                             progress_pct = min(90, int((elapsed / timeout) * 100))
-                            host._update_progress('backup', progress_pct, f'📦 Creating backup of {Path(source_path).name}... ({int(elapsed)}s)')
+                            host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of {Path(source_path).name}... ({int(elapsed)}s)')
                             last_progress_update = elapsed
 
                         # Check if process finished
@@ -537,7 +538,7 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                     f"Local sudo credential required for direct backup of {source_path}"
                 )
                 host.console.print(
-                    f"[red]❌ Direct privileged tar is unavailable for {source_path}[/red]"
+                    f"[red]{icon('error')} Direct privileged tar is unavailable for {source_path}[/red]"
                 )
                 return False
         else:
@@ -554,7 +555,7 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
             console=host.console
         ) as progress:
             backup_task = progress.add_task(
-                f"📦 Backing up {source.name}...",
+                f"{icon('package')} Backing up {source.name}...",
                 total=100
             )
 
@@ -581,10 +582,10 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                    progress.update(backup_task, description="❌ Backup timed out")
+                    progress.update(backup_task, description=f"{icon('error')} Backup timed out")
                     host.logger.error(f"Backup timed out for {source_path}")
                     if container_name:
-                        host._update_progress('backup', 95, f'❌ Backup timeout for {source.name}')
+                        host._update_progress('backup', 95, f'{icon("error")} Backup timeout for {source.name}')
                     return False
 
                 # Check for cancellation
@@ -595,21 +596,21 @@ def backup_directory(host: Any, source_path: str, backup_file: Path, container_n
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                    progress.update(backup_task, description="⚠️ Backup cancelled")
+                    progress.update(backup_task, description=f"{icon('warning')} Backup cancelled")
                     if container_name:
                         progress_pct = min(90, int((elapsed / timeout) * 100))
-                        host._update_progress('backup', progress_pct, f'⚠️ Backup cancelled: {source.name}')
+                        host._update_progress('backup', progress_pct, f'{icon("warning")} Backup cancelled: {source.name}')
                     return False
 
                 # Update progress periodically during backup (for web interface)
                 if container_name and elapsed - last_progress_update >= progress_update_interval:
                     progress_pct = min(90, int((elapsed / timeout) * 100))
-                    host._update_progress('backup', progress_pct, f'📦 Creating backup of {source.name}... ({int(elapsed)}s)')
+                    host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of {source.name}... ({int(elapsed)}s)')
                     last_progress_update = elapsed
 
                 # Check if process finished
                 if process.poll() is not None:
-                    progress.update(backup_task, completed=100, description="✅ Backup completed")
+                    progress.update(backup_task, completed=100, description=f"{icon('success')} Backup completed")
                     break
 
                 # Update progress based on file size growth (for console)

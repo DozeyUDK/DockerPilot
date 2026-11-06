@@ -1,16 +1,18 @@
+import { ICONS } from '../icons.mjs'
+
 export const buildServerOptions = (servers = []) => [
   {
     id: 'local',
     name: 'Local',
     detail: 'This DockerPilot host',
-    icon: '🏠',
+    icon: ICONS.home,
   },
   ...servers.map(server => ({
     id: server.id,
     name: server.name || server.id,
     label: `${server.name || server.id} (${server.hostname})`,
     detail: `${server.username}@${server.hostname}:${server.port}`,
-    icon: '🖥️',
+    icon: ICONS.server,
   })),
 ]
 

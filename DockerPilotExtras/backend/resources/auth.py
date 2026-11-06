@@ -186,7 +186,7 @@ def create_auth_resources(
                         else "No privileged backup authorization required"
                     ),
                     "warning": (
-                        "⚠️ Large disks detected "
+                        "WARN Large disks detected "
                         f"(used: {total_size_tb:.2f} TB, capacity: {total_capacity_tb:.2f} TB). "
                         "Backup may take a very long time!"
                         if has_large_mounts

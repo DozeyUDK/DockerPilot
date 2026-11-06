@@ -4,6 +4,7 @@ import { useTheme } from '../contexts/ThemeContext'
 import { useAuth } from '../contexts/AuthContext'
 import { PRIMARY_NAV_ITEMS, isNavItemActive } from '../utils/navigation.mjs'
 import ServerSelector from './ServerSelector'
+import { ICONS } from '../icons.mjs'
 
 function AppNavigation() {
   const location = useLocation()
@@ -56,7 +57,7 @@ function AppNavigation() {
               aria-label={themeAction}
               title={themeAction}
             >
-              <span aria-hidden="true">{theme === 'dark' ? '☀️' : '🌙'}</span>
+              <span aria-hidden="true">{theme === 'dark' ? ICONS.sun : ICONS.moon}</span>
             </button>
           </div>
         </div>

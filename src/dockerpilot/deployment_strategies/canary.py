@@ -1,5 +1,6 @@
 """Canary deployment strategy extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from typing import Any
 import time
@@ -13,7 +14,7 @@ from ..models import DeploymentConfig
 
 def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bool:
     """Canary deployment with gradual traffic shifting"""
-    host.console.print(f"\n[bold cyan]🐤 CANARY DEPLOYMENT STARTED[/bold cyan]")
+    host.console.print(f"\n[bold cyan]{icon('canary')} CANARY DEPLOYMENT STARTED[/bold cyan]")
 
     # This would require a load balancer integration
     # For now, we'll implement a simplified version
@@ -23,23 +24,23 @@ def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bo
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
 
         # Prepare image
-        build_task = progress.add_task("🔨 Preparing canary image...", total=None)
+        build_task = progress.add_task(f"{icon('build')} Preparing canary image...", total=None)
         try:
             success, message = host._prepare_image(config.image_tag, build_config, config.container_name)
             if not success:
-                progress.update(build_task, description=f"❌ {message}")
-                host.console.print(f"[bold red]❌ {message}[/bold red]")
+                progress.update(build_task, description=f"{icon('error')} {message}")
+                host.console.print(f"[bold red]{icon('error')} {message}[/bold red]")
                 return False
-            progress.update(build_task, description=f"✅ {message}")
+            progress.update(build_task, description=f"{icon('success')} {message}")
         except Exception as e:
-            progress.update(build_task, description="❌ Image preparation failed")
+            progress.update(build_task, description=f"{icon('error')} Image preparation failed")
             host.logger.error(f"Image preparation failed: {e}")
-            host.console.print(f"[bold red]❌ Image preparation failed: {e}[/bold red]")
+            host.console.print(f"[bold red]{icon('error')} Image preparation failed: {e}[/bold red]")
             return False
 
         # Deploy canary container (5% traffic simulation)
         canary_name = f"{config.container_name}_canary"
-        canary_task = progress.add_task("🚀 Deploying canary (5% traffic)...", total=None)
+        canary_task = progress.add_task(f"{icon('deploy')} Deploying canary (5% traffic)...", total=None)
 
         # Use different port for canary
         canary_port_mapping = _offset_port_mapping_impl(config.port_mapping, 100)
@@ -64,19 +65,19 @@ def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bo
                 **host._get_resource_limits(config)
             )
 
-            progress.update(canary_task, description="✅ Canary deployed")
+            progress.update(canary_task, description=f"{icon('success')} Canary deployed")
             time.sleep(5)
 
         except Exception as e:
-            progress.update(canary_task, description="❌ Canary deployment failed")
+            progress.update(canary_task, description=f"{icon('error')} Canary deployment failed")
             return False
 
         # Monitor canary
-        monitor_task = progress.add_task("📊 Monitoring canary performance...", total=None)
+        monitor_task = progress.add_task(f"{icon('stats')} Monitoring canary performance...", total=None)
 
         canary_port = list(canary_port_mapping.values())[0]
         if not host._monitor_canary_performance(canary_port, duration=30):
-            progress.update(monitor_task, description="❌ Canary monitoring failed")
+            progress.update(monitor_task, description=f"{icon('error')} Canary monitoring failed")
             # Cleanup canary
             try:
                 canary_container.stop()
@@ -85,10 +86,10 @@ def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bo
                 pass
             return False
 
-        progress.update(monitor_task, description="✅ Canary performance acceptable")
+        progress.update(monitor_task, description=f"{icon('success')} Canary performance acceptable")
 
         # Promote canary to full deployment
-        promote_task = progress.add_task("⬆️ Promoting canary to full deployment...", total=None)
+        promote_task = progress.add_task(f"{icon('deploy')} Promoting canary to full deployment...", total=None)
 
         try:
             # Stop main container
@@ -115,10 +116,10 @@ def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bo
                 **host._get_resource_limits(config)
             )
 
-            progress.update(promote_task, description="✅ Canary promoted successfully")
+            progress.update(promote_task, description=f"{icon('success')} Canary promoted successfully")
 
         except Exception as e:
-            progress.update(promote_task, description="❌ Canary promotion failed")
+            progress.update(promote_task, description=f"{icon('error')} Canary promotion failed")
             return False
 
     deployment_end = datetime.now()
@@ -126,7 +127,7 @@ def canary_deploy(host: Any, config: DeploymentConfig, build_config: dict) -> bo
 
     host._record_deployment(f"canary_{int(deployment_start.timestamp())}", config, "canary", True, duration)
 
-    host.console.print(f"\n[bold green]🎉 CANARY DEPLOYMENT COMPLETED![/bold green]")
+    host.console.print(f"\n[bold green]{icon('celebrate')} CANARY DEPLOYMENT COMPLETED![/bold green]")
     host.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
 
     return True

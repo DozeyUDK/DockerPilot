@@ -1,6 +1,7 @@
 """Shared runtime support used by deployment and backup compatibility methods."""
 
 from __future__ import annotations
+from dockerpilot.ui_icons import icon
 
 import json
 import sys
@@ -132,19 +133,19 @@ def error_context(console: Any, logger: Any, operation: str, container_name: Opt
     except docker.errors.NotFound:
         error_msg = f"Container/Image not found: {container_name or 'unknown'}"
         logger.error(f"{operation} failed: {error_msg}")
-        console.print(f"[bold red]❌ {error_msg}[/bold red]")
+        console.print(f"[bold red]{icon('error')} {error_msg}[/bold red]")
     except docker.errors.APIError as exc:
         error_msg = f"Docker API error during {operation}: {exc}"
         logger.error(error_msg)
-        console.print(f"[bold red]❌ {error_msg}[/bold red]")
+        console.print(f"[bold red]{icon('error')} {error_msg}[/bold red]")
     except requests.exceptions.RequestException as exc:
         error_msg = f"Network error during {operation}: {exc}"
         logger.error(error_msg)
-        console.print(f"[bold red]❌ {error_msg}[/bold red]")
+        console.print(f"[bold red]{icon('error')} {error_msg}[/bold red]")
     except Exception as exc:
         error_msg = f"Unexpected error during {operation}: {exc}"
         logger.error(error_msg)
-        console.print(f"[bold red]❌ {error_msg}[/bold red]")
+        console.print(f"[bold red]{icon('error')} {error_msg}[/bold red]")
 
 
 def parse_multi_target(target_string: str) -> list[str]:

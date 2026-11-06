@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react'
+import { ICONS } from '../icons.mjs'
 import { useServer } from '../contexts/ServerContext'
 import {
   buildServerOptions,
@@ -91,7 +92,7 @@ function ServerSelector() {
         aria-controls={isOpen ? menuId : undefined}
         title={selectedServerInfo ? `${selectedServerInfo.username}@${selectedServerInfo.hostname}:${selectedServerInfo.port}` : 'Select server'}
       >
-        <span aria-hidden="true">🖥️</span>
+        <span aria-hidden="true">{ICONS.server}</span>
         <span className="server-selector-label">{getServerOptionLabel(selectedServer, options)}</span>
         <span aria-hidden="true">{isOpen ? '▲' : '▼'}</span>
       </button>
@@ -121,7 +122,7 @@ function ServerSelector() {
                 <strong>{option.name}</strong>
                 <small>{option.detail}</small>
               </span>
-              {selectedServer === option.id && <span aria-hidden="true">✓</span>}
+              {selectedServer === option.id && <span aria-hidden="true">{ICONS.success}</span>}
             </button>
           ))}
           {selectionError && (

@@ -1,5 +1,6 @@
 """Deployment history recording extracted from deployment services."""
 
+from dockerpilot.ui_icons import icon
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -67,7 +68,7 @@ def show_deployment_history(console: Any, logger: Any, limit: int = 10, history_
     """Show deployment history"""
 
     if not Path(history_file).exists():
-        console.print("[yellow]⚠️ No deployment history found[/yellow]")
+        console.print(f"[yellow]{icon('warning')} No deployment history found[/yellow]")
         return
 
     try:
@@ -78,7 +79,7 @@ def show_deployment_history(console: Any, logger: Any, limit: int = 10, history_
         history_data.sort(key=lambda x: x['timestamp'], reverse=True)
         history_data = history_data[:limit]
 
-        table = Table(title="🚀 Deployment History", show_header=True)
+        table = Table(title=f"{icon('deploy')} Deployment History", show_header=True)
         table.add_column("Date", style="cyan")
         table.add_column("ID", style="blue")
         table.add_column("Type", style="magenta")
@@ -89,7 +90,7 @@ def show_deployment_history(console: Any, logger: Any, limit: int = 10, history_
 
         for record in history_data:
             timestamp = datetime.fromisoformat(record['timestamp']).strftime('%Y-%m-%d %H:%M')
-            status = "[green]✅ Success[/green]" if record['success'] else "[red]❌ Failed[/red]"
+            status = f"[green]{icon('success')} Success[/green]" if record['success'] else f"[red]{icon('error')} Failed[/red]"
             duration = f"{record['duration_seconds']:.1f}s"
 
             table.add_row(
@@ -106,4 +107,4 @@ def show_deployment_history(console: Any, logger: Any, limit: int = 10, history_
 
     except Exception as e:
         logger.error(f"Failed to load deployment history: {e}")
-        console.print(f"[red]❌ Error loading deployment history: {e}[/red]")
+        console.print(f"[red]{icon('error')} Error loading deployment history: {e}[/red]")

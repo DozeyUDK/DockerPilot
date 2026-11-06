@@ -1,5 +1,6 @@
 """Quick deployment strategy extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ def quick_deploy(
     Returns:
         bool: True if deployment successful
     """
-    host.console.print(f"\n[bold cyan]⚡ QUICK DEPLOY STARTED[/bold cyan]")
+    host.console.print(f"\n[bold cyan]{icon('flash')} QUICK DEPLOY STARTED[/bold cyan]")
 
     deployment_start = datetime.now()
     old_image_id = None
@@ -57,14 +58,14 @@ def quick_deploy(
             environment = environment or config.get('environment', {})
             volumes = volumes or config.get('volumes', {})
 
-            host.console.print(f"[cyan]✓ Loaded configuration from {yaml_config}[/cyan]")
+            host.console.print(f"[cyan]{icon('success')} Loaded configuration from {yaml_config}[/cyan]")
         except Exception as e:
             host.logger.error(f"Failed to load YAML config: {e}")
-            host.console.print(f"[yellow]⚠️ Could not load YAML config, using provided parameters[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')} Could not load YAML config, using provided parameters[/yellow]")
 
     # Validate required parameters
     if not image_tag or not container_name:
-        host.console.print("[red]❌ image_tag and container_name are required[/red]")
+        host.console.print(f"[red]{icon('error')} image_tag and container_name are required[/red]")
         return False
 
     with Progress(
@@ -74,23 +75,23 @@ def quick_deploy(
     ) as progress:
 
         # Step 1: Get old container info (for image cleanup)
-        check_task = progress.add_task("🔍 Checking existing deployment...", total=None)
+        check_task = progress.add_task(f"{icon('search')} Checking existing deployment...", total=None)
         try:
             old_container = host.client.containers.get(container_name)
             old_image_id = old_container.image.id
             old_image_tags = old_container.image.tags
-            progress.update(check_task, description=f"✅ Found existing container (image: {old_image_tags[0] if old_image_tags else old_image_id[:12]})")
+            progress.update(check_task, description=f"{icon('success')} Found existing container (image: {old_image_tags[0] if old_image_tags else old_image_id[:12]})")
         except docker.errors.NotFound:
-            progress.update(check_task, description="ℹ️ No existing container (first deployment)")
+            progress.update(check_task, description=f"{icon('info')} No existing container (first deployment)")
             old_image_id = None
 
         # Step 2: Build new image
-        build_task = progress.add_task(f"🔨 Building image {image_tag}...", total=None)
+        build_task = progress.add_task(f"{icon('build')} Building image {image_tag}...", total=None)
         try:
             dockerfile = Path(dockerfile_path) / "Dockerfile"
             if not dockerfile.exists():
-                progress.update(build_task, description="❌ Dockerfile not found")
-                host.console.print(f"[red]❌ Dockerfile not found at {dockerfile}[/red]")
+                progress.update(build_task, description=f"{icon('error')} Dockerfile not found")
+                host.console.print(f"[red]{icon('error')} Dockerfile not found at {dockerfile}[/red]")
                 return False
 
             image, build_logs = host.client.images.build(
@@ -99,52 +100,52 @@ def quick_deploy(
                 rm=True,
                 pull=True
             )
-            progress.update(build_task, description=f"✅ Image {image_tag} built successfully")
+            progress.update(build_task, description=f"{icon('success')} Image {image_tag} built successfully")
 
         except docker.errors.BuildError as e:
-            progress.update(build_task, description="❌ Build failed")
+            progress.update(build_task, description=f"{icon('error')} Build failed")
             host.logger.error(f"Build error: {e}")
             for log in e.build_log:
                 if 'stream' in log:
                     host.console.print(f"[red]{log['stream']}[/red]", end="")
             return False
         except Exception as e:
-            progress.update(build_task, description="❌ Build failed")
+            progress.update(build_task, description=f"{icon('error')} Build failed")
             host.logger.error(f"Unexpected build error: {e}")
             return False
 
         # Step 3: Stop old container
-        stop_task = progress.add_task("🛑 Stopping old container...", total=None)
+        stop_task = progress.add_task(f"{icon('stop')} Stopping old container...", total=None)
         try:
             old_container = host.client.containers.get(container_name)
             if old_container.status == "running":
                 old_container.stop(timeout=10)
-                progress.update(stop_task, description="✅ Old container stopped")
+                progress.update(stop_task, description=f"{icon('success')} Old container stopped")
             else:
-                progress.update(stop_task, description="ℹ️ Container was not running")
+                progress.update(stop_task, description=f"{icon('info')} Container was not running")
         except docker.errors.NotFound:
-            progress.update(stop_task, description="ℹ️ No container to stop")
+            progress.update(stop_task, description=f"{icon('info')} No container to stop")
         except Exception as e:
-            progress.update(stop_task, description="❌ Failed to stop container")
+            progress.update(stop_task, description=f"{icon('error')} Failed to stop container")
             host.logger.error(f"Stop failed: {e}")
             return False
 
         # Step 4: Remove old container
-        remove_task = progress.add_task("🗑️ Removing old container...", total=None)
+        remove_task = progress.add_task(f"{icon('delete')} Removing old container...", total=None)
         try:
             old_container = host.client.containers.get(container_name)
             old_container.remove()
-            progress.update(remove_task, description="✅ Old container removed")
+            progress.update(remove_task, description=f"{icon('success')} Old container removed")
         except docker.errors.NotFound:
-            progress.update(remove_task, description="ℹ️ No container to remove")
+            progress.update(remove_task, description=f"{icon('info')} No container to remove")
         except Exception as e:
-            progress.update(remove_task, description="❌ Failed to remove container")
+            progress.update(remove_task, description=f"{icon('error')} Failed to remove container")
             host.logger.error(f"Remove failed: {e}")
             # Continue anyway
 
         # Step 5: Remove old image (if requested and exists)
         if cleanup_old_image and old_image_id:
-            cleanup_task = progress.add_task("🧹 Cleaning up old image...", total=None)
+            cleanup_task = progress.add_task(f"{icon('clean')} Cleaning up old image...", total=None)
             try:
                 # Check if old image is different from new one
                 new_image = host.client.images.get(image_tag)
@@ -158,24 +159,24 @@ def quick_deploy(
                     if len(containers_using_image) == 0:
                         try:
                             host.client.images.remove(old_image_id, force=False)
-                            progress.update(cleanup_task, description="✅ Old image removed")
+                            progress.update(cleanup_task, description=f"{icon('success')} Old image removed")
                         except docker.errors.ImageNotFound:
-                            progress.update(cleanup_task, description="ℹ️ Old image already removed")
+                            progress.update(cleanup_task, description=f"{icon('info')} Old image already removed")
                         except docker.errors.APIError as e:
                             if "image is being used" in str(e).lower():
-                                progress.update(cleanup_task, description="⚠️ Old image in use by other containers")
+                                progress.update(cleanup_task, description=f"{icon('warning')} Old image in use by other containers")
                             else:
-                                progress.update(cleanup_task, description=f"⚠️ Could not remove old image: {str(e)[:50]}")
+                                progress.update(cleanup_task, description=f"{icon('warning')} Could not remove old image: {str(e)[:50]}")
                     else:
-                        progress.update(cleanup_task, description=f"⚠️ Old image used by {len(containers_using_image)} other container(s)")
+                        progress.update(cleanup_task, description=f"{icon('warning')} Old image used by {len(containers_using_image)} other container(s)")
                 else:
-                    progress.update(cleanup_task, description="ℹ️ Same image, no cleanup needed")
+                    progress.update(cleanup_task, description=f"{icon('info')} Same image, no cleanup needed")
             except Exception as e:
-                progress.update(cleanup_task, description="⚠️ Image cleanup skipped")
+                progress.update(cleanup_task, description=f"{icon('warning')} Image cleanup skipped")
                 host.logger.warning(f"Image cleanup failed: {e}")
 
         # Step 6: Run new container
-        run_task = progress.add_task("🚀 Starting new container...", total=None)
+        run_task = progress.add_task(f"{icon('deploy')} Starting new container...", total=None)
         try:
             new_container = host.client.containers.run(
                 image=image_tag,
@@ -186,32 +187,32 @@ def quick_deploy(
                 volumes=volumes,
                 restart_policy={"Name": "unless-stopped"}
             )
-            progress.update(run_task, description="✅ New container started")
+            progress.update(run_task, description=f"{icon('success')} New container started")
 
             # Grace period for startup
             time.sleep(3)
 
         except Exception as e:
-            progress.update(run_task, description="❌ Failed to start container")
+            progress.update(run_task, description=f"{icon('error')} Failed to start container")
             host.logger.error(f"Container start failed: {e}")
             return False
 
         # Step 7: Optional health check
         if port_mapping:
-            health_task = progress.add_task("🩺 Health check...", total=None)
+            health_task = progress.add_task(f"{icon('health')} Health check...", total=None)
             host_port = list(port_mapping.values())[0]
 
             if host._advanced_health_check(host_port, "/", timeout=10, max_retries=3):
-                progress.update(health_task, description="✅ Health check passed")
+                progress.update(health_task, description=f"{icon('success')} Health check passed")
             else:
-                progress.update(health_task, description="⚠️ Health check failed (container still running)")
+                progress.update(health_task, description=f"{icon('warning')} Health check failed (container still running)")
                 host.logger.warning("Health check failed but deployment completed")
 
     # Deployment summary
     deployment_end = datetime.now()
     duration = deployment_end - deployment_start
 
-    host.console.print(f"\n[bold green]🎉 QUICK DEPLOY COMPLETED SUCCESSFULLY![/bold green]")
+    host.console.print(f"\n[bold green]{icon('celebrate')} QUICK DEPLOY COMPLETED SUCCESSFULLY![/bold green]")
     host.console.print(f"[green]Duration: {duration.total_seconds():.1f}s[/green]")
     host.console.print(f"[green]Container: {container_name}[/green]")
     host.console.print(f"[green]Image: {image_tag}[/green]")

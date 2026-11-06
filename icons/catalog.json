@@ -1,0 +1,293 @@
+{
+  "upstream": "ryanoasis/nerd-fonts",
+  "version": "3.5.1",
+  "icons": {
+    "alert": {
+      "codepoint": "eaf2",
+      "fallback": "ALERT",
+      "source": "cod-flame"
+    },
+    "blue": {
+      "codepoint": "eabc",
+      "fallback": "BLUE",
+      "source": "cod-circle"
+    },
+    "build": {
+      "codepoint": "eb6d",
+      "fallback": "BUILD",
+      "source": "cod-tools"
+    },
+    "canary": {
+      "codepoint": "ea79",
+      "fallback": "CANARY",
+      "source": "cod-beaker"
+    },
+    "celebrate": {
+      "codepoint": "eb77",
+      "fallback": "DONE",
+      "source": "cod-verified"
+    },
+    "check_circle": {
+      "codepoint": "eba4",
+      "fallback": "PASS",
+      "source": "cod-pass"
+    },
+    "clean": {
+      "codepoint": "eabf",
+      "fallback": "CLEAN",
+      "source": "cod-clear_all"
+    },
+    "clipboard": {
+      "codepoint": "eab3",
+      "fallback": "PREPARE",
+      "source": "cod-checklist"
+    },
+    "clock": {
+      "codepoint": "ec75",
+      "fallback": "TIME",
+      "source": "cod-clockface"
+    },
+    "close": {
+      "codepoint": "ea76",
+      "fallback": "CLOSE",
+      "source": "cod-close"
+    },
+    "delete": {
+      "codepoint": "ea81",
+      "fallback": "DELETE",
+      "source": "cod-trash"
+    },
+    "deploy": {
+      "codepoint": "eb44",
+      "fallback": "DEPLOY",
+      "source": "cod-rocket"
+    },
+    "docker": {
+      "codepoint": "e7b0",
+      "fallback": "DOCKER",
+      "source": "dev-docker"
+    },
+    "downtrend": {
+      "codepoint": "ebe3",
+      "fallback": "DOWN",
+      "source": "cod-graph_scatter"
+    },
+    "error": {
+      "codepoint": "ea87",
+      "fallback": "ERROR",
+      "source": "cod-error"
+    },
+    "file": {
+      "codepoint": "ea7b",
+      "fallback": "FILE",
+      "source": "cod-file"
+    },
+    "flash": {
+      "codepoint": "f0e7",
+      "fallback": "QUICK",
+      "source": "fa-bolt"
+    },
+    "folder": {
+      "codepoint": "ea83",
+      "fallback": "FOLDER",
+      "source": "cod-folder"
+    },
+    "green": {
+      "codepoint": "ea71",
+      "fallback": "GREEN",
+      "source": "cod-circle_filled"
+    },
+    "health": {
+      "codepoint": "eb31",
+      "fallback": "HEALTH",
+      "source": "cod-pulse"
+    },
+    "help": {
+      "codepoint": "eb32",
+      "fallback": "HELP",
+      "source": "cod-question"
+    },
+    "hide": {
+      "codepoint": "eae7",
+      "fallback": "HIDE",
+      "source": "cod-eye_closed"
+    },
+    "home": {
+      "codepoint": "eb06",
+      "fallback": "HOME",
+      "source": "cod-home"
+    },
+    "info": {
+      "codepoint": "ea74",
+      "fallback": "INFO",
+      "source": "cod-info"
+    },
+    "list": {
+      "codepoint": "eb17",
+      "fallback": "LIST",
+      "source": "cod-list_unordered"
+    },
+    "loading": {
+      "codepoint": "eb19",
+      "fallback": "WAIT",
+      "source": "cod-loading"
+    },
+    "lock": {
+      "codepoint": "ea75",
+      "fallback": "LOCK",
+      "source": "cod-lock"
+    },
+    "moon": {
+      "codepoint": "f186",
+      "fallback": "DARK",
+      "source": "fa-moon_o"
+    },
+    "network": {
+      "codepoint": "eb01",
+      "fallback": "NETWORK",
+      "source": "cod-globe"
+    },
+    "package": {
+      "codepoint": "eb29",
+      "fallback": "PACKAGE",
+      "source": "cod-package"
+    },
+    "play": {
+      "codepoint": "eb2c",
+      "fallback": "RUN",
+      "source": "cod-play"
+    },
+    "refresh": {
+      "codepoint": "eb37",
+      "fallback": "REFRESH",
+      "source": "cod-refresh"
+    },
+    "save": {
+      "codepoint": "eb4b",
+      "fallback": "SAVE",
+      "source": "cod-save"
+    },
+    "search": {
+      "codepoint": "ea6d",
+      "fallback": "SEARCH",
+      "source": "cod-search"
+    },
+    "server": {
+      "codepoint": "eb50",
+      "fallback": "SERVER",
+      "source": "cod-server"
+    },
+    "settings": {
+      "codepoint": "eaf8",
+      "fallback": "SETTINGS",
+      "source": "cod-gear"
+    },
+    "stats": {
+      "codepoint": "eb03",
+      "fallback": "STATS",
+      "source": "cod-graph"
+    },
+    "stop": {
+      "codepoint": "eba5",
+      "fallback": "STOP",
+      "source": "cod-stop_circle"
+    },
+    "success": {
+      "codepoint": "eab2",
+      "fallback": "OK",
+      "source": "cod-check"
+    },
+    "sun": {
+      "codepoint": "f185",
+      "fallback": "LIGHT",
+      "source": "fa-sun_o"
+    },
+    "terminal": {
+      "codepoint": "ea85",
+      "fallback": "TERMINAL",
+      "source": "cod-terminal"
+    },
+    "test": {
+      "codepoint": "ea79",
+      "fallback": "TEST",
+      "source": "cod-beaker"
+    },
+    "tip": {
+      "codepoint": "ea61",
+      "fallback": "TIP",
+      "source": "cod-lightbulb"
+    },
+    "uptrend": {
+      "codepoint": "ebe2",
+      "fallback": "UP",
+      "source": "cod-graph_line"
+    },
+    "view": {
+      "codepoint": "ea70",
+      "fallback": "VIEW",
+      "source": "cod-eye"
+    },
+    "warning": {
+      "codepoint": "ea6c",
+      "fallback": "WARN",
+      "source": "cod-warning"
+    }
+  },
+  "legacy_visual_markers": {
+    "ℹ": "info",
+    "ℹ️": "info",
+    "↗️": "uptrend",
+    "↘️": "downtrend",
+    "⏱️": "clock",
+    "⏳": "loading",
+    "⏹️": "stop",
+    "▶": "play",
+    "☀️": "sun",
+    "⚙️": "settings",
+    "⚠": "warning",
+    "⚠️": "warning",
+    "⚡": "flash",
+    "✅": "success",
+    "✓": "success",
+    "✕": "close",
+    "✗": "error",
+    "❌": "error",
+    "❓": "help",
+    "🌐": "network",
+    "🌙": "moon",
+    "🎉": "celebrate",
+    "🏠": "home",
+    "🐤": "canary",
+    "🐳": "docker",
+    "👁": "view",
+    "💡": "tip",
+    "💾": "save",
+    "📁": "folder",
+    "📄": "file",
+    "📈": "stats",
+    "📊": "stats",
+    "📋": "clipboard",
+    "📟": "terminal",
+    "📦": "package",
+    "🔄": "refresh",
+    "🔍": "search",
+    "🔐": "lock",
+    "🔨": "build",
+    "🔵": "blue",
+    "🕐": "clock",
+    "🖥️": "server",
+    "🗑️": "delete",
+    "🙈": "hide",
+    "🚀": "deploy",
+    "🚨": "alert",
+    "🛑": "stop",
+    "🟢": "green",
+    "🧪": "test",
+    "🧹": "clean",
+    "🧾": "list",
+    "🩺": "health",
+    "⬆️": "deploy"
+  },
+  "source_font": "SymbolsNerdFontMono-Regular.ttf",
+  "web_font": "SymbolsNerdFontMono-Regular.woff2"
+}

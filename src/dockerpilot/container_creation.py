@@ -1,5 +1,6 @@
 """Container creation and configuration helpers."""
 
+from dockerpilot.ui_icons import icon
 from typing import Any
 
 import docker
@@ -51,7 +52,7 @@ def run_new_container(
 ) -> bool:
     """Run a new container with the existing configuration semantics."""
     try:
-        host.console.print(f"[cyan]🚀 Starting new container '{name}' from image '{image_name}'...[/cyan]")
+        host.console.print(f"[cyan]{icon('deploy')} Starting new container '{name}' from image '{image_name}'...[/cyan]")
 
         container_kwargs = {
             'image': image_name,
@@ -120,20 +121,20 @@ def run_new_container(
 
         container = host.client.containers.run(**container_kwargs)
 
-        host.console.print(f"[green]✅ Container '{name}' started successfully (ID: {container.short_id})[/green]")
+        host.console.print(f"[green]{icon('success')} Container '{name}' started successfully (ID: {container.short_id})[/green]")
         host.logger.info(f"Container {name} started from image {image_name}")
         return True
 
     except docker.errors.ImageNotFound:
-        host.console.print(f"[bold red]❌ Image not found: {image_name}[/bold red]")
+        host.console.print(f"[bold red]{icon('error')} Image not found: {image_name}[/bold red]")
         host.logger.error(f"Image not found: {image_name}")
         return False
     except docker.errors.APIError as exc:
         error_msg = str(exc)
-        host.console.print(f"[bold red]❌ Docker API error:[/bold red] {error_msg}")
+        host.console.print(f"[bold red]{icon('error')} Docker API error:[/bold red] {error_msg}")
         host.logger.error(f"Docker API error: {exc}")
         return False
     except Exception as exc:
-        host.console.print(f"[bold red]❌ Failed to start container: {exc}[/bold red]")
+        host.console.print(f"[bold red]{icon('error')} Failed to start container: {exc}[/bold red]")
         host.logger.error(f"Container start failed: {exc}")
         return False

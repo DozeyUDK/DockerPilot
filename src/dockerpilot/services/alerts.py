@@ -1,6 +1,7 @@
 """Alert configuration, evaluation and notification delivery."""
 
 from __future__ import annotations
+from dockerpilot.ui_icons import icon
 
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +71,7 @@ class AlertService:
     def trigger_alert(self, rule: dict, container_name: str, details: str, *, send_notification=None) -> None:
         alert_message = f"ALERT: {rule['name']} - Container: {container_name} - {details} - {rule['message']}"
         self.logger.warning(f"Alert triggered: {alert_message}")
-        self.console.print(f"[red]🚨 ALERT: {rule['name']} - {container_name}[/red]")
+        self.console.print(f"[red]{icon('alert')} ALERT: {rule['name']} - {container_name}[/red]")
         sender = send_notification or self.send_notification
         for channel in self.notification_channels:
             sender(channel, alert_message)

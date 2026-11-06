@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 
+from dockerpilot.ui_icons import icon
 import argparse
 import signal
 import threading
@@ -186,7 +187,7 @@ class DockerPilotEnhanced(DeploymentServiceMixin, BackupRestoreMixin):
     def _signal_handler(self, signum, frame):
         """Graceful shutdown handler"""
         self.logger.info(f"Received signal {signum}, shutting down gracefully...")
-        self.console.print("\n[yellow]⚠️ Graceful shutdown initiated...[/yellow]")
+        self.console.print(f"\n[yellow]{icon('warning')} Graceful shutdown initiated...[/yellow]")
         sys.exit(0)
 
     @contextmanager

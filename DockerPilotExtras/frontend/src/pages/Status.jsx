@@ -217,7 +217,7 @@ function Status() {
         // Add suggestions if available
         if (response.data.suggestions) {
           const suggestions = response.data.suggestions
-          let suggestionText = `\n💡 ${suggestions.message}\n`
+          let suggestionText = `\n ${suggestions.message}\n`
           if (suggestions.commands) {
             suggestionText += suggestions.commands.map(cmd => `   • ${cmd}`).join('\n')
           }
@@ -387,7 +387,7 @@ function Status() {
                   fontWeight: '600',
                   fontSize: '1rem'
                 }}>
-                  ✓ Connected
+                   Connected
                 </div>
                 {status.docker.version && (
                   <div className="status-wrap-anywhere" style={{ 
@@ -405,7 +405,7 @@ function Status() {
                 fontWeight: '600',
                 fontSize: '1rem'
               }}>
-                ✗ Not available
+                 Not available
                 {status.docker.error && (
                   <div className="status-wrap-anywhere" style={{ 
                     fontSize: '0.85rem', 
@@ -450,7 +450,7 @@ function Status() {
                   fontWeight: '600',
                   fontSize: '1rem'
                 }}>
-                  ✓ Connected
+                   Connected
                 </div>
                 {status.dockerpilot.version && (
                   <div className="status-wrap-anywhere" style={{ 
@@ -468,7 +468,7 @@ function Status() {
                 fontWeight: '600',
                 fontSize: '1rem'
               }}>
-                ✗ Not available
+                 Not available
                 {status.dockerpilot.error && (
                   <div className="status-wrap-anywhere" style={{ 
                     fontSize: '0.85rem', 
@@ -592,7 +592,7 @@ function Status() {
         {containerSummary ? (
           containerSummary.error ? (
             <div className="status-alert-error">
-              <strong>❌ Error:</strong> {containerSummary.error}
+              <strong> Error:</strong> {containerSummary.error}
             </div>
           ) : containerSummary.summary ? (
             <div>
@@ -627,11 +627,11 @@ function Status() {
                 <div className={`status-container-result ${containerSummary.summary.stopped === 0 ? 'ok' : 'warn'}`}>
                   {containerSummary.summary.stopped === 0 ? (
                     <span style={{ color: '#155724', fontWeight: 'bold' }}>
-                      ✅ All containers are running correctly
+                       All containers are running correctly
                     </span>
                   ) : (
                     <span style={{ color: '#856404' }}>
-                      ⚠️ {containerSummary.summary.stopped} container(s) stopped
+                       {containerSummary.summary.stopped} container(s) stopped
                     </span>
                   )}
                 </div>
@@ -720,7 +720,7 @@ function Status() {
               }}
               title="Show available commands"
             >
-              {loadingHelp ? '⏳' : '❓'} Help
+              {loadingHelp ? '' : ''} Help
             </button>
           </div>
           
@@ -749,7 +749,7 @@ function Status() {
               }}
               title="Browse directories"
             >
-              📁 Browse
+               Browse
             </button>
             {workingDirectory && (
               <button
@@ -765,7 +765,7 @@ function Status() {
                 }}
                 title="Clear working directory"
               >
-                ✕
+                
               </button>
             )}
           </div>
@@ -798,7 +798,7 @@ function Status() {
               </button>
             </div>
             <div style={{
-              fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", Consolas, Monaco, "Courier New", monospace',
               fontSize: '0.85rem',
               whiteSpace: 'pre-wrap',
               color: '#333'
@@ -838,7 +838,7 @@ function Status() {
           ref={cliOutputRef}
           className="cli-output-container status-cli-output"
           style={{
-            fontFamily: '"Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
+            fontFamily: '"DockerPilot Nerd Symbols", "Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
             overflowY: 'auto',
             overflowX: 'auto',
             wordBreak: 'keep-all',
@@ -855,7 +855,7 @@ function Status() {
             <pre style={{
               margin: 0,
               padding: 0,
-              fontFamily: '"Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", "Consolas", "Monaco", "Courier New", "Liberation Mono", "DejaVu Sans Mono", monospace',
               fontSize: '0.8rem',
               whiteSpace: 'pre',
               wordBreak: 'keep-all',
@@ -927,7 +927,7 @@ function Status() {
             disabled={cliLoading || !selectedServerReady}
             className="status-cli-input"
             style={{
-              fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+              fontFamily: '"DockerPilot Nerd Symbols", Consolas, Monaco, "Courier New", monospace',
               backgroundColor: cliLoading ? 'var(--bg-tertiary)' : 'var(--input-bg)',
               minWidth: 0 // Allows shrinking
             }}
@@ -938,7 +938,7 @@ function Status() {
             disabled={cliLoading || !selectedServerReady || !cliCommand.trim()}
             style={{ flexShrink: 0 }}
           >
-            {cliLoading ? '⏳' : '▶'}
+            {cliLoading ? '' : ''}
           </button>
         </div>
         <small style={{ color: '#666', fontSize: '0.85rem', marginTop: '0.5rem', display: 'block' }}>
@@ -1003,7 +1003,7 @@ function Status() {
                     aria-label={item.is_dir ? `Open directory ${item.name}` : `File ${item.name}`}
                   >
                     <span className="browser-item-icon" aria-hidden="true">
-                      {item.is_dir ? '📁' : '📄'}
+                      {item.is_dir ? '' : ''}
                     </span>
                     <span className="browser-item-content">
                       <span className="browser-item-name">{item.name}</span>

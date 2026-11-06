@@ -1,5 +1,6 @@
 """Image build orchestration extracted from DeploymentServiceMixin."""
 
+from dockerpilot.ui_icons import icon
 from typing import Any, Optional
 
 import docker
@@ -15,7 +16,7 @@ def build_image_enhanced(host: Any, image_tag: str, build_config: dict) -> bool:
     try:
         source_info = host.inspect_build_source(dockerfile_path)
         if source_info["status"] != "ready":
-            host.console.print(f"[bold red]❌ {source_info['message']}[/bold red]")
+            host.console.print(f"[bold red]{icon('error')} {source_info['message']}[/bold red]")
             if source_info["status"] == "multiple":
                 host.console.print("[yellow]Select one of these paths explicitly:[/yellow]")
                 for candidate in source_info["candidates"]:
@@ -96,11 +97,11 @@ def build_image_standalone(
             try:
                 host.console.print(f"[cyan]Pulling image {tag} from registry...[/cyan]")
                 host.client.images.pull(tag)
-                host.console.print(f"[green]✅ Pulled image {tag} successfully[/green]")
+                host.console.print(f"[green]{icon('success')} Pulled image {tag} successfully[/green]")
                 host.logger.info(f"Pulled image {tag} because no buildable Dockerfile was available")
                 return True
             except Exception as exc:
-                host.console.print(f"[red]❌ Failed to pull image {tag}: {exc}[/red]")
+                host.console.print(f"[red]{icon('error')} Failed to pull image {tag}: {exc}[/red]")
                 host.logger.error(f"Failed to pull image {tag}: {exc}")
                 return False
 
@@ -124,8 +125,8 @@ def build_image_standalone(
     success = host._build_image_enhanced(tag, build_config)
 
     if success:
-        host.console.print(f"[green]✅ Image {tag} built successfully[/green]")
+        host.console.print(f"[green]{icon('success')} Image {tag} built successfully[/green]")
     else:
-        host.console.print(f"[red]❌ Failed to build image {tag}[/red]")
+        host.console.print(f"[red]{icon('error')} Failed to build image {tag}[/red]")
 
     return success

@@ -1,5 +1,6 @@
 """Container backup orchestration extracted from BackupRestoreMixin."""
 
+from dockerpilot.ui_icons import icon
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -86,7 +87,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
             existing_backup = host.find_existing_backup(container_name, max_backup_age_hours)
             if existing_backup:
                 host.logger.info(f"Found existing backup for {container_name}: {existing_backup}")
-                host.console.print(f"[green]✅ Found existing backup: {existing_backup}[/green]")
+                host.console.print(f"[green]{icon('success')} Found existing backup: {existing_backup}[/green]")
 
                 # Verify backup is complete
                 metadata_file = existing_backup / 'backup_metadata.json'
@@ -111,7 +112,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                             host.console.print(f"[green]Backup created: {backup_time}[/green]")
                             host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
                             host.console.print(f"[green]Volumes backed up: {len(volumes)}[/green]")
-                            host.console.print(f"[cyan]ℹ️ Reusing existing complete backup instead of creating new one[/cyan]")
+                            host.console.print(f"[cyan]{icon('info')} Reusing existing complete backup instead of creating new one[/cyan]")
 
                             # Set backup_path to the existing backup path for consistency
                             backup_path = str(existing_backup)
@@ -133,7 +134,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
         privileged_path_set = {str(path) for path in privileged_paths}
 
         if requires_sudo:
-            host.console.print(f"[yellow]⚠️  BACKUP INCLUDES PRIVILEGED PATHS[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')}  BACKUP INCLUDES PRIVILEGED PATHS[/yellow]")
             host.console.print(f"[yellow]Privileged paths ({len(privileged_paths)}):[/yellow]")
             for path in privileged_paths[:3]:  # Show first 3
                 host.console.print(f"[dim]  - {path}[/dim]")
@@ -150,10 +151,10 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                 time.sleep(1)
             sys.stdout.write("\r" + " " * 50 + "\r")  # Clear line
 
-        host.console.print(f"[cyan]📦 Creating data backup for container '{container_name}'...[/cyan]")
+        host.console.print(f"[cyan]{icon('package')} Creating data backup for container '{container_name}'...[/cyan]")
 
         if not mounts:
-            host.console.print(f"[yellow]⚠️ No volumes mounted to container '{container_name}'[/yellow]")
+            host.console.print(f"[yellow]{icon('warning')} No volumes mounted to container '{container_name}'[/yellow]")
             return True  # Not an error, just no data to backup
 
         # System paths that should be skipped during backup (they can hang or are too large)
@@ -186,7 +187,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                 # Check for cancellation before each mount backup
                 if host._check_cancel_flag(container_name):
                     host.logger.warning(f"Backup cancelled by user for {container_name}")
-                    host.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                    host.console.print(f"[yellow]{icon('warning')} Backup cancelled by user[/yellow]")
                     return False
 
                 volume_name = mount.get('Name')
@@ -200,7 +201,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                     # ALWAYS skip root filesystem - this is critical!
                     if source_path == Path('/') or source_path.resolve() == Path('/'):
                         host.logger.warning(f"Skipping root filesystem bind mount: {source} -> {mount_point} (CRITICAL: root filesystem should never be backed up)")
-                        host.console.print(f"[red]⚠️ SKIPPING root filesystem bind mount '{source}' (root filesystem should never be backed up!)[/red]")
+                        host.console.print(f"[red]{icon('warning')} SKIPPING root filesystem bind mount '{source}' (root filesystem should never be backed up!)[/red]")
                         continue
 
                 # For migration: Skip external data mounts (not container-specific data)
@@ -238,7 +239,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
 
                     if is_external_storage and not is_application_data:
                         host.logger.info(f"Skipping external storage bind mount: {source} -> {mount_point} (external storage, not container data)")
-                        host.console.print(f"[cyan]ℹ️ Skipping external disk '{source}' (this is not container data, just a mounted disk)[/cyan]")
+                        host.console.print(f"[cyan]{icon('info')} Skipping external disk '{source}' (this is not container data, just a mounted disk)[/cyan]")
                         continue
 
                 # Skip system paths
@@ -250,7 +251,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                     for system_path in system_paths_to_skip:
                         if str(source_path) == system_path or str(source_path).startswith(system_path + '/'):
                             host.logger.warning(f"Skipping system bind mount: {source} -> {mount_point}")
-                            host.console.print(f"[yellow]⚠️ Skipping system bind mount '{source}' (system path)[/yellow]")
+                            host.console.print(f"[yellow]{icon('warning')} Skipping system bind mount '{source}' (system path)[/yellow]")
                             skip_mount = True
                             break
 
@@ -272,7 +273,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                             size_tb = size_bytes / (1024 ** 4)
                             if size_tb > 1:
                                 host.logger.warning(f"Large mount detected: {source} ({size_tb:.2f} TB) - this will take a very long time to backup")
-                                host.console.print(f"[yellow]⚠️ Large mount detected: {source} ({size_tb:.2f} TB)[/yellow]")
+                                host.console.print(f"[yellow]{icon('warning')} Large mount detected: {source} ({size_tb:.2f} TB)[/yellow]")
                                 host.console.print(f"[yellow]   This backup may take many hours. Consider skipping this mount.[/yellow]")
                     except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
                         # If size check fails or times out, continue anyway
@@ -288,7 +289,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                         # Update progress for volume backup
                         if container_name:
                             progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
-                            host._update_progress('backup', progress_pct, f'📦 Creating backup of volume: {volume_name}...')
+                            host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of volume: {volume_name}...')
 
                         # Use Docker to backup volume (runs as root inside container)
                         # This avoids permission issues without requiring sudo
@@ -297,7 +298,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                         # Check for cancellation after backup
                         if host._check_cancel_flag(container_name):
                             host.logger.warning(f"Backup cancelled by user for {container_name}")
-                            host.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                            host.console.print(f"[yellow]{icon('warning')} Backup cancelled by user[/yellow]")
                             return False
 
                         if success:
@@ -309,22 +310,22 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                 'backup_file': str(backup_file),
                                 'size': backup_file.stat().st_size if backup_file.exists() else 0
                             })
-                            host.console.print(f"[green]✅ Backed up volume '{volume_name}' to {backup_file}[/green]")
+                            host.console.print(f"[green]{icon('success')} Backed up volume '{volume_name}' to {backup_file}[/green]")
 
                             # Update progress after successful backup
                             if container_name:
                                 progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
-                                host._update_progress('backup', progress_pct, f'✅ Zbackupowano volume: {volume_name} ({processed_mounts}/{total_mounts})')
+                                host._update_progress('backup', progress_pct, f'{icon("success")} Zbackupowano volume: {volume_name} ({processed_mounts}/{total_mounts})')
                         else:
                             host.logger.error(f"Required named volume backup failed: {volume_name}")
                             host.console.print(
-                                f"[red]❌ Required named volume backup failed: {volume_name}[/red]"
+                                f"[red]{icon('error')} Required named volume backup failed: {volume_name}[/red]"
                             )
                             return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup volume {volume_name}: {e}")
                         host.console.print(
-                            f"[red]❌ Required named volume backup failed: {volume_name}: {e}[/red]"
+                            f"[red]{icon('error')} Required named volume backup failed: {volume_name}: {e}[/red]"
                         )
                         return False
 
@@ -335,7 +336,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                     if container_name:
                         source_name = Path(source).name
                         progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
-                        host._update_progress('backup', progress_pct, f'📦 Creating backup of bind mount: {source_name}...')
+                        host._update_progress('backup', progress_pct, f'{icon("package")} Creating backup of bind mount: {source_name}...')
                     try:
                         if Path(source).exists():
                             # Create safe filename from path
@@ -348,7 +349,7 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                             # Check for cancellation after backup
                             if host._check_cancel_flag(container_name):
                                 host.logger.warning(f"Backup cancelled by user for {container_name}")
-                                host.console.print(f"[yellow]⚠️ Backup cancelled by user[/yellow]")
+                                host.console.print(f"[yellow]{icon('warning')} Backup cancelled by user[/yellow]")
                                 return False
 
                             if success:
@@ -360,47 +361,47 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
                                     'backup_file': str(backup_file),
                                     'size': backup_file.stat().st_size if backup_file.exists() else 0
                                 })
-                                host.console.print(f"[green]✅ Backed up bind mount '{source}' to {backup_file}[/green]")
+                                host.console.print(f"[green]{icon('success')} Backed up bind mount '{source}' to {backup_file}[/green]")
 
                                 # Update progress after successful backup
                                 if container_name:
                                     progress_pct = 5 + int((processed_mounts / max(total_mounts, 1)) * 15)  # 5-20% range
-                                    host._update_progress('backup', progress_pct, f'✅ Zbackupowano bind mount: {source_name} ({processed_mounts}/{total_mounts})')
+                                    host._update_progress('backup', progress_pct, f'{icon("success")} Zbackupowano bind mount: {source_name} ({processed_mounts}/{total_mounts})')
                             else:
                                 if str(source) in privileged_path_set:
                                     host.logger.error(
                                         f"Required privileged bind mount backup failed: {source}"
                                     )
                                     host.console.print(
-                                        f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                                        f"[red]{icon('error')} Required privileged bind mount backup failed: {source}[/red]"
                                     )
                                 else:
                                     host.logger.error(
                                         f"Required bind mount backup failed: {source}"
                                     )
                                     host.console.print(
-                                        f"[red]❌ Required bind mount backup failed: {source}[/red]"
+                                        f"[red]{icon('error')} Required bind mount backup failed: {source}[/red]"
                                     )
                                 return False
                         else:
                             host.logger.error(f"Bind mount source does not exist: {source}")
-                            host.console.print(f"[red]❌ Bind mount source not found: {source}[/red]")
+                            host.console.print(f"[red]{icon('error')} Bind mount source not found: {source}[/red]")
                             return False
                     except Exception as e:
                         host.logger.error(f"Failed to backup bind mount {source}: {e}")
                         if str(source) in privileged_path_set:
                             host.console.print(
-                                f"[red]❌ Required privileged bind mount backup failed: {source}[/red]"
+                                f"[red]{icon('error')} Required privileged bind mount backup failed: {source}[/red]"
                             )
                         else:
                             host.console.print(
-                                f"[red]❌ Required bind mount backup failed: {source}: {e}[/red]"
+                                f"[red]{icon('error')} Required bind mount backup failed: {source}: {e}[/red]"
                             )
                         return False
 
             # Save backup metadata (inside loading context)
             if container_name:
-                host._update_progress('backup', 18, '💾 Saving backup metadata...')
+                host._update_progress('backup', 18, f'{icon("save")} Saving backup metadata...')
 
             backup_metadata = {
                 'format_version': _BACKUP_METADATA_VERSION,
@@ -419,11 +420,11 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
 
             # Final progress update
             if container_name:
-                host._update_progress('backup', 20, '✅ Backup completed')
+                host._update_progress('backup', 20, f'{icon("success")} Backup completed')
 
         # Show results after loading completes
         total_size_mb = sum(v.get('size', 0) for v in backed_up_volumes) / (1024 * 1024)
-        host.console.print(f"[bold green]✅ Data backup completed![/bold green]")
+        host.console.print(f"[bold green]{icon('success')} Data backup completed![/bold green]")
         host.console.print(f"[green]Backup location: {backup_path}[/green]")
         host.console.print(f"[green]Total size: {total_size_mb:.2f} MB[/green]")
         host.console.print(f"[green]Volumes backed up: {len(backed_up_volumes)}[/green]")
@@ -431,9 +432,9 @@ def backup_container_data(host: Any, container_name: str, backup_path: str = Non
         return True
 
     except docker.errors.NotFound:
-        host.console.print(f"[red]❌ Container '{container_name}' not found[/red]")
+        host.console.print(f"[red]{icon('error')} Container '{container_name}' not found[/red]")
         return False
     except Exception as e:
         host.logger.error(f"Container data backup failed: {e}")
-        host.console.print(f"[red]❌ Backup failed: {e}[/red]")
+        host.console.print(f"[red]{icon('error')} Backup failed: {e}[/red]")
         return False

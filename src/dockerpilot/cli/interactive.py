@@ -1,5 +1,6 @@
 """Interactive CLI flows for DockerPilot."""
 
+from dockerpilot.ui_icons import icon
 import sys
 
 from rich.prompt import Confirm, Prompt
@@ -62,9 +63,9 @@ def run_interactive_menu(pilot):
                         all_success = False
 
                 if not all_success:
-                    pilot.console.print("[yellow]⚠️ Some operations failed[/yellow]")
+                    pilot.console.print(f"[yellow]{icon('warning')} Some operations failed[/yellow]")
                 else:
-                    pilot.console.print("[green]✅ All operations completed successfully[/green]")
+                    pilot.console.print(f"[green]{icon('success')} All operations completed successfully[/green]")
             elif choice == "exec":
                 pilot.list_containers()
                 names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple, e.g., app1,app2)")
@@ -78,7 +79,7 @@ def run_interactive_menu(pilot):
                     pilot.console.print(f"\n[cyan]Executing in container: {container}[/cyan]")
                     success = pilot.exec_container(container, command)
                     if not success:
-                        pilot.console.print(f"[yellow]⚠️ Failed to exec in {container}, continuing...[/yellow]")
+                        pilot.console.print(f"[yellow]{icon('warning')} Failed to exec in {container}, continuing...[/yellow]")
             elif choice == "stop-remove":
                 pilot.list_containers()
                 names_input = Prompt.ask("Container name(s) or ID(s) (comma-separated for multiple)")
@@ -96,9 +97,9 @@ def run_interactive_menu(pilot):
                         all_success = False
 
                 if not all_success:
-                    pilot.console.print("[yellow]⚠️ Some operations failed[/yellow]")
+                    pilot.console.print(f"[yellow]{icon('warning')} Some operations failed[/yellow]")
                 else:
-                    pilot.console.print("[green]✅ All operations completed successfully[/green]")
+                    pilot.console.print(f"[green]{icon('success')} All operations completed successfully[/green]")
             elif choice == "exec-simple":
                 pilot.list_containers()
                 container_name = Prompt.ask("Container name or ID")
@@ -297,24 +298,24 @@ def run_interactive_menu(pilot):
                         all_success = False
 
                 if not all_success:
-                    pilot.console.print("[yellow]⚠️ Some operations failed[/yellow]")
+                    pilot.console.print(f"[yellow]{icon('warning')} Some operations failed[/yellow]")
                 else:
-                    pilot.console.print("[green]✅ All operations completed successfully[/green]")
+                    pilot.console.print(f"[green]{icon('success')} All operations completed successfully[/green]")
             elif choice == "prune-images":
-                pilot.console.print("[cyan]🧹 Cleaning up dangling images (images without tags)...[/cyan]")
+                pilot.console.print(f"[cyan]{icon('clean')} Cleaning up dangling images (images without tags)...[/cyan]")
                 dry_run = Confirm.ask("Dry run (show what would be removed)?", default=True)
                 result = pilot.prune_dangling_images(dry_run=dry_run)
                 if not dry_run and result['images_deleted'] > 0:
-                    pilot.console.print(f"[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+                    pilot.console.print(f"[green]{icon('success')} Cleanup completed! Removed {result['images_deleted']} images[/green]")
                 elif dry_run:
                     if result['images_deleted'] > 0:
                         proceed = Confirm.ask("Proceed with removal?", default=False)
                         if proceed:
                             result = pilot.prune_dangling_images(dry_run=False)
                             if result['images_deleted'] > 0:
-                                pilot.console.print(f"[green]✅ Cleanup completed! Removed {result['images_deleted']} images[/green]")
+                                pilot.console.print(f"[green]{icon('success')} Cleanup completed! Removed {result['images_deleted']} images[/green]")
                     else:
-                        pilot.console.print("[yellow]ℹ️ No dangling images to remove[/yellow]")
+                        pilot.console.print(f"[yellow]{icon('info')} No dangling images to remove[/yellow]")
             elif choice == "quick-deploy":
                 dockerfile_path = Prompt.ask("Dockerfile directory path", default=".")
                 image_tag = Prompt.ask("Image tag (e.g., myapp:v1.2)")
@@ -453,7 +454,7 @@ def run_interactive_menu(pilot):
 
 def run_container_interactive(pilot, args):
     """Interactive mode for running containers - asks for all parameters one by one"""
-    pilot.console.print("\n[bold cyan]🚀 Interactive Container Run Mode[/bold cyan]")
+    pilot.console.print(f"\n[bold cyan]{icon('deploy')} Interactive Container Run Mode[/bold cyan]")
     pilot.console.print("[dim]Press Enter to use default value or leave empty to skip[/dim]\n")
 
     # Image (required)
@@ -461,7 +462,7 @@ def run_container_interactive(pilot, args):
     if not image_name:
         image_name = Prompt.ask("Docker image name/tag", default="")
         if not image_name:
-            pilot.console.print("[red]❌ Image name is required[/red]")
+            pilot.console.print(f"[red]{icon('error')} Image name is required[/red]")
             sys.exit(1)
 
     # Container name (required)
@@ -469,7 +470,7 @@ def run_container_interactive(pilot, args):
     if not container_name:
         container_name = Prompt.ask("Container name", default="")
         if not container_name:
-            pilot.console.print("[red]❌ Container name is required[/red]")
+            pilot.console.print(f"[red]{icon('error')} Container name is required[/red]")
             sys.exit(1)
 
     # Port mappings
@@ -490,11 +491,11 @@ def run_container_interactive(pilot, args):
             try:
                 container_port, host_port = port_input.split(':')
                 ports[container_port.strip()] = host_port.strip()
-                pilot.console.print(f"[green]✓ Added port mapping: {container_port} -> {host_port}[/green]")
+                pilot.console.print(f"[green]{icon('success')} Added port mapping: {container_port} -> {host_port}[/green]")
             except ValueError:
-                pilot.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+                pilot.console.print(f"[yellow]{icon('warning')} Invalid format. Use container:host[/yellow]")
         else:
-            pilot.console.print("[yellow]⚠️ Invalid format. Use container:host[/yellow]")
+            pilot.console.print(f"[yellow]{icon('warning')} Invalid format. Use container:host[/yellow]")
 
     # Environment variables
     environment = {}
@@ -513,9 +514,9 @@ def run_container_interactive(pilot, args):
         if '=' in env_input:
             key, value = env_input.split('=', 1)
             environment[key.strip()] = value.strip()
-            pilot.console.print(f"[green]✓ Added environment variable: {key}[/green]")
+            pilot.console.print(f"[green]{icon('success')} Added environment variable: {key}[/green]")
         else:
-            pilot.console.print("[yellow]⚠️ Invalid format. Use KEY=VALUE[/yellow]")
+            pilot.console.print(f"[yellow]{icon('warning')} Invalid format. Use KEY=VALUE[/yellow]")
 
     # Volumes
     volumes = {}
@@ -544,18 +545,18 @@ def run_container_interactive(pilot, args):
             if len(parts) == 2:
                 host_path, container_path = parts
                 volumes[host_path.strip()] = container_path.strip()
-                pilot.console.print(f"[green]✓ Added volume: {host_path} -> {container_path}[/green]")
+                pilot.console.print(f"[green]{icon('success')} Added volume: {host_path} -> {container_path}[/green]")
             elif len(parts) == 3:
                 host_path, container_path, mode = parts
                 volumes[host_path.strip()] = {
                     'bind': container_path.strip(),
                     'mode': mode.strip()
                 }
-                pilot.console.print(f"[green]✓ Added volume: {host_path} -> {container_path} ({mode})[/green]")
+                pilot.console.print(f"[green]{icon('success')} Added volume: {host_path} -> {container_path} ({mode})[/green]")
             else:
-                pilot.console.print("[yellow]⚠️ Invalid format. Use host:container or host:container:mode[/yellow]")
+                pilot.console.print(f"[yellow]{icon('warning')} Invalid format. Use host:container or host:container:mode[/yellow]")
         else:
-            pilot.console.print("[yellow]⚠️ Invalid format. Use host:container[/yellow]")
+            pilot.console.print(f"[yellow]{icon('warning')} Invalid format. Use host:container[/yellow]")
 
     # Command
     command = args.command if args.command else None
@@ -591,7 +592,7 @@ def run_container_interactive(pilot, args):
         memory_limit = memory_input if memory_input and memory_input.lower() not in ['n', 'no'] else None
 
     # Summary
-    pilot.console.print("\n[bold cyan]📋 Configuration Summary:[/bold cyan]")
+    pilot.console.print(f"\n[bold cyan]{icon('clipboard')} Configuration Summary:[/bold cyan]")
     pilot.console.print(f"  Image: {image_name}")
     pilot.console.print(f"  Container name: {container_name}")
     if ports:
@@ -614,7 +615,7 @@ def run_container_interactive(pilot, args):
 
     # Confirm
     if not Confirm.ask("\n[bold]Proceed with container creation?[/bold]", default=True):
-        pilot.console.print("[yellow]❌ Cancelled by user[/yellow]")
+        pilot.console.print(f"[yellow]{icon('error')} Cancelled by user[/yellow]")
         sys.exit(0)
 
     # Run container

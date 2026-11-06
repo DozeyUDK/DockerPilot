@@ -1,5 +1,6 @@
 """One-shot container monitoring snapshot extracted from MonitoringManager."""
 
+from dockerpilot.ui_icons import icon
 import time
 from typing import Any
 
@@ -10,7 +11,7 @@ def get_container_stats_once(host: Any, container_name: str) -> bool:
         container = host.client.containers.get(container_name)
 
         # Get two measurements 1 second apart for accurate CPU calculation
-        host.console.print(f"[cyan]📊 Collecting statistics for {container_name}...[/cyan]")
+        host.console.print(f"[cyan]{icon('stats')} Collecting statistics for {container_name}...[/cyan]")
 
         stats1 = container.stats(stream=False)
         time.sleep(1)
@@ -50,17 +51,17 @@ def get_container_stats_once(host: Any, container_name: str) -> bool:
             tx_bytes += net_data.get('tx_bytes', 0)
 
         # Display results
-        host.console.print(f"\n[bold cyan]📊 Container Statistics: {container_name}[/bold cyan]")
-        host.console.print(f"[green]🖥️  CPU Usage: {cpu_percent:.2f}%[/green]")
-        host.console.print(f"[blue]💾 Memory: {mem_usage/(1024*1024):.2f} MB / {mem_limit/(1024*1024):.2f} MB ({mem_percent:.2f}%)[/blue]")
+        host.console.print(f"\n[bold cyan]{icon('stats')} Container Statistics: {container_name}[/bold cyan]")
+        host.console.print(f"[green]{icon('server')}  CPU Usage: {cpu_percent:.2f}%[/green]")
+        host.console.print(f"[blue]{icon('save')} Memory: {mem_usage/(1024*1024):.2f} MB / {mem_limit/(1024*1024):.2f} MB ({mem_percent:.2f}%)[/blue]")
 
         if rx_bytes > 0 or tx_bytes > 0:
-            host.console.print(f"[magenta]🌐 Network RX: {rx_bytes/(1024*1024):.2f} MB, TX: {tx_bytes/(1024*1024):.2f} MB[/magenta]")
+            host.console.print(f"[magenta]{icon('network')} Network RX: {rx_bytes/(1024*1024):.2f} MB, TX: {tx_bytes/(1024*1024):.2f} MB[/magenta]")
 
         # Process count
         if 'pids_stats' in stats2:
             pids = stats2['pids_stats'].get('current', 0)
-            host.console.print(f"[yellow]⚡ Processes: {pids}[/yellow]")
+            host.console.print(f"[yellow]{icon('flash')} Processes: {pids}[/yellow]")
 
         return True
 

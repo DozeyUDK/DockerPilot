@@ -508,7 +508,7 @@ pre {
 
 .status-cli-prompt {
   color: #0f766e;
-  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-family: 'DockerPilot Nerd Symbols', Consolas, Monaco, "Courier New", monospace;
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
@@ -581,7 +581,7 @@ pre {
 .form-group textarea {
   resize: vertical;
   min-height: 100px;
-  font-family: 'Courier New', monospace;
+  font-family: 'DockerPilot Nerd Symbols', 'Courier New', monospace;
 }
 
 .checkbox-group {
@@ -709,7 +709,7 @@ pre {
   padding: 1rem;
   border-radius: 4px;
   overflow-x: auto;
-  font-family: 'Courier New', monospace;
+  font-family: 'DockerPilot Nerd Symbols', 'Courier New', monospace;
   font-size: 0.9rem;
   max-height: 500px;
   overflow-y: auto;
