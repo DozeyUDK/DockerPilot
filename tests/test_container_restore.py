@@ -93,6 +93,8 @@ def _tar_fixture(path, members):
                 item.size = len(raw)
                 tar.addfile(item, BytesIO(raw))
             else:
+                if kind == "directory":
+                    item.mode = 0o755
                 item.type = {
                     "directory": tarfile.DIRTYPE,
                     "symlink": tarfile.SYMTYPE,
@@ -313,3 +315,121 @@ def test_failed_bind_restore_discards_partial_output_before_rollback(tmp_path):
     assert not container_restore.restore_container_data(host, "demo", str(backup))
     assert (destination / "original.txt").read_text() == "keep"
     assert not (destination / "partial.txt").exists()
+
+
+def test_named_root_restores_original_private_mode_and_contents(tmp_path):
+    import stat
+
+    archive = tmp_path / "private-bind.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        from io import BytesIO
+
+        root = tarfile.TarInfo("private")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o700
+        root.uid, root.gid = 2001, 2002
+        tar.addfile(root)
+        data = b"confidential"
+        file = tarfile.TarInfo("private/secret.txt")
+        file.mode = 0o600
+        file.size = len(data)
+        tar.addfile(file, BytesIO(data))
+
+    destination = tmp_path / "restore" / "private"
+    assert container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert (destination / "secret.txt").read_bytes() == b"confidential"
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+
+
+def test_named_root_applies_archived_uid_gid_in_privileged_restore(tmp_path, monkeypatch):
+    from dockerpilot.services import safe_tar
+
+    archive = tmp_path / "owner.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        root = tarfile.TarInfo("private")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o700
+        root.uid, root.gid = 3141, 5926
+        tar.addfile(root)
+
+    calls = []
+    # Simulate the chown branch without requiring a privileged test runner.
+    monkeypatch.setattr(safe_tar.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(safe_tar.os, "chown", lambda *args, **kwargs: calls.append(args))
+    destination = tmp_path / "restore" / "private"
+    assert container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert (destination.resolve(), 3141, 5926) in calls
+
+
+def test_volume_dot_root_restores_directory_mode(tmp_path):
+    import stat
+
+    archive = tmp_path / "volume.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o700
+        tar.addfile(root)
+
+    destination = tmp_path / "volume"
+    destination.mkdir(mode=0o755)
+    assert container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+
+
+def test_restore_hardlinks_is_idempotent_and_keeps_external_hardlink_unchanged(tmp_path):
+    import os
+
+    archive = tmp_path / "volume.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./main.txt", "file", "restored-content"),
+        ("./alias.txt", "hardlink", "./main.txt"),
+    ])
+    destination = tmp_path / "volume"
+    host = SimpleNamespace(logger=_Logger())
+    assert container_restore.restore_from_tar(host, archive, str(destination))
+    assert os.stat(destination / "alias.txt").st_ino == os.stat(destination / "main.txt").st_ino
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external-content", encoding="utf-8")
+    (destination / "alias.txt").unlink()
+    (destination / "alias.txt").hardlink_to(outside)
+
+    # Replaying the backup must replace the destination inode atomically,
+    # without editing another existing name of the old hardlink.
+    assert container_restore.restore_from_tar(host, archive, str(destination))
+    assert (destination / "main.txt").read_text() == "restored-content"
+    assert (destination / "alias.txt").read_text() == "restored-content"
+    assert outside.read_text() == "external-content"
+    assert os.stat(destination / "alias.txt").st_ino == os.stat(destination / "main.txt").st_ino
+    assert not list(destination.glob(".dockerpilot-hardlink-*"))
+
+    assert container_restore.restore_from_tar(host, archive, str(destination))
+    assert os.stat(destination / "alias.txt").st_ino == os.stat(destination / "main.txt").st_ino
+
+
+def test_restore_does_not_overwrite_symlink_hardlink_destination(tmp_path):
+    archive = tmp_path / "volume.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./main.txt", "file", "archive-content"),
+        ("./alias.txt", "hardlink", "./main.txt"),
+    ])
+    destination = tmp_path / "volume"
+    destination.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external-content", encoding="utf-8")
+    (destination / "alias.txt").symlink_to(outside)
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert (destination / "alias.txt").is_symlink()
+    assert outside.read_text() == "external-content"
+    assert not (destination / "main.txt").exists()

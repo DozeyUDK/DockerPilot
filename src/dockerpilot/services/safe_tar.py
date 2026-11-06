@@ -101,6 +101,7 @@ def extract_safe(
     root = root.resolve()
 
     entries: list[tuple[tarfile.TarInfo, Path]] = []
+    root_directory: tarfile.TarInfo | None = None
     seen: set[Path] = set()
     for member in archive.getmembers():
         parts = _parts(member.name)
@@ -112,6 +113,11 @@ def extract_safe(
         if not parts:
             if not member.isdir():
                 raise UnsafeArchiveError("Only the archive's root directory may be empty")
+            if root_directory is not None:
+                raise UnsafeArchiveError("Duplicate archive root directory")
+            # Both dot-rooted volume backups and stripped bind-mount backups
+            # contain the metadata of the destination directory itself.
+            root_directory = member
             continue
         if relative in seen:
             raise UnsafeArchiveError(f"Repeated archive member: {member.name!r}")
@@ -183,9 +189,22 @@ def extract_safe(
         if not target.is_file() or target.is_symlink():
             raise UnsafeArchiveError(f"Hardlink source not a regular file: {member.linkname!r}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_symlink() or path.exists():
-            raise UnsafeArchiveError(f"Hardlink destination already exists: {relative}")
-        os.link(target, path, follow_symlinks=False)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise UnsafeArchiveError(f"Unsafe hardlink destination: {relative}")
+        # Link into a private staging directory, then atomically replace the
+        # destination. An existing hardlink to an unrelated external file is
+        # only unlinked, never written through or truncated.
+        with tempfile.TemporaryDirectory(
+            prefix=".dockerpilot-hardlink-", dir=path.parent
+        ) as staging:
+            replacement = Path(staging) / "replacement"
+            os.link(target, replacement, follow_symlinks=False)
+            if replacement.is_symlink():
+                raise UnsafeArchiveError(f"Hardlink target became a symlink: {member.linkname!r}")
+            _check_destination(root, relative)
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise UnsafeArchiveError(f"Unsafe hardlink destination: {relative}")
+            os.replace(replacement, path)
 
     for member, relative in symlinks:
         path = _check_destination(root, relative)
@@ -206,3 +225,12 @@ def extract_safe(
             os.chown(path, member.uid, member.gid)
         os.chmod(path, member.mode & 0o777)
         os.utime(path, (member.mtime, member.mtime))
+
+    # Apply the archived root's metadata last, after creating every child.
+    # Skipping it breaks permissions/ownership for bind mounts (e.g. 0700)
+    # because restore_container_data creates a fresh directory beforehand.
+    if root_directory is not None:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            os.chown(root, root_directory.uid, root_directory.gid)
+        os.chmod(root, root_directory.mode & 0o777)
+        os.utime(root, (root_directory.mtime, root_directory.mtime))
