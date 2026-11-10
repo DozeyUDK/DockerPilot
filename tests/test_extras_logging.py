@@ -226,3 +226,39 @@ def test_auth_and_server_selection_logs_do_not_include_session_identifiers_or_us
     assert "session now has:" not in server_source
     assert "Authenticated web session for user" not in auth_source
     assert 'extra={"event": "auth_session_created"}' in auth_source
+
+
+def test_remote_failure_aggregation_keeps_distinct_operations_independent(caplog):
+    now = [10.0]
+    logger = logging.getLogger("dockerpilot.tests.remote_failure_independent")
+    aggregator = RemoteFailureAggregator(
+        logger,
+        cooldown_seconds=60,
+        clock=lambda: now[0],
+    )
+    server = {"id": "node-a"}
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        aggregator.record_failure(server, "docker_version", OSError("docker probe timeout"))
+        aggregator.record_failure(server, "dockerpilot_version", OSError("DockerPilot probe timeout"))
+        now[0] += 5
+        aggregator.record_success(server, "docker_version")
+        now[0] += 5
+        aggregator.record_failure(server, "dockerpilot_version", OSError("DockerPilot probe timeout"))
+        now[0] += 5
+        aggregator.record_success(server, "dockerpilot_version")
+
+    events = [
+        record for record in caplog.records
+        if getattr(record, "event", None) in {
+            "remote_operation_failed", "remote_operation_restored"
+        }
+    ]
+    assert [(record.event, record.operation) for record in events] == [
+        ("remote_operation_failed", "docker_version"),
+        ("remote_operation_failed", "dockerpilot_version"),
+        ("remote_operation_restored", "docker_version"),
+        ("remote_operation_restored", "dockerpilot_version"),
+    ]
+    assert events[-1].occurrences == 2
+    assert events[-1].downtime_seconds == 15.0
