@@ -828,20 +828,21 @@ def execute_docker_command_via_ssh(server_config, docker_command, check_exit_sta
         return execute_command_via_ssh(server_config, command, check_exit_status=check_exit_status)
 
 def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=True):
-    """Execute command and return stdout/stderr without invoking a local shell."""
-    try:
-        return _svc_execute_ssh_command(
-            server_config,
-            command,
-            ssh_available=SSH_AVAILABLE,
-            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
-            check_exit_status=check_exit_status,
-            return_stderr=True,
-            timeout=300,
-        )
-    except Exception as exc:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
-        raise
+    """Execute command and return stdout/stderr without invoking a local shell.
+
+    The operation boundary is responsible for logging failures with context.
+    This transport helper deliberately does not log, preventing duplicate
+    records when callers retry or report a migration-specific failure.
+    """
+    return _svc_execute_ssh_command(
+        server_config,
+        command,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        check_exit_status=check_exit_status,
+        return_stderr=True,
+        timeout=300,
+    )
 
 
 def get_selected_server_config():
