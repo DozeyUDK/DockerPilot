@@ -166,6 +166,13 @@ class _PermissionedRotatingFileHandler(RotatingFileHandler):
         self.file_mode = file_mode
         super().__init__(filename, **kwargs)
 
+    def handleError(self, record):
+        """Never let logging's default handler print the original secret-bearing record."""
+        try:
+            os.write(2, b"DockerPilot Extras file logging failed; event dropped\\n")
+        except OSError:
+            pass
+
     def _open(self):
         # O_NOFOLLOW prevents a pre-created extras.jsonl symlink from redirecting
         # log writes or chmod to an unrelated file on POSIX systems.
