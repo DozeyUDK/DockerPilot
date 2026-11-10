@@ -1,0 +1,28 @@
+// DockerPilot Extras file log source.
+// Adjust the log path and Loki URL for your host/network.
+// If you already have a loki.write component, remove this writer and point
+// forward_to at the existing writer's receiver instead.
+
+loki.source.file "dockerpilot_extras" {
+  targets = [
+    {
+      "__path__"     = "/var/log/dockerpilot-extras/extras.jsonl*",
+      "job"          = "dockerpilot-extras",
+      "service_name" = "dockerpilot-extras",
+    },
+  ]
+
+  forward_to = [loki.write.dockerpilot_extras.receiver]
+  tail_from_end = true
+
+  file_match {
+    enabled = true
+    sync_period = "10s"
+  }
+}
+
+loki.write "dockerpilot_extras" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}
