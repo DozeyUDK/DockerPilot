@@ -1,6 +1,6 @@
-# Dozeyguard
+# DozeyGuard
 
-Offline static policy enforcer for Secure Deploy (DockerPilot).
+Offline static policy scanner used by Secure Deploy (DockerPilot).
 
 ## Role
 
@@ -10,8 +10,7 @@ structured findings (DG001–DG026). It is used by:
 - DockerPilotExtras Secure Deploy (plan generation / preview)
 - Root Secure Deploy broker (`verify_plan` / `dry_run` revalidation)
 
-It does **not** talk to the Docker daemon, open `docker.sock`, call the Docker
-API, apply firewall rules, or materialize secrets.
+It does **not** authorize deployments or talk to the Docker daemon, open `docker.sock`, call the Docker API, apply firewall rules, or materialize secrets. The privileged broker runs its own trusted copy and independently evaluates the plan before canary admission or execution.
 
 ## Versioning
 

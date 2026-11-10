@@ -1,753 +1,214 @@
-# Docker Pilot
+# DockerPilot
+
 [![CI](https://github.com/DozeyUDK/DockerPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/DozeyUDK/DockerPilot/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/DozeyUDK/DockerPilot)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/DozeyUDK/DockerPilot?sort=semver)](https://github.com/DozeyUDK/DockerPilot/releases)
-[![Docs](https://img.shields.io/badge/docs-README%20%26%20guides-blue)](docs/)
+[![Docs](https://img.shields.io/badge/docs-guides-blue)](docs/)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/DozeyUDK/DockerPilot?quickstart=1)
-<img width="2667" height="465" alt="image" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
-**Docker container management tool with advanced deployment capabilities, real-time monitoring, and CI/CD integration.**
+<img width="2667" height="465" alt="DockerPilot" src="https://github.com/user-attachments/assets/c6ae8332-7e0e-4588-b014-ad9a90992087" />
 
+**DockerPilot is a Docker operations platform with an optional privilege-separated Secure Deploy path, broker-owned approvals, and independent policy revalidation.**
 
-## Architecture
+It combines a CLI/TUI, an optional operations web panel, and an MCP server. Secure Deploy is the security-focused deployment path: it moves privileged deployment decisions out of the Extras web process and into a separately controlled host broker.
 
-DockerPilot provides three distinct entry points: a local **CLI/TUI**, an optional **Extras** web panel, and an optional **MCP** server for AI-assisted operations. They share Docker as a runtime target but have different access and security paths.
+> Secure Deploy is an optional architecture, not a blanket claim that every DockerPilot component is isolated from Docker or safe to expose to an untrusted user.
 
-```mermaid
+## Why Secure Deploy
+
+A web application that can access the Docker daemon has substantial host authority. DockerPilot's Secure Deploy profile is designed to keep that authority out of the DockerPilotExtras control plane.
+
+- **Deterministic plans:** a deployment plan is canonicalized and identified by a SHA-256 hash. Security-relevant fields, including plan expiry, are covered by that hash.
+- **Independent revalidation:** the broker recomputes the plan identity, source-spec and Compose semantics, firewall plan, and DozeyGuard result. It does not trust a status or hash merely because Extras supplied it.
+- **Broker-owned approval:** the broker creates and stores approval records itself. Approval is bound to one plan ID and hash; the control plane receives an approval ID, not authority-bearing approval JSON.
+- **Separate approver boundary:** a root-only Unix socket accepts approval requests. The broker derives the peer UID through Linux SO_PEERCRED and checks a root-owned allowlist.
+- **Closed execution path:** the broker exposes an allowlist of operations and a fixed canary workflow. It is not a generic root shell, arbitrary Docker API, or unrestricted Compose runner.
+
+### Secure Deploy flow
+
+~~~mermaid
 flowchart TB
-    subgraph Actors["USERS AND AUTOMATION"]
-        direction LR
-        Operator["Operator"]
-        Assistant["AI assistant"]
-    end
+    Operator["Operator"] --> Extras["DockerPilotExtras<br/>unprivileged control plane"]
+    Extras --> Plan["Validate spec and create<br/>canonical deployment plan"]
+    Plan --> Hash["plan_sha256"]
+    Hash --> Control["Broker control socket<br/>request verification / challenge"]
+    Control --> Broker["Root-owned Secure Deploy broker"]
+    Broker --> Verify["Recompute plan, Compose,<br/>firewall and DozeyGuard"]
+    Verify --> Challenge["Non-authorizing approval challenge"]
+    Challenge --> Approver["Allowlisted local process"]
+    Approver --> Socket["Root-only approver.sock<br/>SO_PEERCRED + UID allowlist"]
+    Socket --> Ledger["Broker-owned approval ledger"]
+    Ledger --> Broker
+    Broker --> Admission["Fixed canary admission<br/>and execution state machine"]
+    Admission --> Docker["Docker Engine"]
+    Tamper["Plan drift / forged result / expired approval"] --> Reject["Reject before Docker action"]
+~~~
 
-    subgraph Entry["ENTRY POINTS"]
-        direction LR
-        CLI["CLI and TUI"]
-        Web["Extras web UI<br/>React"]
-        MCP["MCP server<br/>stdio"]
-    end
+The approval socket proves that the request came from an allowlisted local UID outside the Extras service-account boundary. It does not make the Extras UI an independently trusted plan display. The repository does not currently provide a separate trusted plan viewer for the root approver; plan contents and hash must be verified out of band. Approval by hash alone is not proof that the plan contents were reviewed.
 
-    subgraph App["APPLICATION SERVICES"]
-        direction LR
-        Core["DockerPilot core<br/>containers / images / deploy / monitor"]
-        API["Extras API<br/>Flask / REST"]
-        MCPPolicy["MCP policy and DockerOps<br/>read-only by default"]
-        Pipelines["CI/CD pipeline generator"]
-    end
+### Current scope and limits
 
-    subgraph Secure["OPTIONAL SECURE DEPLOY BOUNDARY"]
-        direction LR
-        Plan["Validate, plan and approve"]
-        Broker["Privileged broker<br/>independent verification"]
-        Guard["Dozeyguard and approval checks"]
-    end
+Secure Deploy currently supports a constrained broker-owned canary path. It does not provide generic privileged deployment of arbitrary Compose files.
 
-    subgraph Targets["RUNTIME AND OUTPUTS"]
-        direction LR
-        Docker[("Docker Engine")]
-        Store[("File state / optional PostgreSQL")]
-        CI["Generated pipeline files<br/>GitHub Actions / GitLab CI / Jenkins"]
-    end
+The broker protocol does not expose arbitrary shell or command execution, arbitrary client-supplied Compose, generic apply, unrestricted firewall changes, or secret materialization. The canary path uses a broker-owned Compose template and rechecks the final bytes before execution.
 
-    Operator --> CLI
-    Operator --> Web
-    Assistant --> MCP
-    CLI --> Core
-    Web --> API
-    API --> Core
-    MCP --> MCPPolicy
-    Core --> Docker
-    MCPPolicy --> Docker
-    Core --> Store
-    API --> Store
-    Core --> Pipelines
-    API --> Pipelines
-    Pipelines --> CI
-    API -. "secure requests" .-> Plan
-    Plan -. "local Unix socket" .-> Broker
-    Broker --> Guard
-    Broker --> Docker
+The broker itself runs with host-level authority and Docker daemon access. Compromise of the broker, host root, Docker daemon, or an allowlisted approver identity is outside the protection boundary. Repository unit files and installer tooling do not prove that the broker has been installed on a particular host; installation is a separate, privileged operator action.
 
-    classDef entry fill:#e9f2ff,stroke:#5485bc,color:#193653,stroke-width:1px
-    classDef app fill:#e8f6f0,stroke:#438d74,color:#183e33,stroke-width:1px
-    classDef secure fill:#fff0e2,stroke:#be8254,color:#553319,stroke-width:1px
-    classDef target fill:#f1eef9,stroke:#8473b1,color:#342853,stroke-width:1px
-    class CLI,Web,MCP entry
-    class Core,API,MCPPolicy,Pipelines app
-    class Plan,Broker,Guard secure
-    class Docker,Store,CI target
-```
+See the [current broker threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md), [approval model](docs/security/SECURE_DEPLOY_APPROVAL_MODEL.md), and [security invariants](docs/security/SECURITY_INVARIANTS.md).
 
-**Reading the diagram:** Solid arrows show normal runtime or data flows; dashed arrows show the optional Secure Deploy route. The MCP server uses its own policy-gated Docker operations rather than passing through the interactive CLI. Secure Deploy crosses a separate Unix-socket broker boundary, where plans are independently verified before limited Docker actions. Pipeline generation writes CI configuration files; it does **not** mean DockerPilot runs a GitHub Actions, GitLab CI, or Jenkins runner.
+## Components
 
-Related details: [MCP integration](docs/mcp.md), [DockerPilotExtras](DockerPilotExtras/README.md), and the [Secure Deploy threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md).
+| Component | Purpose |
+|---|---|
+| **DockerPilot CLI/TUI** | Local container, image, monitoring, rolling/blue-green/canary deployment, backup, and configuration operations |
+| **DockerPilotExtras** | Optional web workbench for environments, CI profiles, status, storage, and operations |
+| **MCP server** | Structured DockerPilot tools for AI clients; read-only by default |
+| **Secure Deploy broker** | Separate privileged boundary for the constrained, approved canary workflow |
+| **DozeyGuard** | Offline policy scanner for normalized Compose input; it does not call Docker or apply changes |
 
+DockerPilot can also generate CI pipeline configuration for GitHub Actions, GitLab CI, and Jenkins. It writes pipeline files; the external CI runner executes them.
 
-## Live Demo (GitHub Codespaces)
+The CLI and ordinary MCP operations use the Docker permissions of their process. Membership in the Docker group or unrestricted access to docker.sock is effectively root-equivalent. Prefer rootless Docker where practical and grant daemon access only to trusted operators.
 
-Launch an isolated DockerPilot demo directly from the current repository checkout:
+MCP read-only mode is the default, but it can be changed through configuration. The MCP tool's **confirm: true** argument is caller acknowledgement, not independent human approval. MCP and Secure Deploy are separate execution paths; see the [MCP safety model](docs/mcp.md).
+
+## Live Demo
+
+Launch the isolated demo from the current repository checkout:
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/DozeyUDK/DockerPilot?quickstart=1)
 
-The Codespace runs the real `src/dockerpilot/` package and the real `DockerPilotExtras/` frontend/backend against Docker-in-Docker. `demo/` only supplies disposable sample containers, isolated state, generated credentials, and lifecycle helpers, so there is no second copy of the application to keep in sync. A new Codespace created from `main` therefore uses the current `main`; a Codespace created from a branch or PR demonstrates that ref instead.
+The Codespace runs the real CLI package and DockerPilotExtras frontend/backend against Docker-in-Docker. The public demo is **read-only by default**. Its backend guard blocks Docker-admin mutations, command execution, migrations, server/storage changes, and Secure Deploy mutations.
 
-The shareable demo is **read-only by default**: Docker-admin mutations, command execution, migrations, server/storage changes and Secure Deploy mutations are blocked by the backend demo guard. After startup, run `bash demo/status.sh` to show the URL and generated demo credentials. Port `5000` remains private by default; use `bash demo/public.sh` only when you intentionally want to share the read-only demo, then `bash demo/private.sh` when finished. See [demo/README.md](demo/README.md) for the full workflow and isolation model.
+After startup:
 
-## Full Stack Install (CLI + DockerPilotExtras)
+~~~bash
+bash demo/status.sh
+~~~
 
-Use this when you want the DockerPilot CLI and the optional DockerPilotExtras web panel on the same machine.
+To demonstrate the Secure Deploy verification path in a disposable test harness:
 
-### Linux/macOS
-```bash
-git clone https://github.com/DozeyUDK/DockerPilot.git
-cd DockerPilot && chmod +x install_everything.sh && ./install_everything.sh
-```
+~~~bash
+bash demo/secure-deploy-demo.sh
+~~~
 
-### Windows (PowerShell)
-```powershell
+This runs selected regression tests against the real broker, plan, and approval code using temporary state and a fake DozeyGuard executable. It demonstrates broker revalidation, plan-tamper rejection, approval provenance checks, and expiry binding. It does **not** start a production broker, access the host Docker daemon, change firewall rules, read secrets, or deploy a container. It is a code-path demonstration, not a production installation.
+
+Codespaces forwards port 5000 privately by default. **bash demo/public.sh** only exposes the read-only demo; it refuses to make an interactive demo public. See [demo/README.md](demo/README.md) for isolation and lifecycle details.
+
+## Install
+
+### CLI only
+
+Linux/macOS:
+
+~~~bash
 git clone https://github.com/DozeyUDK/DockerPilot.git
 cd DockerPilot
-powershell -ExecutionPolicy Bypass -File install.ps1 -Extras
-```
+./install.sh
+~~~
 
-### Windows (CMD)
-```cmd
-git clone https://github.com/DozeyUDK/DockerPilot.git
-cd DockerPilot && install.bat extras
-```
+Windows PowerShell:
 
-**What full stack install does:**
-- installs DockerPilot CLI
-- installs the optional TUI dependencies, so `dockerpilot tui` works right away
-- installs DockerPilotExtras backend Python dependencies
-- installs DockerPilotExtras frontend dependencies with `npm install` if Node.js and npm are already available
-- leaves DockerPilotExtras frontend install as a clear warning if Node.js/npm are missing
-
-**Requirements for full stack install:**
-- Python 3.10+
-- Docker 20.10+
-- Node.js 18+ and npm for the DockerPilotExtras frontend
-
-## Quick Install (CLI Only)
-
-### Linux/macOS
-```bash
-git clone https://github.com/DozeyUDK/DockerPilot.git
-cd DockerPilot && chmod +x install.sh && ./install.sh
-```
-
-### Windows (PowerShell)
-```powershell
+~~~powershell
 git clone https://github.com/DozeyUDK/DockerPilot.git
 cd DockerPilot
 powershell -ExecutionPolicy Bypass -File install.ps1
-```
+~~~
 
-### Windows (CMD)
-```cmd
-git clone https://github.com/DozeyUDK/DockerPilot.git
-cd DockerPilot && install.bat
-```
+### CLI + DockerPilotExtras
 
-**What the installer does:**
-- Checks Python 3.10+ and Docker
-- Installs Docker Pilot in a **virtual environment** (default), so it works on Ubuntu/Debian 24.04+ and other distros with [PEP 668](https://peps.python.org/pep-0668/) (no "externally-managed-environment" error)
-- Installs the TUI dependency set too, so `dockerpilot tui` is available after script-based install
-- Puts `dockerpilot` in `~/.local/bin` (ensure it's in your `PATH`)
-- Verifies installation
+Linux/macOS:
 
-**Install options:**
-- `./install.sh` — install in venv (recommended for most users)
-- `./install.sh --system` — install system-wide (e.g. if you develop Docker Pilot)
-- `./install.sh --extras` — install CLI plus DockerPilotExtras
-- `./install_everything.sh` — wrapper for `./install.sh --extras`
-
-**Prerequisites:**
-- Python 3.10+
-- Docker 20.10+ (with daemon running)
-- On Debian/Ubuntu: `sudo apt install python3-venv` if the venv step fails
-
-## Manual Installation
-
-```bash
+~~~bash
 git clone https://github.com/DozeyUDK/DockerPilot.git
 cd DockerPilot
-```
+./install_everything.sh
+~~~
 
-On **Ubuntu 24.04+, Debian 12+** (or any PEP 668 environment), use a venv or `--break-system-packages`:
+Windows PowerShell:
 
-```bash
+~~~powershell
+git clone https://github.com/DozeyUDK/DockerPilot.git
+cd DockerPilot
+powershell -ExecutionPolicy Bypass -File install.ps1 -Extras
+~~~
+
+The script-based installer uses a virtual environment by default, avoiding PEP 668 conflicts on current Debian and Ubuntu releases. DockerPilotExtras also needs Node.js 18+ and npm to build its frontend.
+
+### Manual install
+
+Use a virtual environment rather than modifying the system Python:
+
+~~~bash
+git clone https://github.com/DozeyUDK/DockerPilot.git
+cd DockerPilot
 python3 -m venv .venv
-.venv/bin/pip install -e .
-# run with: .venv/bin/dockerpilot
-```
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+~~~
 
-Or system-wide (if you prefer):
+Optional extras:
 
-```bash
-pip install -e . --break-system-packages
-```
+~~~bash
+python -m pip install -e ".[tui]"       # Mouse-friendly terminal UI
+python -m pip install -e ".[mcp]"       # MCP server
+python -m pip install -e ".[git]"       # Git integration
+python -m pip install -e ".[test]"      # Test dependencies
+~~~
 
-**Optional extras:**
-```bash
-pip install -e .[git]   # Git integration for CI/CD
-pip install -e .[test]  # Development dependencies
-pip install -e .[tui]   # Mouse-friendly terminal UI
-pip install -e .[mcp]   # MCP server (AI assistants / stdio tools)
-```
+Avoid **--break-system-packages** on PEP 668 distributions. The installer's explicit **--system** mode is intended only for environments where the operator deliberately manages system Python packages; the default virtual-environment install is recommended.
 
-## MCP support (AI tools)
+**Requirements:** Python 3.10+, Docker Engine 20.10+. Node.js 18+ and npm are required for the DockerPilotExtras frontend.
 
-DockerPilot can run as an MCP server so AI assistants can safely inspect DockerPilot/Docker state and perform controlled container actions.
+## First commands
 
-See the [MCP integration guide](docs/mcp.md).
-
-**Verify installation:**
-```bash
+~~~bash
 dockerpilot --help
-dockerpilot validate  # Check system requirements
-```
-
-**Install DockerPilotExtras later:**
-```bash
-cd DockerPilotExtras
-chmod +x setup_extras.sh && ./setup_extras.sh
-```
-
----
-
-## Repository Layout
-
-- `src/dockerpilot/` - core CLI package
-- [`DockerPilotExtras/`](DockerPilotExtras/README.md) - optional CI/CD and operations web panel built on top of the CLI
-- `demo/` - isolated live-demo fixtures and lifecycle helpers; never a copy of application source
-- `.devcontainer/` - GitHub Codespaces environment for the live demo
-- `docs/` - user-facing guides and reference material
-- `scripts/` - maintainer and release helpers
-- `tools/` - optional standalone tools
-
----
-
-## Table of Contents
-
-- [Architecture](#architecture)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Container Management](#container-management)
-- [Image Management](#image-management)
-- [Monitoring](#monitoring)
-- [Deployment Strategies](#deployment-strategies)
-- [CI/CD Integration](#cicd-integration)
-- [Configuration](#configuration)
-- [Advanced Features](#advanced-features)
-- [Troubleshooting](#troubleshooting)
-- [Additional Guides](#additional-guides)
-
-## Features
-
-### Core Capabilities
-- **Container Operations**: Start, stop, restart, remove, rename, pause, unpause, exec into containers
-- **Image Management**: List, build, and remove Docker images
-- **Real-time Monitoring**: CPU, memory, network I/O, and process tracking
-- **Health Checks**: Automated container health validation
-- **Interactive Dashboard**: Live metrics with trend indicators
-- **Container Shell Access**: Execute interactive bash/sh sessions inside running containers
-
-### Advanced Deployment
-- **Rolling Deployment**: Zero-downtime updates with automatic rollback
-- **Blue-Green Deployment**: Parallel environment switching for maximum safety
-- **Canary Deployment**: Gradual traffic shifting with performance monitoring
-
-### DevOps Integration
-- GitHub Actions, GitLab CI, and Jenkins pipeline generation
-- Optional DockerPilotExtras workbench with editable CI profiles, validated previews, and a read-only saved pipeline library
-- Environment promotion (dev -> staging -> prod)
-- Integration testing framework
-- Monitoring and alerting system
-- Backup and restore functionality
-
-## Quick Start
-
-### Interactive Mode
-
-Run without arguments to enter interactive mode:
-
-```bash
-dockerpilot
-```
-
-Select from available commands:
-- `list` - List all containers
-- `start` - Start a container
-- `stop` - Stop a container
-- `monitor` - Real-time monitoring
-- `deploy-init` - Create deployment config
-- And many more...
-
-### Mouse-Friendly TUI
-
-Install the optional TUI extra and launch the clickable terminal UI:
-
-```bash
-pip install -e .[tui]
-dockerpilot tui
-```
-
-Use the mouse to:
-- click through command groups and subcommands
-- fill arguments in a form instead of retyping flags
-- pick existing containers and images from live Docker-backed lists for target-based commands
-- keep per-command form drafts and cached target choices while navigating
-- serialize refresh and run actions so rapid input cannot mix command state
-- run the generated command directly from the TUI
-
-### Usage
-
-After installation, the `dockerpilot` command is available globally:
-
-```bash
-# Interactive mode
-dockerpilot
-
-# Mouse-friendly TUI
-dockerpilot tui
-
-# CLI commands
 dockerpilot container list --all
 dockerpilot monitor dashboard myapp --duration 300
-dockerpilot deploy config deployment.yml --type rolling
-
-# Get help
-dockerpilot --help
-```
-
-If `pip install -e .` was used, the command is automatically available. Otherwise, you can run:
-
-```bash
-python -m dockerpilot.main
-```
-
-## Container Management
-
-### List Containers
-
-```bash
-# Table format (default)
-dockerpilot container list --all
-
-# JSON format
-dockerpilot container list --format json
-```
-
-### Container Operations
-
-```bash
-# Start container
-dockerpilot container start myapp
-
-# Stop container (with timeout)
-dockerpilot container stop myapp --timeout 30
-
-# Restart container
-dockerpilot container restart myapp
-
-# Remove container
-dockerpilot container remove myapp --force
-
-# Pause/Unpause
-dockerpilot container pause myapp
-dockerpilot container unpause myapp
-
-# Execute interactive shell in container
-dockerpilot container exec myapp
-
-# Execute custom command in container
-dockerpilot container exec myapp --command /bin/sh
-dockerpilot container exec myapp --command "ls -la /app"
-```
-
-### View Container Logs
-
-Interactive mode:
-```bash
-dockerpilot
-# Choose: logs
-```
-
-### View Container Details (JSON)
-
-Interactive mode:
-```bash
-dockerpilot
-# Choose: json
-# Enter container name
-```
-
-## Image Management
-
-### List Images
-
-```bash
-# Table format
-dockerpilot container list-images --all
-
-# JSON format
-dockerpilot container list-images --format json
-```
-
-### Build Images
-
-```bash
-dockerpilot build /path/to/dockerfile myapp:latest --no-cache
-```
-
-If `dockerpilot build` does not find a `Dockerfile` directly in the path you gave it, it now:
-- auto-detects a single local Dockerfile one level below the target directory
-- can pull the requested image tag instead: `dockerpilot build . mongo:latest --pull-if-missing`
-- can generate a starter Dockerfile first: `dockerpilot build . myapp:latest --generate-template python`
-
-Interactive mode:
-```bash
-dockerpilot
-# Choose: build
-# Follow prompts
-```
-
-### Remove Images
-
-```bash
-dockerpilot container remove-image myapp:latest --force
-```
-
-## Monitoring
-
-### Real-time Dashboard
-
-Monitor all running containers:
-```bash
-dockerpilot monitor dashboard --duration 300
-```
-
-Monitor specific containers:
-```bash
-dockerpilot monitor dashboard webapp database cache --duration 600
-```
-
-The dashboard displays:
-- Container status
-- CPU usage with trend indicators (up/down/steady)
-- Memory usage and percentage
-- Network I/O (download/upload)
-- Process count (PIDs)
-- Uptime
-
-Metrics are automatically saved to `docker_metrics.json`.
-
-## One-Click Deploy
-
-**Quick deploy in 2 steps:**
-
-```bash
-# 1. Create deployment config
+dockerpilot tui
 dockerpilot deploy init --output deployment.yml
+~~~
 
-# 2. Edit deployment.yml with your settings, then deploy
-dockerpilot deploy config deployment.yml --type rolling
-```
+Classic CLI deployment commands use the current process's Docker permissions and the legacy deployment configuration format. They do not automatically use the Secure Deploy broker. See [Quick Deploy](docs/quick-deploy.md) for the classic deployment workflow.
 
-**Deployment types:**
-- `rolling` - Zero-downtime updates (default)
-- `blue-green` - Safest, parallel environments
-- `canary` - Gradual rollout (5% -> 100%)
+## Documentation
 
-**Example deployment.yml:**
-```yaml
-deployment:
-  image_tag: 'myapp:latest'
-  container_name: 'myapp'
-  port_mapping: {'8080': '8080'}
-  environment: {ENV: 'production'}
-  restart_policy: 'unless-stopped'
-  health_check_endpoint: '/health'
-```
+| Guide | What it covers |
+|---|---|
+| [DockerPilotExtras](DockerPilotExtras/README.md) | Web panel, environments, CI profiles, status, storage, and API |
+| [Quick Deploy](docs/quick-deploy.md) | Classic CLI deployment and strategies |
+| [Multiple Containers](docs/multi-container.md) | Multi-container operations |
+| [Health Checks](docs/guides/HEALTH_CHECKS_CONFIG.md) | Endpoint discovery and overrides |
+| [Environment Promotion](docs/guides/ENVIRONMENT_PROMOTION_GUIDE.md) | Current behavior and limits of dockerpilot promote |
+| [Sudo and Backup Permissions](docs/guides/SUDO_SETUP.md) | Scoped elevation and Docker permission boundaries |
+| [MCP Integration](docs/mcp.md) | MCP setup, configuration, and safety controls |
+| [DozeyGuard](components/dozeyguard/README.md) | Scanner role, JSON contract, build, and integration |
+| [Release Process](docs/RELEASING.md) | Version synchronization, CI gates, and release policy |
 
-**View deployment history:**
-```bash
-dockerpilot deploy history --limit 20
-```
+Security and implementation references:
 
-## CI/CD Integration
-
-### Generate Pipeline Configurations
-
-**GitHub Actions:**
-```bash
-dockerpilot pipeline create --type github --output .github/workflows
-```
-
-**GitLab CI:**
-```bash
-dockerpilot pipeline create --type gitlab
-```
-
-**Jenkins:**
-```bash
-dockerpilot pipeline create --type jenkins
-```
-
-### DockerPilotExtras Pipeline Workbench
-
-The optional [DockerPilotExtras web panel](DockerPilotExtras/README.md) provides editable Node.js CI,
-Python CI, and delivery profiles for GitLab CI and Jenkins. It validates the configuration before
-generation and marks an older preview as stale when the form changes.
-
-The **Saved Pipelines** panel lists, opens, and downloads the allowlisted artifacts
-`.gitlab-ci.yml`, `Jenkinsfile`, and `pipeline.yml`. Saving stores the artifact in the configured
-Extras pipeline directory; it does not execute a pipeline or push anything to a source repository.
-
-### Environment Promotion
-
-Promote from dev to staging:
-```bash
-dockerpilot promote dev staging --config deployment.yml
-```
-
-Promote to production:
-```bash
-dockerpilot promote staging prod --config deployment.yml
-```
-
-**Features:**
-- Environment-specific resource allocation
-- Automated pre-promotion checks
-- Post-promotion validation
-- Rollback on failure
-
-## Configuration
-
-### Logging Levels
-
-```bash
-dockerpilot --log-level DEBUG container list
-```
-
-Available levels: DEBUG, INFO, WARNING, ERROR
-
-### Configuration Files
-
-The tool uses several configuration files:
-
-- `deployment.yml` - Deployment configuration
-- `alerts.yml` - Monitoring alerts
-- `integration-tests.yml` - Test definitions
-- `docker_pilot.log` - Application logs
-- `docker_metrics.json` - Performance metrics
-- `deployment_history.json` - Deployment records
-
-### Export/Import Configuration
-
-```bash
-# Export all configs
-dockerpilot config export --output backup.tar.gz
-
-# Import configs
-dockerpilot config import backup.tar.gz
-```
-
-## Advanced Features
-
-### Integration Testing
-
-Create test configuration (`integration-tests.yml`):
-
-```yaml
-tests:
-  - name: 'Health Check'
-    type: 'http'
-    url: 'http://localhost:8080/health'
-    expected_status: 200
-    timeout: 5
-  
-  - name: 'API Endpoint'
-    type: 'http'
-    url: 'http://localhost:8080/api/status'
-    expected_status: 200
-    timeout: 10
-```
-
-Run tests:
-```bash
-dockerpilot test --config integration-tests.yml
-```
-
-### Monitoring Alerts
-
-Setup alerts:
-```bash
-dockerpilot alerts --config alerts.yml
-```
-
-Configure alert rules in `alerts.yml`:
-
-```yaml
-alerts:
-  - name: 'high_cpu_usage'
-    condition: 'cpu_percent > 80'
-    duration: '5m'
-    severity: 'warning'
-    message: 'CPU usage is above 80%'
-
-notification_channels:
-  - type: 'slack'
-    webhook_url: 'https://hooks.slack.com/...'
-    channel: '#alerts'
-```
-
-### Backup and Restore
-
-Create backup:
-```bash
-dockerpilot backup create --path ./backup_20240104
-```
-
-Restore from backup:
-```bash
-dockerpilot backup restore ./backup_20240104
-```
-
-Backups include:
-- Container configurations
-- Image information
-- Network settings
-- Volume definitions
-
-### Production Checklist
-
-Generate deployment checklist:
-```bash
-dockerpilot checklist --output production-checklist.md
-```
-
-### Documentation Generation
-
-Generate complete documentation:
-```bash
-dockerpilot docs --output ./docs
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**Docker Connection Failed:**
-
-1. Check whether the daemon is reachable with `docker info`.
-2. Verify that the current account has intentionally configured Docker access.
-3. Prefer rootless Docker where practical. If you intentionally use the `docker` group, treat membership as root-equivalent host access and grant it only to trusted operators.
-4. Restart Docker only if the daemon itself is unhealthy: `sudo systemctl restart docker`.
-
-**Permission Denied:**
-
-Do not change ownership or permissions on `/var/run/docker.sock` manually. Configure Docker access intentionally through your Docker installation (for example, rootless Docker or an explicitly managed Docker group). Membership in the `docker` group grants root-equivalent control of the host, so only grant it to trusted operators.
-
-**Health Check Failures:**
-- Verify endpoint exists: `curl http://localhost:8080/health`
-- Check container logs
-- Increase timeout in deployment config
-
-**Port Already in Use:**
-```bash
-# Find process using port
-netstat -tulpn | grep :8080
-
-# Kill process or use different port
-```
-
-### Debug Mode
-
-Enable detailed logging:
-```bash
-dockerpilot --log-level DEBUG <command>
-```
-
-### Log Files
-
-Check logs for detailed information:
-- `docker_pilot.log` - Main application log
-- `docker_metrics.json` - Performance data
-- `deployment_history.json` - Deployment records
-- `integration-test-report.json` - Test results
-
-## System Validation
-
-Verify all requirements are met:
-
-```bash
-dockerpilot validate
-```
-
-Checks:
-- Python version (3.10+)
-- Docker connectivity
-- Required Python modules
-- Disk space
-- Docker daemon permissions
+- [Secure Deploy broker threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md)
+- [Secure Deploy approval model](docs/security/SECURE_DEPLOY_APPROVAL_MODEL.md)
+- [Approval provenance and trust boundary](docs/security/APPROVAL_PROVENANCE_V1.md)
+- [Secure Deploy contract v1](docs/security/SECURE_DEPLOY_CONTRACT_V1.md)
+- [Broker protocol v1](docs/security/SECURE_DEPLOY_BROKER_PROTOCOL_V1.md)
+- [Security invariants](docs/security/SECURITY_INVARIANTS.md)
+- [Adversarial test plan](docs/security/ADVERSARIAL_TEST_PLAN.md)
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-- Fork the repository
-- Create a feature branch
-- Make your changes
-- Submit a pull request
-
-## Additional Guides
-
-Detailed documentation for specific features:
-
-- **[Quick Deploy Guide](docs/quick-deploy.md)** - Rapid deployment with automatic cleanup
-- **[Multiple Containers Operations](docs/multi-container.md)** - Managing multiple containers at once
-- **[Environment Promotion Guide](docs/guides/GRAFANA_PROMOTION_GUIDE.md)** - Promoting containers between environments
-- **[Blue-Green Data Migration](docs/guides/blue-green-data-migration.md)** - Data migration during deployments
-- **[Sudo and Backup Permissions](docs/guides/SUDO_SETUP.md)** - Docker access, privileged bind-mount fallback and scoped elevation
-- **[Health Checks Configuration](docs/guides/HEALTH_CHECKS_CONFIG.md)** - Customizing health check endpoints
-- **[DockerPilotExtras Web Panel](DockerPilotExtras/README.md)** - CI/CD workbench, environments, status, storage, and API reference
-- **[MCP Integration](docs/mcp.md)** - Connecting DockerPilot to AI assistants and stdio tools
-- **[Release Process](docs/RELEASING.md)** - Version synchronization, CI gates, tagging and UAT release policy
-- **[Secure Deploy Threat Model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md)** - Security boundaries for privileged deployment operations
-- **[Network Searcher Tool](tools/searcher/README.md)** - Optional packet sniffer helper
-
-## Best Practices
-
-1. **Always test deployments** in non-production environments first
-2. **Use health checks** to ensure application readiness
-3. **Set resource limits** to prevent resource exhaustion
-4. **Enable monitoring alerts** for production deployments
-5. **Create backups** before major changes
-6. **Review deployment history** to track changes
-7. **Use blue-green deployments** for critical production updates
-8. **Test rollback procedures** regularly
-9. **Start with local or staging deployments** before promoting to production
+Issues and pull requests are welcome. Please include focused tests for behavior changes and keep security claims aligned with the current implementation. Start with the [contributing guidelines](CONTRIBUTING.md).
 
 ## License
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for a list of changes and version history.
-
-## Support
-
-- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/DozeyUDK/DockerPilot/issues)
-- **Documentation**: Check the `docs/` directory
-- **Logs**: Review `docker_pilot.log` for detailed error messages
+MIT. See [LICENSE](LICENSE).
 
 ---
 
 - **Version**: 0.9.0-pre.3
 - **Python**: 3.10+
 - **Docker**: 20.10+
-- **Components**: CLI package and optional `DockerPilotExtras` web panel
+- **Components**: CLI package, optional DockerPilotExtras web panel, optional MCP server

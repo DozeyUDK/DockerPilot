@@ -84,16 +84,16 @@ health_checks:
     - ssh
     - redis
     - myCustomTCPService
-  
+
   # Add custom endpoint mappings
   endpoint_mappings:
     # Your custom services
     my-custom-app: /api/health
     another-service: /healthz
-    
+
     # Override defaults
     ollama: /custom/health  # Override default /api/version
-    
+
   # Change default endpoint
   default_endpoint: /api/status
 ```
@@ -155,14 +155,7 @@ health_checks:
 
 ## Environment Promotion
 
-Health check configuration is **preserved during environment promotion**:
-
-```bash
-# Promote from DEV to STAGING
-dockerpilot promote dev staging --config deployment-dev.yml
-```
-
-The health check endpoint will be automatically detected for the target environment based on the image.
+The promotion workflow reuses the deployment configuration. Post-promotion validation performs an HTTP health check when a port mapping is configured. The current pre-promotion messages about tests and monitoring are simulated, not live CI or monitoring gates. See the [Environment Promotion Guide](./ENVIRONMENT_PROMOTION_GUIDE.md) for the current behavior and limitations.
 
 ## Troubleshooting
 
@@ -236,7 +229,7 @@ health_checks:
 
 ## Related Documentation
 
-- [Environment Promotion](./GRAFANA_PROMOTION_GUIDE.md)
-- [Deployment Configurations](./src/dockerpilot/configs/)
+- [Environment Promotion](./ENVIRONMENT_PROMOTION_GUIDE.md)
+- [Deployment Configurations](../../src/dockerpilot/configs/)
 - [Sudo Setup for Backups](./SUDO_SETUP.md)
 
