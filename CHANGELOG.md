@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Structured JSONL logging for DockerPilot Extras with bounded rotation, restrictive permissions, request IDs and an importable Grafana Loki dashboard
-- Optional Grafana Alloy file-source example and documentation for connecting Extras to an existing Grafana/Loki/Alloy stack
-- Regression coverage for log redaction, HTTP polling noise, request correlation and remote-failure aggregation
-
-### Changed
-- Console output now defaults to warnings while full application diagnostics are retained in the local JSONL log
-- Repeated SSH probe and container-list failures are aggregated, with a single recovery event when connectivity returns
-- Flask debug mode and the development reloader are opt-in through DOCKERPILOT_EXTRAS_DEBUG
-
 ### Planned
 - Kubernetes integration
 - Docker Compose support
@@ -25,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Webhook notifications
 - Plugin system
 
-## [0.9.0-pre.3] - 2026-10-06
+## [0.9.0-pre.3] - 2026-11-10
 
 ### Added
 - Agent-safe mutation boundary for AI-facing DockerPilot usage
@@ -33,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Separate root-only approval socket using Linux `SO_PEERCRED` provenance
 - Broker-backed approval lookup/revocation and live approval-ID enforcement
 - Permanent adversarial regressions for plan identity, artifact pinning, broker config trust and approval provenance
+- Structured JSONL logging for DockerPilot Extras with bounded rotation, restrictive permissions, request IDs and secret redaction
+- Optional Grafana Alloy file collection, timestamp-preserving Loki pipeline, and importable Grafana dashboard
+- Documentation for connecting to existing Grafana/Loki/Alloy installations, including group permissions, persistent Alloy positions and LogQL examples
+- Regression coverage for log redaction, request logging, SSH failure aggregation, rotation and observability assets
 
 ### Changed
 - Plan-level `expires_at` now participates in `plan_sha256`
@@ -41,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Root broker config is validated through root-owned path-chain and same-FD parsing
 - DockerPilot, DockerPilotExtras frontend and DozeyGuard release metadata are aligned to `0.9.0-pre.3`
 - Removed the legacy passwordless-sudo helper and broad `NOPASSWD` backup guidance; privileged bind-mount fallback now documents scoped elevation only
+- Console logging defaults to WARNING while full application diagnostics are retained in rotated JSONL files
+- Repeated SSH probe and container-list failures are aggregated, with one recovery event reporting downtime and occurrence count
+- Successful GET polling is omitted from access logs; HTTP errors, slow requests and state-changing requests carry request IDs
+- Flask debug mode and the development reloader are opt-in through DOCKERPILOT_EXTRAS_DEBUG
+- Authentication and server-selection logs no longer include usernames or session identifiers
 
 ### Fixed
 - Approval revocation behavior for legacy v1 records during broker outages
