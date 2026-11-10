@@ -102,7 +102,7 @@ loki.source.file "dockerpilot_extras" {
     },
   ]
 
-  forward_to = [loki.write.default.receiver]
+  forward_to = [loki.process.dockerpilot_extras.receiver]
   tail_from_end = true
 
   file_match {
@@ -112,7 +112,28 @@ loki.source.file "dockerpilot_extras" {
 }
 ~~~
 
+Add the processing stage below as well. It extracts the JSON timestamp and uses it as the Loki event timestamp. This matters when Alloy replays buffered log files after an outage; without it, old events would appear as newly ingested events in time-window dashboards.
+
+~~~alloy
+loki.process "dockerpilot_extras" {
+  stage.json {
+    expressions = {
+      timestamp = "timestamp",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+~~~
+
 Change loki.write.default.receiver to the receiver of the Loki writer already present in your configuration. The writer label is installation-specific; do not add a second writer if the existing one already sends to the intended Loki instance.
+ The writer label is installation-specific; do not add a second writer if the existing one already sends to the intended Loki instance.
 
 If your existing Alloy configuration uses a different log directory, update __path__ to match DOCKERPILOT_EXTRAS_LOG_DIR.
 
