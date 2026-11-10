@@ -818,7 +818,7 @@ function Status() {
                       style={{
                         padding: '0.25rem 0.5rem',
                         backgroundColor: 'var(--color-accent)',
-                        color: 'white',
+                        color: 'var(--color-on-accent)',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer',
