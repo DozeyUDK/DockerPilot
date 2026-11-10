@@ -6,63 +6,84 @@ import { PRIMARY_NAV_ITEMS, isNavItemActive } from '../utils/navigation.mjs'
 import ServerSelector from './ServerSelector'
 import { ICONS } from '../icons.mjs'
 
+const NAV_ICONS = {
+  '/': ICONS.build,
+  '/environments': ICONS.server,
+  '/status': ICONS.stats,
+  '/secure-deploy': ICONS.lock,
+}
+
 function AppNavigation() {
   const location = useLocation()
   const { theme, toggleTheme } = useTheme()
   const { authEnabled, username, logout } = useAuth()
   const themeAction = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
+  const currentView = PRIMARY_NAV_ITEMS.find(item => isNavItemActive(location.pathname, item.path))
 
   return (
-    <header className="app-header">
-      <div className="nav-container">
-        <Link className="nav-brand" to="/" aria-label="DockerPilot Extras home">
-          <span>DockerPilot</span>
-          <span className="nav-brand-product">Extras</span>
+    <>
+      <aside className="app-sidebar" aria-label="Application sidebar">
+        <Link className="sidebar-mark" to="/" aria-label="DockerPilot Extras home" title="DockerPilot Extras">
+          DP
         </Link>
+        <nav className="nav-primary" aria-label="Primary navigation">
+          <ul className="nav-menu">
+            {PRIMARY_NAV_ITEMS.map((item) => {
+              const active = isNavItemActive(location.pathname, item.path)
+              return (
+                <li key={item.path}>
+                  <Link
+                    to={item.path}
+                    className={active ? 'active' : undefined}
+                    aria-label={item.label}
+                    aria-current={active ? 'page' : undefined}
+                    title={item.label}
+                  >
+                    <span className="nav-icon" aria-hidden="true">{NAV_ICONS[item.path]}</span>
+                    <span className="nav-label">{item.label}</span>
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
+        </nav>
+        <span className="sidebar-footer" aria-hidden="true">EXTRAS</span>
+      </aside>
 
-        <div className="nav-workspace">
-          <nav className="nav-primary" aria-label="Primary navigation">
-            <ul className="nav-menu">
-              {PRIMARY_NAV_ITEMS.map((item) => {
-                const active = isNavItemActive(location.pathname, item.path)
-                return (
-                  <li key={item.path}>
-                    <Link
-                      to={item.path}
-                      className={active ? 'active' : undefined}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      {item.label}
-                    </Link>
-                  </li>
-                )
-              })}
-            </ul>
-          </nav>
-
-          <div className="nav-actions" role="group" aria-label="Application controls">
-            {authEnabled && username && (
-              <div className="nav-user">
-                <span className="nav-username" title={username}>{username}</span>
-                <button type="button" onClick={logout} className="shell-action nav-logout">
-                  Logout
-                </button>
-              </div>
-            )}
-            <ServerSelector />
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="shell-action theme-toggle"
-              aria-label={themeAction}
-              title={themeAction}
-            >
-              <span aria-hidden="true">{theme === 'dark' ? ICONS.sun : ICONS.moon}</span>
-            </button>
+      <header className="app-header">
+        <div className="nav-container">
+          <Link className="nav-brand" to="/" aria-label="DockerPilot Extras home">
+            <span>DockerPilot</span>
+            <span className="nav-brand-product">Extras</span>
+          </Link>
+          <div className="nav-workspace">
+            <span className="nav-context" aria-label="Current section">
+              {currentView?.label || 'Workspace'}
+            </span>
+            <div className="nav-actions" role="group" aria-label="Application controls">
+              <ServerSelector />
+              {authEnabled && username && (
+                <div className="nav-user">
+                  <span className="nav-username" title={username}>{username}</span>
+                  <button type="button" onClick={logout} className="shell-action nav-logout">
+                    Logout
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="shell-action theme-toggle"
+                aria-label={themeAction}
+                title={themeAction}
+              >
+                <span aria-hidden="true">{theme === 'dark' ? ICONS.sun : ICONS.moon}</span>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    </header>
+      </header>
+    </>
   )
 }
 
