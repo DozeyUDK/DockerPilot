@@ -65,3 +65,6 @@ def test_grafana_guide_covers_existing_stack_and_file_permissions():
     assert "Grafana → Explore" in guide
     assert "persistent storage" in guide
     assert "at-least-once, not exactly-once" in guide
+    assert 'loki.process "dockerpilot_extras"' in guide
+    assert 'format = "RFC3339Nano"' in guide
+    assert "tail_from_end = true" not in guide
