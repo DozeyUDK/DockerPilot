@@ -7,16 +7,16 @@
 
 .stage-chip {
   border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   color: var(--text-tertiary);
   padding: 0.3rem 0.6rem;
   font-size: 0.85rem;
 }
 
 .stage-chip-active {
-  border-color: #667eea;
+  border-color: var(--color-accent);
   color: var(--text-primary);
-  background: rgba(102, 126, 234, 0.14);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
 }
 
 .field-error {
@@ -73,7 +73,7 @@
 }
 
 .saved-pipeline-row.selected {
-  background: rgba(102, 126, 234, 0.14);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
   border-radius: 4px;
 }
 
@@ -150,9 +150,9 @@ pre {
 /* Card styles */
 .card {
   background: var(--card-bg);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 1.5rem;
-  box-shadow: 0 2px 4px var(--shadow);
+  box-shadow: none;
   margin-bottom: 1.5rem;
   width: 100%;
   box-sizing: border-box;
@@ -231,7 +231,7 @@ pre {
   min-height: 275px;
   text-align: center;
   padding: 1.5rem;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   position: relative;
   overflow: hidden;
   cursor: pointer;
@@ -574,8 +574,8 @@ pre {
 .form-group select:focus,
 .form-group textarea:focus {
   outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 
 .form-group textarea {
@@ -612,43 +612,44 @@ pre {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
 }
 
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  background: var(--color-accent-strong);
+  box-shadow: none;
 }
 
 .btn-secondary {
-  background: #3b82f6;
-  color: white;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
 }
 
 .btn-secondary:hover {
-  background: #2563eb;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent);
+  box-shadow: none;
 }
 
 :root[data-theme="dark"] .btn-secondary {
-  background: #3b82f6;
+  background: var(--color-surface-raised);
 }
 
 :root[data-theme="dark"] .btn-secondary:hover {
-  background: #2563eb;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent);
+  box-shadow: none;
 }
 
 .btn-success {
-  background: #28a745;
-  color: white;
+  background: var(--color-success);
+  color: var(--color-on-accent);
 }
 
 .btn-success:hover {
-  background: #218838;
+  background: var(--color-success);
 }
 
 .btn-group {
@@ -745,7 +746,7 @@ pre {
 /* Loading spinner */
 .spinner {
   border: 3px solid var(--bg-tertiary);
-  border-top: 3px solid #667eea;
+  border-top: 3px solid var(--color-accent);
   border-radius: 50%;
   width: 40px;
   height: 40px;
@@ -790,4 +791,111 @@ pre {
 :root[data-theme="dark"] .status-box.error {
   background-color: rgba(220, 53, 69, 0.15);
   color: #f87171;
+}
+
+/* Industrial density and status language; aligned with the HA-iX theme. */
+.card,
+.saved-pipeline-list,
+.saved-pipeline-detail,
+.cli-output-container,
+.status-container-list,
+.status-cli-toggle,
+.status-cli-input {
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.card-title,
+.page-header-row h2 {
+  font-weight: 650;
+  letter-spacing: 0.005em;
+}
+
+.stage-chip-active,
+.saved-pipeline-row.selected {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+}
+
+.status-summary-card {
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.status-summary-card.total,
+:root[data-theme="dark"] .status-summary-card.total {
+  border-color: var(--color-border);
+  border-left-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.status-summary-card.running,
+:root[data-theme="dark"] .status-summary-card.running {
+  border-color: var(--color-border);
+  border-left-color: var(--color-success);
+  background: var(--color-surface);
+}
+
+.status-summary-card.stopped,
+:root[data-theme="dark"] .status-summary-card.stopped {
+  border-color: var(--color-border);
+  border-left-color: var(--color-warning);
+  background: var(--color-surface);
+}
+
+.status-container-row:hover,
+.saved-pipeline-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.status-container-state.running {
+  color: var(--color-success);
+}
+
+.env-stage-card {
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast);
+}
+
+.env-stage-card:hover {
+  background: var(--color-surface-raised);
+}
+
+.btn {
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  box-shadow: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast);
+}
+
+.btn:focus-visible,
+.form-group input:focus-visible,
+.form-group select:focus-visible,
+.form-group textarea:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.status-scope-banner,
+.status-container-result,
+.status-box,
+.alert {
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .env-stage-card,
+  .btn {
+    transition: none;
+  }
 }
