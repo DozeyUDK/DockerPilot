@@ -251,8 +251,6 @@ def create_server_resources(
                 data = request.get_json()
                 server_id = data.get("server_id", "local")
 
-                app.logger.info(f"Selecting server: {server_id}, session_id: {session.get('_id', 'no-id')}")
-
                 session["selected_server"] = server_id
                 session.permanent = True
 
@@ -262,7 +260,8 @@ def create_server_resources(
                     save_servers_config(config)
 
                 app.logger.info(
-                    f"Server {server_id} selected, session now has: {session.get('selected_server')}"
+                    "Server selected",
+                    extra={"event": "server_selected", "server_id": str(server_id)},
                 )
 
                 return {
@@ -278,10 +277,6 @@ def create_server_resources(
             """Get currently selected server."""
             try:
                 selected = session.get("selected_server", "local")
-                app.logger.debug(
-                    f"Getting selected server from session: {selected}, session_id: {session.get('_id', 'no-id')}"
-                )
-
                 config = load_servers_config()
                 default = config.get("default_server", "local")
                 server_id = selected if selected != "local" else default

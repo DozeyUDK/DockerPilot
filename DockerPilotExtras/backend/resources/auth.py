@@ -124,7 +124,10 @@ def create_auth_resources(
                 session["auth_last_activity_ts"] = now_ts()
                 session.permanent = True
 
-                app.logger.info(f"Authenticated web session for user '{username}'")
+                app.logger.info(
+                    "Authenticated web session",
+                    extra={"event": "auth_session_created"},
+                )
                 return auth_status_payload()
             except Exception as exc:
                 app.logger.error(f"Auth login failed: {exc}")

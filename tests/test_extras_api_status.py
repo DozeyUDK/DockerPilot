@@ -73,11 +73,13 @@ def test_status_endpoint_remote_context_and_versions(monkeypatch):
 
     server = {"id": "prod-1", "name": "Prod Node", "hostname": "prod.example.internal"}
     probe_commands = []
+    probe_operations = []
 
     monkeypatch.setattr(backend_app_module, "get_selected_server_config", lambda: server)
 
-    def fake_probe(_server_config, command, attempts=2):  # noqa: ARG001
+    def fake_probe(_server_config, command, attempts=2, operation="status_probe"):  # noqa: ARG001
         probe_commands.append(command)
+        probe_operations.append(operation)
         if "MISSING_DOCKERPILOT" in command:
             return "DockerPilot 0.1.0", None
         if "MISSING_DOCKER" in command:
@@ -101,6 +103,8 @@ def test_status_endpoint_remote_context_and_versions(monkeypatch):
     docker_probe = next(command for command in probe_commands if "MISSING_DOCKER" in command)
     assert "sudo" not in docker_probe
     assert docker_probe.startswith("docker --version")
+    assert "docker_version" in probe_operations
+    assert "dockerpilot_version" in probe_operations
 
 
 def test_status_endpoint_remote_probe_errors(monkeypatch):
@@ -113,7 +117,7 @@ def test_status_endpoint_remote_probe_errors(monkeypatch):
     monkeypatch.setattr(
         backend_app_module,
         "_run_remote_probe",
-        lambda _server_config, _command, attempts=2: ("", "ssh timeout"),  # noqa: ARG001
+        lambda _server_config, _command, attempts=2, operation="status_probe": ("", "ssh timeout"),  # noqa: ARG001
     )
 
     response = client.get("/api/status")

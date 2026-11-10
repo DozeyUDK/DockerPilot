@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import yaml
 
+from backend.security import safe_error_message
+
 
 def create_environment_resources(
     *,
@@ -40,17 +42,15 @@ def create_environment_resources(
 
                 if server_config:
                     try:
-                        app.logger.info(
-                            f"Getting containers from remote server: {server_config.get('hostname')}"
-                        )
                         containers_output = execute_docker_command_via_ssh(
                             server_config,
                             r"ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'",
                         )
-                        app.logger.debug(
-                            "Containers output from remote server (first 500 chars): "
-                            f"{containers_output[:500]}"
+                        failure_aggregator = app.extensions.get(
+                            "dockerpilot_extras.remote_failure_aggregator"
                         )
+                        if failure_aggregator:
+                            failure_aggregator.record_success(server_config, "container_list")
 
                         for line in containers_output.strip().split("\n"):
                             line = line.strip()
@@ -68,15 +68,32 @@ def create_environment_resources(
                                         }
                                     )
 
-                        app.logger.info(f"Found {len(containers)} containers on remote server")
                     except Exception as exc:
-                        app.logger.error(
-                            f"Failed to get containers from remote server: {exc}",
-                            exc_info=True,
+                        request.environ["dockerpilot_extras.suppress_http_log"] = True
+                        failure_aggregator = app.extensions.get(
+                            "dockerpilot_extras.remote_failure_aggregator"
                         )
+                        if failure_aggregator:
+                            failure_aggregator.record_failure(
+                                server_config, "container_list", exc
+                            )
+                        else:
+                            app.logger.warning(
+                                "Remote container list failed: %s",
+                                safe_error_message(exc),
+                                extra={
+                                    "event": "remote_operation_failed",
+                                    "server_id": str(server_config.get("id") or "remote"),
+                                    "operation": "container_list",
+                                    "error_type": type(exc).__name__,
+                                    "error": safe_error_message(exc),
+                                    "occurrences": 1,
+                                    "downtime_seconds": 0.0,
+                                },
+                            )
                         return {
                             "success": False,
-                            "error": f"Failed to connect to remote server: {str(exc)}",
+                            "error": f"Failed to connect to remote server: {safe_error_message(exc)}",
                             "containers": [],
                             "running": 0,
                             "stopped": 0,
@@ -126,9 +143,13 @@ def create_environment_resources(
                     "containers": containers,
                 }
             except Exception as exc:
-                app.logger.error(f"Failed to get containers: {exc}")
+                app.logger.error(
+                    "Failed to get containers: %s",
+                    safe_error_message(exc),
+                    extra={"event": "container_list_failed", "error_type": type(exc).__name__},
+                )
                 return {
-                    "error": str(exc),
+                    "error": safe_error_message(exc),
                     "containers": [],
                     "running": 0,
                     "stopped": 0,

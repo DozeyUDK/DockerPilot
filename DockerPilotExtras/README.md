@@ -620,3 +620,9 @@ MIT License - see [LICENSE](LICENSE)
 ---
 
 **DockerPilot Extras** - Web-based CI/CD Manager for DockerPilot
+
+## Observability and centralized logging
+
+DockerPilot Extras writes structured JSONL application logs to `~/.dockerpilot_extras/logs/extras.jsonl` by default. Console output is intentionally concise; successful GET polling requests are not emitted as access-log entries. Logs rotate locally and can be collected by Grafana Alloy and queried in an existing Loki/Grafana deployment.
+
+See the [Grafana Loki integration guide](docs/observability/grafana-loki.md) for log configuration, permissions, Alloy setup, LogQL examples, and the importable dashboard under `observability/grafana/`.

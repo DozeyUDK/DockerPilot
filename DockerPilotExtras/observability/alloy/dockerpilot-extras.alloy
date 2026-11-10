@@ -1,0 +1,47 @@
+// DockerPilot Extras file log source.
+// Adjust the log path and Loki URL for your host/network.
+// If you already have a loki.write component, remove this writer and point
+// forward_to at the existing writer's receiver instead.
+
+loki.source.file "dockerpilot_extras" {
+  targets = [
+    {
+      "__path__"     = "/var/log/dockerpilot-extras/extras.jsonl*",
+      "job"          = "dockerpilot-extras",
+      "service_name" = "dockerpilot-extras",
+    },
+  ]
+
+  forward_to = [loki.process.dockerpilot_extras.receiver]
+  // Keep the default start-at-beginning behavior for files without saved
+  // positions so rotated backlog is not silently skipped after Alloy downtime.
+
+  file_match {
+    enabled = true
+    sync_period = "10s"
+  }
+}
+
+loki.process "dockerpilot_extras" {
+  // Preserve the event time from the JSONL record when Alloy replays backlog.
+  // If a malformed/legacy record has no valid timestamp, keep scrape time.
+  stage.json {
+    expressions = {
+      timestamp = "timestamp",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  forward_to = [loki.write.dockerpilot_extras.receiver]
+}
+
+loki.write "dockerpilot_extras" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}

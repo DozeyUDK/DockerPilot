@@ -40,6 +40,8 @@ from utils.pipeline_generator import (
 from backend.api import register_api_routes
 from backend.preflight import run_preflight_checks
 from backend.security import redact_sensitive_text, safe_error_message
+from backend.logging_config import configure_logging
+from backend.services.remote_failure_aggregator import RemoteFailureAggregator
 from backend.resources.auth import create_auth_resources
 from backend.resources.commands import create_command_resources
 from backend.resources.environment import create_environment_resources
@@ -223,6 +225,9 @@ def load_deployment_config(container_name: str, env: str = None) -> dict:
     return _svc_load_deployment_config(app.config['DEPLOYMENTS_DIR'], container_name, env)
 
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
+configure_logging(app)
+_remote_failure_aggregator = RemoteFailureAggregator(app.logger)
+app.extensions['dockerpilot_extras.remote_failure_aggregator'] = _remote_failure_aggregator
 _configured_secret_key = (os.environ.get('SECRET_KEY') or '').strip()
 app.config['SECRET_KEY'] = _configured_secret_key or os.urandom(24).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -759,20 +764,21 @@ def get_dockerpilot(server_id=None):
         raise
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
-    """Execute command locally without a shell or remotely over verified SSH."""
-    try:
-        return _svc_execute_ssh_command(
-            server_config,
-            command,
-            ssh_available=SSH_AVAILABLE,
-            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
-            check_exit_status=check_exit_status,
-            return_stderr=False,
-            timeout=300,
-        )
-    except Exception as exc:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
-        raise
+    """Execute command locally without a shell or remotely over verified SSH.
+
+    Logging belongs to the operation boundary (probe, container list, migration),
+    not this shared transport helper. This avoids duplicate records when callers
+    retry or add operation-specific context.
+    """
+    return _svc_execute_ssh_command(
+        server_config,
+        command,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        check_exit_status=check_exit_status,
+        return_stderr=False,
+        timeout=300,
+    )
 
 
 def _get_or_create_elevation_session_id() -> str:
@@ -822,20 +828,21 @@ def execute_docker_command_via_ssh(server_config, docker_command, check_exit_sta
         return execute_command_via_ssh(server_config, command, check_exit_status=check_exit_status)
 
 def _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=True):
-    """Execute command and return stdout/stderr without invoking a local shell."""
-    try:
-        return _svc_execute_ssh_command(
-            server_config,
-            command,
-            ssh_available=SSH_AVAILABLE,
-            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
-            check_exit_status=check_exit_status,
-            return_stderr=True,
-            timeout=300,
-        )
-    except Exception as exc:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
-        raise
+    """Execute command and return stdout/stderr without invoking a local shell.
+
+    The operation boundary is responsible for logging failures with context.
+    This transport helper deliberately does not log, preventing duplicate
+    records when callers retry or report a migration-specific failure.
+    """
+    return _svc_execute_ssh_command(
+        server_config,
+        command,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        check_exit_status=check_exit_status,
+        return_stderr=True,
+        timeout=300,
+    )
 
 
 def get_selected_server_config():
@@ -1059,7 +1066,7 @@ def _build_status_context(server_config):
     return _svc_build_status_context(server_config)
 
 
-def _run_remote_probe(server_config, command, attempts=2):
+def _run_remote_probe(server_config, command, attempts=2, operation="status_probe"):
     """Compatibility wrapper for remote probe (kept for test monkeypatching)."""
     return _svc_run_remote_probe(
         server_config,
@@ -1068,6 +1075,8 @@ def _run_remote_probe(server_config, command, attempts=2):
         logger=app.logger,
         attempts=attempts,
         retry_delay=0.25,
+        failure_aggregator=_remote_failure_aggregator,
+        operation=operation,
     )
 
 
@@ -1078,7 +1087,9 @@ def _probe_remote_binary_version(server_config, binary_name: str, missing_marker
         binary_name=binary_name,
         missing_marker=missing_marker,
         no_version_marker=no_version_marker,
-        run_remote_probe_fn=lambda cmd: _run_remote_probe(server_config, cmd, attempts=1),
+        run_remote_probe_fn=lambda cmd: _run_remote_probe(
+            server_config, cmd, attempts=1, operation="dockerpilot_version"
+        ),
     )
 
 
@@ -1100,8 +1111,8 @@ EnvironmentStatus, StatusCheck, PreflightCheck = create_status_resources(
     build_environment_status=_svc_build_environment_status,
     get_selected_server_config=lambda: globals()["get_selected_server_config"](),
     build_status_context=lambda server_config: globals()["_build_status_context"](server_config),
-    run_remote_probe=lambda server_config, command, attempts=2: globals()["_run_remote_probe"](
-        server_config, command, attempts=attempts
+    run_remote_probe=lambda server_config, command, attempts=2, operation="status_probe": globals()["_run_remote_probe"](
+        server_config, command, attempts=attempts, operation=operation
     ),
     probe_remote_binary_version=lambda server_config, binary_name, missing_marker, no_version_marker: globals()[
         "_probe_remote_binary_version"
@@ -1531,5 +1542,5 @@ def not_found(e):
 if __name__ == '__main__':
     # Development server
     port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host=EXTRAS_HOST, port=port, debug=debug)
+    debug = os.environ.get('DOCKERPILOT_EXTRAS_DEBUG', 'false').lower() == 'true'
+    app.run(host=EXTRAS_HOST, port=port, debug=debug, use_reloader=debug)
