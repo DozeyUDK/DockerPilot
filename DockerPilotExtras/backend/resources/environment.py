@@ -69,6 +69,7 @@ def create_environment_resources(
                                     )
 
                     except Exception as exc:
+                        request.environ["dockerpilot_extras.suppress_http_log"] = True
                         failure_aggregator = app.extensions.get(
                             "dockerpilot_extras.remote_failure_aggregator"
                         )
