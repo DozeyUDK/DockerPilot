@@ -1,6 +1,7 @@
 """Regression coverage for DockerPilot Extras structured logging."""
 
 import json
+import io
 import logging
 import os
 from pathlib import Path
@@ -262,3 +263,39 @@ def test_remote_failure_aggregation_keeps_distinct_operations_independent(caplog
     ]
     assert events[-1].occurrences == 2
     assert events[-1].downtime_seconds == 15.0
+
+
+def test_redaction_happens_before_records_propagate_to_root_handlers(tmp_path):
+    app = Flask("logging-root-propagation-test")
+    secret = "root-handler-secret-sentinel"
+    log_path = configure_logging(
+        app,
+        log_dir=tmp_path,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+    )
+
+    root = logging.getLogger()
+    previous_level = root.level
+    stream = io.StringIO()
+    root_handler = logging.StreamHandler(stream)
+    root_handler.setFormatter(logging.Formatter("%(message)s %(exc_text)s"))
+    root.addHandler(root_handler)
+    root.setLevel(logging.DEBUG)
+
+    try:
+        try:
+            raise RuntimeError(f"password={secret}")
+        except RuntimeError:
+            app.logger.exception("Remote operation failed password=%s", secret)
+    finally:
+        root.removeHandler(root_handler)
+        root_handler.close()
+        root.setLevel(previous_level)
+
+    root_output = stream.getvalue()
+    file_output = log_path.read_text(encoding="utf-8")
+    assert secret not in root_output
+    assert secret not in file_output
+    assert "redacted" in root_output
+    assert "redacted" in file_output
