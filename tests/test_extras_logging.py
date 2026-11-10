@@ -80,6 +80,7 @@ def test_request_logging_skips_successful_polling_and_adds_request_id(tmp_path):
 
     @app.post("/api/change")
     def change():
+        app.logger.info("State-changing operation completed", extra={"event": "state_change"})
         return {"ok": True}, 202
 
     @app.get("/api/remote-down")
@@ -109,6 +110,9 @@ def test_request_logging_skips_successful_polling_and_adds_request_id(tmp_path):
     assert http_records[0]["request_id"] == request_id
     assert http_records[0]["http_method"] == "POST"
     assert http_records[0]["http_status"] == 202
+    state_change_records = [record for record in records if record.get("event") == "state_change"]
+    assert len(state_change_records) == 1
+    assert state_change_records[0]["request_id"] == request_id
 
 
 def test_remote_failure_aggregation_summarizes_repeats_and_logs_recovery(caplog):
