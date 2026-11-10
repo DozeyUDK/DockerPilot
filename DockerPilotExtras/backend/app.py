@@ -40,6 +40,8 @@ from utils.pipeline_generator import (
 from backend.api import register_api_routes
 from backend.preflight import run_preflight_checks
 from backend.security import redact_sensitive_text, safe_error_message
+from backend.logging_config import configure_logging
+from backend.services.remote_failure_aggregator import RemoteFailureAggregator
 from backend.resources.auth import create_auth_resources
 from backend.resources.commands import create_command_resources
 from backend.resources.environment import create_environment_resources
@@ -223,6 +225,9 @@ def load_deployment_config(container_name: str, env: str = None) -> dict:
     return _svc_load_deployment_config(app.config['DEPLOYMENTS_DIR'], container_name, env)
 
 app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
+configure_logging(app)
+_remote_failure_aggregator = RemoteFailureAggregator(app.logger)
+app.extensions['dockerpilot_extras.remote_failure_aggregator'] = _remote_failure_aggregator
 _configured_secret_key = (os.environ.get('SECRET_KEY') or '').strip()
 app.config['SECRET_KEY'] = _configured_secret_key or os.urandom(24).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -759,20 +764,21 @@ def get_dockerpilot(server_id=None):
         raise
 
 def execute_command_via_ssh(server_config, command, check_exit_status=True):
-    """Execute command locally without a shell or remotely over verified SSH."""
-    try:
-        return _svc_execute_ssh_command(
-            server_config,
-            command,
-            ssh_available=SSH_AVAILABLE,
-            known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
-            check_exit_status=check_exit_status,
-            return_stderr=False,
-            timeout=300,
-        )
-    except Exception as exc:
-        app.logger.error("Failed to execute command via SSH: %s", safe_error_message(exc))
-        raise
+    """Execute command locally without a shell or remotely over verified SSH.
+
+    Logging belongs to the operation boundary (probe, container list, migration),
+    not this shared transport helper. This avoids duplicate records when callers
+    retry or add operation-specific context.
+    """
+    return _svc_execute_ssh_command(
+        server_config,
+        command,
+        ssh_available=SSH_AVAILABLE,
+        known_hosts_path=app.config['SSH_KNOWN_HOSTS_PATH'],
+        check_exit_status=check_exit_status,
+        return_stderr=False,
+        timeout=300,
+    )
 
 
 def _get_or_create_elevation_session_id() -> str:
@@ -1068,6 +1074,7 @@ def _run_remote_probe(server_config, command, attempts=2):
         logger=app.logger,
         attempts=attempts,
         retry_delay=0.25,
+        failure_aggregator=_remote_failure_aggregator,
     )
 
 
@@ -1531,5 +1538,5 @@ def not_found(e):
 if __name__ == '__main__':
     # Development server
     port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host=EXTRAS_HOST, port=port, debug=debug)
+    debug = os.environ.get('DOCKERPILOT_EXTRAS_DEBUG', 'false').lower() == 'true'
+    app.run(host=EXTRAS_HOST, port=port, debug=debug, use_reloader=debug)
