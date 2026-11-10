@@ -88,23 +88,31 @@ def _parse_octal(value: object, default: int) -> int:
         return default
 
 
-def _validate_log_directory_hierarchy(path: Path, *, allow_missing: bool) -> Path:
-    """Reject symlinks and directories writable by untrusted users in the log path."""
+def _ensure_log_directory(path: Path, directory_mode: int) -> Path:
+    """Create a private log path component-by-component and reject unsafe ancestors."""
     absolute = Path(os.path.abspath(os.fspath(path)))
     if absolute == Path(absolute.anchor):
         raise OSError("The filesystem root cannot be used as the DockerPilot Extras log directory")
+
     current = Path(absolute.anchor)
     components = absolute.parts[1:]
     effective_uid = os.geteuid() if os.name == "posix" else None
 
-    for component in components:
+    for index, component in enumerate(components):
         current = current / component
+        is_final = index == len(components) - 1
+        created = False
         try:
             info = os.lstat(current)
         except FileNotFoundError:
-            if allow_missing:
-                continue
-            raise OSError(f"Log directory component does not exist: {current}")
+            requested_mode = directory_mode if is_final else 0o700
+            try:
+                os.mkdir(current, requested_mode)
+                created = True
+            except FileExistsError:
+                # Another process won the create race; validate what appeared.
+                pass
+            info = os.lstat(current)
 
         if stat.S_ISLNK(info.st_mode):
             raise OSError(f"Refusing symlink in DockerPilot Extras log path: {current}")
@@ -118,6 +126,18 @@ def _validate_log_directory_hierarchy(path: Path, *, allow_missing: bool) -> Pat
             trusted_sticky_directory = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
             if writable_by_others and not trusted_sticky_directory:
                 raise OSError(f"Unsafe group/world-writable log path component: {current}")
+
+        if created:
+            # Newly created intermediate directories are private regardless of
+            # the process umask; only the final directory may grant Alloy read access.
+            os.chmod(current, directory_mode if is_final else 0o700)
+        elif is_final:
+            current_mode = stat.S_IMODE(info.st_mode)
+            if current_mode & ~directory_mode:
+                raise OSError(
+                    "Existing log directory permissions are broader than configured; "
+                    "correct the directory mode explicitly before starting Extras"
+                )
 
     return absolute
 
@@ -383,24 +403,7 @@ def configure_logging(
                 "Unsafe log permissions requested; use directory mode 0700/0750/2750 "
                 "and file mode 0600/0640"
             )
-        resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=True)
-        directory_existed = resolved_dir.exists()
-        resolved_dir.mkdir(parents=True, exist_ok=True, mode=resolved_directory_mode)
-        # Re-check after creation; a path component may have appeared between
-        # the initial validation and mkdir. Safe ancestors cannot be swapped by
-        # an untrusted local user between this check and file creation.
-        resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=False)
-        if directory_existed:
-            current_mode = stat.S_IMODE(os.stat(resolved_dir, follow_symlinks=False).st_mode)
-            if current_mode & ~resolved_directory_mode:
-                raise OSError(
-                    "Existing log directory permissions are broader than configured; "
-                    "correct the directory mode explicitly before starting Extras"
-                )
-        else:
-            # Only chmod a directory this process has just created. Never
-            # change permissions on an arbitrary pre-existing system directory.
-            os.chmod(resolved_dir, resolved_directory_mode)
+        resolved_dir = _ensure_log_directory(resolved_dir, resolved_directory_mode)
         log_path = resolved_dir / "extras.jsonl"
         file_handler = _PermissionedRotatingFileHandler(
             str(log_path),
