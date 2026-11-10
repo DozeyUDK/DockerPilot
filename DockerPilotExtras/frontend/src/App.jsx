@@ -76,22 +76,17 @@ function AppShell() {
   return (
     <ServerProvider>
       <Router>
-        <div className="App">
+        <div className="App app-authenticated">
           <AppNavigation />
-          {demoMode && (
-            <div
-              className="card"
-              role="status"
-              aria-live="polite"
-              style={{ margin: '1rem auto 0', maxWidth: '1200px' }}
-            >
-              <strong>DockerPilot live demo</strong>
-              {demoReadOnly
-                ? ' — read-only mode. State-changing operations are disabled for public sharing.'
-                : ' — interactive mode. Do not expose this Codespace publicly.'}
-            </div>
-          )}
           <main className="main-content">
+            {demoMode && (
+              <div className="card demo-banner" role="status" aria-live="polite">
+                <strong>DockerPilot live demo</strong>
+                {demoReadOnly
+                  ? ' — read-only mode. State-changing operations are disabled for public sharing.'
+                  : ' — interactive mode. Do not expose this Codespace publicly.'}
+              </div>
+            )}
             <AuthenticatedRoutes />
           </main>
         </div>
