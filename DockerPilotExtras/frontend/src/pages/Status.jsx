@@ -599,7 +599,7 @@ function Status() {
             <div>
               <div className="status-stat-grid">
                 <div className="status-summary-card total">
-                  <div className="status-summary-value" style={{ color: '#007bff' }}>
+                  <div className="status-summary-value" style={{ color: 'var(--color-accent)' }}>
                     {containerSummary.summary.total}
                   </div>
                   <div className="status-summary-label">Total containers</div>
@@ -777,8 +777,8 @@ function Status() {
           <div style={{
             marginBottom: '1rem',
             padding: '1rem',
-            backgroundColor: '#f8f9fa',
-            border: '1px solid #dee2e6',
+            backgroundColor: 'var(--card-bg)',
+            border: '1px solid var(--border-color)',
             borderRadius: '4px',
             maxHeight: '300px',
             overflowY: 'auto'
@@ -802,13 +802,13 @@ function Status() {
               fontFamily: '"DockerPilot Nerd Symbols", Consolas, Monaco, "Courier New", monospace',
               fontSize: '0.85rem',
               whiteSpace: 'pre-wrap',
-              color: '#333'
+              color: 'var(--text-primary)'
             }}>
               {helpText}
             </div>
             {/* Quick suggestions for DockerPilot */}
             {cliProgram === 'dockerpilot' && (
-              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #dee2e6' }}>
+              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
                 <strong style={{ fontSize: '0.9rem' }}>Szybkie sugestie:</strong>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                   {['container list', 'container status', 'monitor', 'deploy', 'validate', 'backup'].map((cmd) => (
@@ -817,8 +817,8 @@ function Status() {
                       onClick={() => insertCommandSuggestion(cmd)}
                       style={{
                         padding: '0.25rem 0.5rem',
-                        backgroundColor: '#007bff',
-                        color: 'white',
+                        backgroundColor: 'var(--color-accent)',
+                        color: 'var(--color-on-accent)',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer',

@@ -1436,8 +1436,8 @@ function Environments() {
           disabled={loadingStatus}
           style={{
             padding: '0.5rem 1rem',
-            backgroundColor: loadingStatus ? '#6c757d' : '#007bff',
-            color: 'white',
+            backgroundColor: loadingStatus ? '#6c757d' : 'var(--color-accent)',
+            color: loadingStatus ? 'white' : 'var(--color-on-accent)',
             border: 'none',
             borderRadius: '4px',
             cursor: loadingStatus ? 'not-allowed' : 'pointer',
@@ -1490,8 +1490,8 @@ function Environments() {
             onClick={() => openServerModal()}
             style={{
               padding: '0.5rem 1rem',
-              backgroundColor: '#007bff',
-              color: 'white',
+              backgroundColor: 'var(--color-accent)',
+              color: 'var(--color-on-accent)',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -1524,14 +1524,14 @@ function Environments() {
                   className="server-list-row"
                   style={{
                     backgroundColor: selectedServer === server.id ? 'var(--bg-tertiary)' : 'transparent',
-                    border: `1px solid ${selectedServer === server.id ? '#007bff' : 'var(--border-color)'}`,
+                    border: `1px solid ${selectedServer === server.id ? 'var(--color-accent)' : 'var(--border-color)'}`,
                     wordBreak: 'break-word'
                   }}
                 >
                   <div className="server-list-main">
                     <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                       {server.name}
-                      {selectedServer === server.id && <span style={{ marginLeft: '0.5rem', color: '#007bff' }}>{ICONS.success}</span>}
+                      {selectedServer === server.id && <span style={{ marginLeft: '0.5rem', color: 'var(--color-accent)' }}>{ICONS.success}</span>}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                       {server.username}@{server.hostname}:{server.port} ({server.auth_type})
@@ -1641,12 +1641,13 @@ function Environments() {
                 backgroundColor: deploymentProgress.stage === 'completed' ? '#28a745' :
                                 deploymentProgress.stage === 'failed' || deploymentProgress.stage === 'error' ? '#dc3545' :
                                 deploymentProgress.stage === 'cancelled' ? '#ffc107' :
-                                '#007bff',
+                                'var(--color-accent)',
                 transition: 'width 0.3s ease',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'white',
+                color: deploymentProgress.stage === 'completed' || deploymentProgress.stage === 'failed' || deploymentProgress.stage === 'error'
+                  ? 'white' : 'var(--color-on-accent)',
                 fontWeight: 'bold',
                 fontSize: '12px'
               }}>
@@ -1750,34 +1751,24 @@ function Environments() {
                   className="env-stage-card"
                   onClick={() => handleEnvClick(env.name)}
                   style={{
-                    border: `2px solid ${env.color}`,
-                    background: `linear-gradient(135deg, ${env.color}15 0%, ${env.color}25 50%, ${env.color}15 100%)`,
-                    boxShadow: `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-4px)'
-                    e.currentTarget.style.boxShadow = `0 0 30px ${env.color}60, 0 0 60px ${env.color}30, inset 0 0 30px ${env.color}15`
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)'
-                    e.currentTarget.style.boxShadow = `0 0 20px ${env.color}40, 0 0 40px ${env.color}20, inset 0 0 20px ${env.color}10`
+                    border: '1px solid var(--border-color)',
+                    borderTop: `3px solid ${env.color}`,
+                    background: 'var(--card-bg)'
                   }}
                 >
                   <div style={{
                     width: '20px',
                     height: '20px',
-                    borderRadius: '50%',
+                    borderRadius: '2px',
                     backgroundColor: env.color,
                     margin: '0 auto 1rem',
-                    border: '2px solid #fff',
-                    boxShadow: `0 0 0 2px ${env.color}, 0 0 15px ${env.color}80`,
+                    border: '1px solid var(--border-color)',
                     position: 'relative',
                     zIndex: 1
                   }}></div>
                   <h3 style={{
                     color: env.color,
                     marginBottom: '0.25rem',
-                    textShadow: `0 0 10px ${env.color}60`,
                     position: 'relative',
                     zIndex: 1
                   }}>
@@ -1889,7 +1880,7 @@ function Environments() {
                 {index < environments.length - 1 && (
                   <div style={{
                     fontSize: '1.6rem',
-                    color: '#667eea',
+                    color: 'var(--color-accent)',
                     fontWeight: 'bold',
                     alignSelf: 'center',
                     flex: '0 0 auto'
@@ -1906,8 +1897,7 @@ function Environments() {
           {environments.slice(0, -1).map((env, index) => {
             const nextEnv = environments[index + 1]
             const key = `${env.name}-${nextEnv.name}`
-            const buttonColor = index === 0 ? '#f59e0b' : '#dc2626'
-            const buttonHoverColor = index === 0 ? '#d97706' : '#b91c1c'
+            const buttonColor = index === 0 ? 'var(--color-warning)' : 'var(--color-danger)'
 
             return (
               <button
@@ -1917,20 +1907,9 @@ function Environments() {
                 disabled={loading[key]}
                 style={{
                   background: buttonColor,
-                  border: 'none',
-                  color: 'white',
-                  fontWeight: '600',
-                  boxShadow: `0 4px 12px ${buttonColor}50`
-                }}
-                onMouseEnter={(e) => {
-                  if (!loading[key]) {
-                    e.target.style.background = buttonHoverColor
-                    e.target.style.boxShadow = `0 6px 16px ${buttonColor}70`
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.background = buttonColor
-                  e.target.style.boxShadow = `0 4px 12px ${buttonColor}50`
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--color-on-accent)',
+                  fontWeight: 600
                 }}
               >
                 {loading[key] ? 'Promoting...' : `${env.label} → ${nextEnv.label}`}
@@ -2472,8 +2451,8 @@ function Environments() {
                                   onClick={() => handleSelectContainerForFile(container.name)}
                                   style={{
                                     padding: '0.5rem 1rem',
-                                    backgroundColor: '#007bff',
-                                    color: 'white',
+                                    backgroundColor: 'var(--color-accent)',
+                                    color: 'var(--color-on-accent)',
                                     border: 'none',
                                     borderRadius: '4px',
                                     cursor: 'pointer',
@@ -2573,8 +2552,8 @@ function Environments() {
                       onClick={() => loadFileBrowser(browserPath)}
                       style={{ 
                         padding: '0.5rem 1rem',
-                        backgroundColor: '#007bff',
-                        color: 'white',
+                        backgroundColor: 'var(--color-accent)',
+                        color: 'var(--color-on-accent)',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer'
@@ -3075,8 +3054,8 @@ function Environments() {
                   disabled={!serverForm.name || !serverForm.hostname || !serverForm.username}
                   style={{
                     padding: '0.5rem 1rem',
-                    backgroundColor: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? '#ccc' : '#007bff',
-                    color: 'white',
+                    backgroundColor: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? '#ccc' : 'var(--color-accent)',
+                    color: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? '#111820' : 'var(--color-on-accent)',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? 'not-allowed' : 'pointer',

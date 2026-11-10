@@ -1,28 +1,34 @@
+/* HA-iX-inspired industrial design tokens.
+   Source reference: dozey-home-ui/lovelace-cards/theme-haix_classic.yaml.
+   Deliberately self-contained: no external Siemens iX runtime dependency. */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --color-canvas: #161923;
-  --color-surface: #202431;
-  --color-surface-raised: #292e3d;
-  --color-surface-hover: #343a4b;
-  --color-text: #f3f5f9;
-  --color-text-muted: #b6bdcc;
-  --color-text-subtle: #858da0;
-  --color-border: #41485a;
-  --color-accent: #7c8cff;
-  --color-accent-strong: #a06ff2;
-  --color-header-start: #4c5fd7;
-  --color-header-end: #7047a8;
-  --color-on-accent: #ffffff;
-  --color-focus: #ffffff;
-  --color-danger-text: #ffb4ab;
-  --color-warning-surface: #7c3f08;
-  --color-warning-border: #f4a340;
-  --color-warning-text: #fff7ed;
-  --color-header-control: rgba(10, 14, 30, 0.16);
-  --color-header-control-hover: rgba(10, 14, 30, 0.3);
-  --color-header-control-border: rgba(255, 255, 255, 0.48);
+  --color-canvas: #0b1116;
+  --color-surface: #111820;
+  --color-surface-raised: #172129;
+  --color-surface-hover: #1b2832;
+  --color-text: #eef2f4;
+  --color-text-muted: #aab7bf;
+  --color-text-subtle: #81909a;
+  --color-border: #29343c;
+  --color-accent: #00cccc;
+  --color-accent-strong: #00aaaa;
+  --color-header-start: #111820;
+  --color-header-end: #111820;
+  --color-on-accent: #06171b;
+  --color-focus: #00cccc;
+  --color-success: #30d792;
+  --color-warning: #ffb74d;
+  --color-danger: #f07878;
+  --color-danger-text: #ff9c9c;
+  --color-warning-surface: #3a2d18;
+  --color-warning-border: #997446;
+  --color-warning-text: #ffdb9b;
+  --color-header-control: #172129;
+  --color-header-control-hover: #1b2832;
+  --color-header-control-border: #34434d;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -30,12 +36,12 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
   --space-6: 2rem;
-  --radius-sm: 0.375rem;
-  --radius-md: 0.625rem;
-  --shadow-header: 0 0.25rem 1rem rgba(0, 0, 0, 0.2);
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --shadow-header: none;
   --motion-fast: 160ms ease;
 
-  /* Compatibility aliases used by existing pages. */
+  /* Keep established component aliases so functionality stays unchanged. */
   --bg-primary: var(--color-canvas);
   --bg-secondary: var(--color-surface);
   --bg-tertiary: var(--color-surface-raised);
@@ -46,35 +52,38 @@
   --card-bg: var(--color-surface);
   --input-bg: var(--color-surface-raised);
   --input-border: var(--color-border);
-  --shadow: rgba(0, 0, 0, 0.3);
-  --shadow-hover: rgba(0, 0, 0, 0.5);
+  --shadow: rgba(0, 0, 0, 0.16);
+  --shadow-hover: rgba(0, 0, 0, 0.25);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --color-canvas: #f6f7fb;
+  --color-canvas: #f2f5f6;
   --color-surface: #ffffff;
-  --color-surface-raised: #eef0f6;
-  --color-surface-hover: #e3e7f0;
-  --color-text: #202534;
-  --color-text-muted: #596174;
-  --color-text-subtle: #747d91;
-  --color-border: #d7dbe5;
-  --color-accent: #5064dd;
-  --color-accent-strong: #7448a8;
-  --color-header-start: #5368df;
-  --color-header-end: #7448a8;
+  --color-surface-raised: #eaf0f2;
+  --color-surface-hover: #e1e9ed;
+  --color-text: #111820;
+  --color-text-muted: #52626d;
+  --color-text-subtle: #697b85;
+  --color-border: #d5dde2;
+  --color-accent: #008b8b;
+  --color-accent-strong: #006d71;
+  --color-header-start: #ffffff;
+  --color-header-end: #ffffff;
   --color-on-accent: #ffffff;
-  --color-focus: #ffffff;
-  --color-danger-text: #b42318;
-  --color-warning-surface: #9a4d08;
-  --color-warning-border: #7c3f08;
-  --color-warning-text: #ffffff;
-  --color-header-control: rgba(10, 14, 30, 0.16);
-  --color-header-control-hover: rgba(10, 14, 30, 0.3);
-  --color-header-control-border: rgba(255, 255, 255, 0.48);
+  --color-focus: #007c83;
+  --color-success: #137e5a;
+  --color-warning: #92600b;
+  --color-danger: #bb3636;
+  --color-danger-text: #a92b2b;
+  --color-warning-surface: #fff3db;
+  --color-warning-border: #b18a51;
+  --color-warning-text: #6c480d;
+  --color-header-control: #f2f5f6;
+  --color-header-control-hover: #e1e9ed;
+  --color-header-control-border: #ccd6db;
 
-  --shadow: rgba(26, 32, 48, 0.1);
-  --shadow-hover: rgba(26, 32, 48, 0.2);
+  --shadow: rgba(14, 25, 32, 0.06);
+  --shadow-hover: rgba(14, 25, 32, 0.12);
 }

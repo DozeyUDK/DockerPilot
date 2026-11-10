@@ -423,13 +423,13 @@ function Pipelines() {
                   top: '100%',
                   left: 0,
                   right: 0,
-                  backgroundColor: 'white',
-                  border: '1px solid #ccc',
+                  backgroundColor: 'var(--card-bg)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: '4px',
                   maxHeight: '200px',
                   overflowY: 'auto',
                   zIndex: 1000,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  boxShadow: 'none'
                 }}>
                   {filteredImages.slice(0, 20).map((img, idx) => (
                     <div
@@ -441,15 +441,15 @@ function Pipelines() {
                       style={{
                         padding: '0.5rem',
                         cursor: 'pointer',
-                        borderBottom: '1px solid #eee'
+                        borderBottom: '1px solid var(--border-color)'
                       }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = '#f0f0f0'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--color-surface-hover)'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--card-bg)'}
                       title={`ID: ${img.id || 'N/A'}, Size: ${img.size || 'N/A'}`}
                     >
                       <div style={{ fontWeight: 'bold' }}>{img.name}</div>
                       {img.size && (
-                        <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                           {img.size} {img.id && `• ID: ${img.id}`}
                         </div>
                       )}
@@ -459,7 +459,7 @@ function Pipelines() {
               )}
             </div>
             {dockerImages.length > 0 && (
-              <small style={{ color: '#666', fontSize: '0.85rem' }}>
+              <small style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 {dockerImages.length} images available
               </small>
             )}
@@ -518,13 +518,13 @@ function Pipelines() {
                   top: '100%',
                   left: 0,
                   right: 0,
-                  backgroundColor: 'white',
-                  border: '1px solid #ccc',
+                  backgroundColor: 'var(--card-bg)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: '4px',
                   maxHeight: '200px',
                   overflowY: 'auto',
                   zIndex: 1000,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  boxShadow: 'none'
                 }}>
                   {filteredDockerfiles.slice(0, 20).map((df, idx) => (
                     <div
@@ -536,21 +536,21 @@ function Pipelines() {
                       style={{
                         padding: '0.5rem',
                         cursor: 'pointer',
-                        borderBottom: '1px solid #eee'
+                        borderBottom: '1px solid var(--border-color)'
                       }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = '#f0f0f0'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--color-surface-hover)'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--card-bg)'}
                       title={df.full}
                     >
                       <div style={{ fontWeight: 'bold' }}>{df.relative}</div>
-                      <div style={{ fontSize: '0.85rem', color: '#666' }}>{df.full}</div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{df.full}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
             {dockerfiles.length > 0 && (
-              <small style={{ color: '#666', fontSize: '0.85rem' }}>
+              <small style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 {dockerfiles.length} Dockerfiles found
               </small>
             )}
@@ -787,7 +787,7 @@ function Pipelines() {
           )}
           
           {!generatedPipeline && !loading && (
-            <p style={{ color: '#666', textAlign: 'center', padding: '2rem' }}>
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
               Generate a pipeline to see the preview
             </p>
           )}
