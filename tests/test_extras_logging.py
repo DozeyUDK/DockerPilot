@@ -17,7 +17,7 @@ if str(EXTRAS_DIR) not in sys.path:
 
 from flask import Flask
 
-from backend.logging_config import SafeConsoleFormatter, configure_logging
+from backend.logging_config import SafeConsoleFormatter, _PermissionedRotatingFileHandler, configure_logging
 from backend.services.remote_failure_aggregator import RemoteFailureAggregator
 from backend.services.remote_probe import run_remote_probe
 
@@ -343,3 +343,51 @@ def test_logging_refuses_symlink_log_directory_without_chmodding_target(tmp_path
     assert log_path is None
     assert stat.S_IMODE(target_dir.stat().st_mode) == 0o755
     assert not (target_dir / "extras.jsonl").exists()
+
+
+def test_file_handler_write_failure_never_prints_the_original_record(capfd, tmp_path):
+    app = Flask("logging-handler-error-test")
+    secret = "disk-failure-secret-sentinel"
+    log_path = configure_logging(
+        app,
+        log_dir=tmp_path,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+        max_bytes=0,
+        backup_count=0,
+    )
+    assert log_path is not None
+
+    handler = next(
+        item for item in app.logger.handlers
+        if isinstance(item, _PermissionedRotatingFileHandler)
+    )
+    original_stream = handler.stream
+
+    class _FailingStream:
+        def write(self, _value):
+            raise OSError("simulated disk full")
+
+        def flush(self):
+            return None
+
+    handler.stream = _FailingStream()
+    record = logging.LogRecord(
+        "dockerpilot.tests.file-handler-error",
+        logging.ERROR,
+        __file__,
+        1,
+        "Remote operation failed password=%s",
+        (secret,),
+        None,
+    )
+    try:
+        handler.emit(record)
+        stderr = capfd.readouterr().err
+    finally:
+        handler.stream = original_stream
+        handler.close()
+
+    assert "file logging failed" in stderr
+    assert secret not in stderr
+    assert "simulated disk full" not in stderr
