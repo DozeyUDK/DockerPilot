@@ -208,3 +208,17 @@ def test_jsonl_file_rotates_at_configured_size(tmp_path):
     assert log_path.exists()
     assert (tmp_path / "extras.jsonl.1").exists()
     assert len(list(tmp_path.glob("extras.jsonl*"))) <= 3
+
+
+def test_auth_and_server_selection_logs_do_not_include_session_identifiers_or_usernames():
+    server_source = (
+        EXTRAS_DIR / "backend" / "resources" / "servers.py"
+    ).read_text(encoding="utf-8")
+    auth_source = (
+        EXTRAS_DIR / "backend" / "resources" / "auth.py"
+    ).read_text(encoding="utf-8")
+
+    assert "session_id:" not in server_source
+    assert "session now has:" not in server_source
+    assert "Authenticated web session for user" not in auth_source
+    assert 'extra={"event": "auth_session_created"}' in auth_source
