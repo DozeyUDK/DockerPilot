@@ -72,8 +72,19 @@ class JsonLineFormatter(logging.Formatter):
             "message": _safe_text(message),
         }
 
+        context_request_id = None
+        try:
+            from flask import g, has_request_context
+
+            if has_request_context():
+                context_request_id = getattr(g, "dockerpilot_request_id", None)
+        except (ImportError, RuntimeError):
+            context_request_id = None
+
         for field in _SAFE_EXTRA_FIELDS:
             value = getattr(record, field, None)
+            if field == "request_id" and value is None:
+                value = context_request_id
             if value is None:
                 continue
             if isinstance(value, str):
