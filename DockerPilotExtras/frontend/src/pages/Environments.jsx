@@ -1437,7 +1437,7 @@ function Environments() {
           style={{
             padding: '0.5rem 1rem',
             backgroundColor: loadingStatus ? '#6c757d' : 'var(--color-accent)',
-            color: 'white',
+            color: loadingStatus ? 'white' : 'var(--color-on-accent)',
             border: 'none',
             borderRadius: '4px',
             cursor: loadingStatus ? 'not-allowed' : 'pointer',
@@ -1491,7 +1491,7 @@ function Environments() {
             style={{
               padding: '0.5rem 1rem',
               backgroundColor: 'var(--color-accent)',
-              color: 'white',
+              color: 'var(--color-on-accent)',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -1646,7 +1646,8 @@ function Environments() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'white',
+                color: deploymentProgress.stage === 'completed' || deploymentProgress.stage === 'failed' || deploymentProgress.stage === 'error'
+                  ? 'white' : 'var(--color-on-accent)',
                 fontWeight: 'bold',
                 fontSize: '12px'
               }}>
@@ -2451,7 +2452,7 @@ function Environments() {
                                   style={{
                                     padding: '0.5rem 1rem',
                                     backgroundColor: 'var(--color-accent)',
-                                    color: 'white',
+                                    color: 'var(--color-on-accent)',
                                     border: 'none',
                                     borderRadius: '4px',
                                     cursor: 'pointer',
@@ -2552,7 +2553,7 @@ function Environments() {
                       style={{ 
                         padding: '0.5rem 1rem',
                         backgroundColor: 'var(--color-accent)',
-                        color: 'white',
+                        color: 'var(--color-on-accent)',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer'
@@ -3054,7 +3055,7 @@ function Environments() {
                   style={{
                     padding: '0.5rem 1rem',
                     backgroundColor: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? '#ccc' : 'var(--color-accent)',
-                    color: 'white',
+                    color: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? '#111820' : 'var(--color-on-accent)',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: (!serverForm.name || !serverForm.hostname || !serverForm.username) ? 'not-allowed' : 'pointer',
