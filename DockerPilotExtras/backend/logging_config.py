@@ -90,6 +90,27 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+class SafeConsoleFormatter(logging.Formatter):
+    """Redact message, traceback and stack text before writing to the terminal."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        safe_record = logging.makeLogRecord(record.__dict__.copy())
+        try:
+            safe_record.msg = _safe_text(record.getMessage())
+        except Exception:
+            safe_record.msg = "Log message formatting failed"
+        safe_record.args = ()
+        if safe_record.exc_info:
+            try:
+                safe_record.exc_text = _safe_text(self.formatException(safe_record.exc_info))
+            except Exception:
+                safe_record.exc_text = "<exception formatting failed>"
+            safe_record.exc_info = None
+        if safe_record.stack_info:
+            safe_record.stack_info = _safe_text(safe_record.stack_info)
+        return super().format(safe_record)
+
+
 class _PermissionedRotatingFileHandler(RotatingFileHandler):
     """Keep the active file and newly rotated files at the configured mode."""
 
@@ -230,7 +251,7 @@ def configure_logging(
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(resolved_console_level)
-    console_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    console_handler.setFormatter(SafeConsoleFormatter("%(levelname)s %(message)s"))
     console_handler._dockerpilot_extras_owned = True
 
     file_handler = None
