@@ -23,7 +23,7 @@ Defaults:
 | Slow request threshold | 1500 ms |
 | Debug reloader | Disabled |
 
-Successful GET polling requests are not written as access-log entries. HTTP errors, slow requests, and successful state-changing requests are recorded. Each request receives an X-Request-ID response header; a valid incoming X-Request-ID is preserved.
+Successful GET polling requests are not written as access-log entries. HTTP errors, slow requests, and successful state-changing requests are recorded. Each request receives an X-Request-ID response header; a valid incoming X-Request-ID is preserved. Application events emitted inside that request inherit the same request_id field for correlation in Loki.
 
 The backend redacts common secret assignments and environment options before serializing messages and exception text. Do not use application logs as a place to print credentials, request bodies, private keys, or raw SSH commands.
 
