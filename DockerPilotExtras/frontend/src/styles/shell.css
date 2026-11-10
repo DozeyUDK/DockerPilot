@@ -468,15 +468,15 @@
     max-width: min(11rem, 29vw);
   }
 
-  /* On mobile, the popup belongs to the content viewport, not to the
-     narrow trigger sitting before Logout and the theme control. A fixed
-     inset keeps it clear of the 56px sidebar regardless of button widths. */
+  /* The menu follows the right edge of the content viewport, not the
+     small server trigger. At narrow widths it fills the usable area beside
+     the 56px rail; on tablets it stays capped to a readable 24rem. */
   .server-selector-menu {
     position: fixed;
     top: calc(4rem + var(--space-1));
-    left: calc(3.5rem + var(--space-2));
+    left: auto;
     right: var(--space-2);
-    width: auto;
+    width: min(24rem, calc(100vw - 4.5rem));
     min-width: 0;
     max-width: none;
     max-height: calc(100vh - 4.5rem);
