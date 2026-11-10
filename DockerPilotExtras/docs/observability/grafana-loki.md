@@ -134,6 +134,8 @@ loki.process "dockerpilot_extras" {
 Change loki.write.default.receiver to the receiver of the Loki writer already present in your configuration. The writer label is installation-specific; do not add a second writer if the existing one already sends to the intended Loki instance.
 Do not set tail_from_end=true here. Alloy's default is to read from the beginning when a file has no saved position. This is intentional: if Alloy was stopped during log rotation, it can still collect unread content from a newly discovered rotated file such as extras.jsonl.1. On first setup, expect Alloy to ingest the retained JSONL history.
 
+Keep Alloy's configured storage path (the directory holding its positions file) on persistent storage. If that positions state is lost, Alloy can replay retained files from the beginning; this avoids silently skipping data but can create duplicate log entries. The collector is therefore at-least-once, not exactly-once.
+
  The writer label is installation-specific; do not add a second writer if the existing one already sends to the intended Loki instance.
 
 If your existing Alloy configuration uses a different log directory, update __path__ to match DOCKERPILOT_EXTRAS_LOG_DIR.
