@@ -82,9 +82,18 @@ def test_request_logging_skips_successful_polling_and_adds_request_id(tmp_path):
     def change():
         return {"ok": True}, 202
 
+    @app.get("/api/remote-down")
+    def remote_down():
+        from flask import request
+
+        request.environ["dockerpilot_extras.suppress_http_log"] = True
+        return {"ok": False}, 503
+
     poll_response = app.test_client().get("/api/poll")
     assert poll_response.status_code == 200
     assert poll_response.headers.get("X-Request-ID")
+    remote_response = app.test_client().get("/api/remote-down")
+    assert remote_response.status_code == 503
 
     request_id = "request-123456"
     change_response = app.test_client().post(
