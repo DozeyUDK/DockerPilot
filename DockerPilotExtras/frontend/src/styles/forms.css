@@ -11,7 +11,7 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--card-bg);
-  box-shadow: 0 0.75rem 2rem var(--shadow);
+  box-shadow: none;
 }
 
 .auth-title {
@@ -59,7 +59,7 @@
 .form-control:focus-visible,
 .form-button:focus-visible,
 .secure-deploy-step:focus-visible {
-  outline: 3px solid var(--color-accent);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -88,8 +88,8 @@
 }
 
 .form-button.btn-primary {
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+  border-color: var(--color-accent);
+  background: var(--color-accent);
   color: var(--color-on-accent);
 }
 
@@ -232,4 +232,39 @@
   .secure-deploy-step {
     transition: none;
   }
+}
+
+/* Authentication is an operations sign-in, not a promotional landing page. */
+.auth-page {
+  background: var(--color-canvas);
+}
+
+.auth-card {
+  border-top: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  max-width: 28rem;
+}
+
+.auth-title {
+  letter-spacing: 0.01em;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.form-control {
+  border-radius: var(--radius-sm);
+}
+
+.form-control:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.form-button.btn-primary:hover:not(:disabled) {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent-strong);
+}
+
+.secure-deploy-step[aria-current="step"] {
+  border-left: 3px solid var(--color-accent);
+  box-shadow: none;
 }
