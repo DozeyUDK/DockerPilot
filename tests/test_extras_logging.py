@@ -435,3 +435,20 @@ def test_logging_does_not_chmod_an_existing_directory(tmp_path):
     assert log_path is None
     assert stat.S_IMODE(existing_dir.stat().st_mode) == 0o755
     assert not (existing_dir / "extras.jsonl").exists()
+
+
+def test_logging_rejects_world_readable_or_writable_modes(tmp_path):
+    app = Flask("logging-unsafe-mode-test")
+    log_dir = tmp_path / "unsafe-mode"
+
+    log_path = configure_logging(
+        app,
+        log_dir=log_dir,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+        directory_mode=0o777,
+        file_mode=0o666,
+    )
+
+    assert log_path is None
+    assert not log_dir.exists()
