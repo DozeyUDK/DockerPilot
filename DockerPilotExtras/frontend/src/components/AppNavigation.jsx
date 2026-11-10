@@ -65,8 +65,9 @@ function AppNavigation() {
               {authEnabled && username && (
                 <div className="nav-user">
                   <span className="nav-username" title={username}>{username}</span>
-                  <button type="button" onClick={logout} className="shell-action nav-logout">
-                    Logout
+                  <button type="button" onClick={logout} className="shell-action nav-logout" aria-label="Logout" title="Logout">
+                    <span className="nav-logout-icon" aria-hidden="true">{ICONS.close}</span>
+                    <span className="nav-logout-label">Logout</span>
                   </button>
                 </div>
               )}
