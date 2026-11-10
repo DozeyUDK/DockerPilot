@@ -78,7 +78,19 @@ def _link_destination(
         if normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
             raise UnsafeArchiveError(f"Symlink escapes archive root: {linkname!r}")
         linked = Path(normalized)
-    return _check_destination(root, linked)
+    if hardlink:
+        # A hardlink copies an inode; its source must be a normal path rather
+        # than a symlink (including links along parent directories).
+        return _check_destination(root, linked)
+
+    # A symlink target is *not* an extraction destination. Following a safe
+    # internal symlink chain is valid (for example c -> b -> a), so do not
+    # reject existing symlinks here. Validate the unresolved path as well:
+    # normalizing "alias/../file" first could hide traversal through an alias.
+    target = root / relative.parent / linkname
+    if not _within_root(root, target):
+        raise UnsafeArchiveError(f"Symlink target outside restore root: {linkname!r}")
+    return root / linked
 
 
 def extract_safe(
