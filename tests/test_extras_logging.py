@@ -16,7 +16,7 @@ if str(EXTRAS_DIR) not in sys.path:
 
 from flask import Flask
 
-from backend.logging_config import configure_logging
+from backend.logging_config import SafeConsoleFormatter, configure_logging
 from backend.services.remote_failure_aggregator import RemoteFailureAggregator
 from backend.services.remote_probe import run_remote_probe
 
@@ -163,3 +163,39 @@ def test_remote_probe_logs_one_failure_without_command_text(caplog):
     assert len(records) == 1
     assert command not in caplog.text
     assert "must-not-appear" not in caplog.text
+
+
+def test_console_formatter_redacts_secret_assignments():
+    secret = "console-secret-sentinel"
+    record = logging.LogRecord(
+        "dockerpilot.tests.console",
+        logging.WARNING,
+        __file__,
+        1,
+        "Remote operation failed password=%s",
+        (secret,),
+        None,
+    )
+
+    formatted = SafeConsoleFormatter("%(levelname)s %(message)s").format(record)
+    assert secret not in formatted
+    assert "redacted" in formatted
+
+
+def test_jsonl_file_rotates_at_configured_size(tmp_path):
+    app = Flask("logging-rotation-test")
+    log_path = configure_logging(
+        app,
+        log_dir=tmp_path,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+        max_bytes=1024,
+        backup_count=2,
+    )
+
+    for index in range(30):
+        app.logger.info("rotation record %s %s", index, "x" * 120)
+
+    assert log_path.exists()
+    assert (tmp_path / "extras.jsonl.1").exists()
+    assert len(list(tmp_path.glob("extras.jsonl*"))) <= 3
