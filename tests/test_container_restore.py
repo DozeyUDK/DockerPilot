@@ -533,3 +533,58 @@ def test_restore_rejects_write_through_existing_internal_symlink(tmp_path):
         SimpleNamespace(logger=_Logger()), archive, str(destination)
     )
     assert not (destination / "data" / "new.txt").exists()
+
+
+def test_archive_symlink_graph_rejects_future_escape(tmp_path):
+    """A later archive link must not turn an earlier target into an escape."""
+    archive = tmp_path / "delayed-escape.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./safe.txt", "file", "must not write before preflight"),
+        ("./x", "symlink", "alias/../outside.txt"),
+        ("./alias", "symlink", "."),
+    ])
+    destination = tmp_path / "data"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external", encoding="utf-8")
+    logger = _Logger()
+
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=logger), archive, str(destination)
+    )
+    assert not (destination / "safe.txt").exists()
+    assert not (destination / "x").is_symlink()
+    assert not (destination / "alias").is_symlink()
+    assert outside.read_text(encoding="utf-8") == "external"
+    assert logger.messages
+
+
+def test_archive_symlink_graph_rejects_future_escape_in_reverse_order(tmp_path):
+    """Archive symlink creation order cannot determine containment safety."""
+    archive = tmp_path / "delayed-escape-reverse.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./alias", "symlink", "."),
+        ("./x", "symlink", "alias/../outside.txt"),
+    ])
+    destination = tmp_path / "data"
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert not (destination / "x").is_symlink()
+
+
+def test_archive_symlink_graph_rejects_indirect_cycles(tmp_path):
+    """Cyclic internal symlinks fail preflight instead of consuming time."""
+    archive = tmp_path / "cycle.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./alpha", "symlink", "beta"),
+        ("./beta", "symlink", "alpha"),
+    ])
+    destination = tmp_path / "data"
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert not (destination / "alpha").is_symlink()
+    assert not (destination / "beta").is_symlink()
