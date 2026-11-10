@@ -31,6 +31,39 @@ _SAFE_EXTRA_FIELDS = (
     "endpoint",
 )
 
+_STANDARD_LOG_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
+
+
+class RedactingLogRecordFilter(logging.Filter):
+    """Sanitize records before they reach local handlers or propagated root handlers."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = _safe_text(record.getMessage())
+        except Exception:
+            record.msg = "Log message formatting failed"
+        record.args = ()
+
+        if record.exc_info:
+            try:
+                record.exc_text = _safe_text(logging.Formatter().formatException(record.exc_info))
+            except Exception:
+                record.exc_text = "<exception formatting failed>"
+            # Do not let a parent/root handler reformat the original exception.
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = _safe_text(record.exc_text)
+
+        if record.stack_info:
+            record.stack_info = _safe_text(record.stack_info)
+
+        # Extras are visible to host-level formatters even when our JSON
+        # formatter deliberately whitelists a smaller set of fields.
+        for field, value in tuple(record.__dict__.items()):
+            if field not in _STANDARD_LOG_RECORD_FIELDS and isinstance(value, str):
+                setattr(record, field, _safe_text(value, limit=1000))
+        return True
+
 
 def _safe_text(value: object, limit: int = 4000) -> str:
     try:
@@ -97,6 +130,8 @@ class JsonLineFormatter(logging.Formatter):
                 payload["exception"] = _safe_text(self.formatException(record.exc_info))
             except Exception:
                 payload["exception"] = "<exception formatting failed>"
+        elif record.exc_text:
+            payload["exception"] = _safe_text(record.exc_text)
 
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -317,7 +352,12 @@ def configure_logging(
             target.addHandler(handler)
 
     app_logger.setLevel(min(resolved_file_level, resolved_console_level))
-    # Keep propagation enabled so pytest caplog and host-level collectors work.
+    # Redact the shared record before it reaches either our handlers or any
+    # parent/root handler. Propagation is kept for pytest caplog and host agents.
+    if not any(getattr(item, "_dockerpilot_extras_redactor", False) for item in app_logger.filters):
+        redactor = RedactingLogRecordFilter()
+        redactor._dockerpilot_extras_redactor = True
+        app_logger.addFilter(redactor)
     app_logger.propagate = True
     werkzeug_logger.setLevel(logging.WARNING)
     werkzeug_logger.propagate = False
