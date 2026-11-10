@@ -42,8 +42,9 @@ def test_alloy_example_collects_rotated_jsonl_files_and_forwards_to_loki():
     assert 'loki.source.file "dockerpilot_extras"' in config
     assert '"/var/log/dockerpilot-extras/extras.jsonl*"' in config
     assert '"job"          = "dockerpilot-extras"' in config
-    assert "tail_from_end = true" in config
+    assert "tail_from_end = true" not in config
     assert "file_match {" in config
+    assert "rotated backlog is not silently skipped" in config
     assert 'loki.process "dockerpilot_extras"' in config
     assert 'stage.timestamp {' in config
     assert 'format = "RFC3339Nano"' in config
