@@ -14,6 +14,80 @@ It combines a CLI/TUI, an optional operations web panel, and an MCP server. Secu
 
 > Secure Deploy is an optional architecture, not a blanket claim that every DockerPilot component is isolated from Docker or safe to expose to an untrusted user.
 
+## Architecture
+
+DockerPilot has three entry points with distinct access paths: the local CLI/TUI, the optional DockerPilotExtras web panel, and the optional MCP server. They share Docker as a runtime target, but the MCP server does not pass through the interactive CLI, and Secure Deploy uses a separate host-side broker.
+
+~~~mermaid
+flowchart TB
+    subgraph Actors["USERS AND AUTOMATION"]
+        direction LR
+        Operator["Operator"]
+        Assistant["AI assistant"]
+    end
+
+    subgraph Entry["ENTRY POINTS"]
+        direction LR
+        CLI["CLI and TUI"]
+        Web["Extras web UI<br/>React"]
+        MCP["MCP server<br/>stdio"]
+    end
+
+    subgraph App["APPLICATION SERVICES"]
+        direction LR
+        Core["DockerPilot core<br/>containers / images / deploy / monitor"]
+        API["Extras API<br/>Flask / REST"]
+        MCPPolicy["MCP policy and DockerOps<br/>read-only by default"]
+        Pipelines["CI/CD pipeline generator"]
+    end
+
+    subgraph Secure["OPTIONAL SECURE DEPLOY BOUNDARY"]
+        direction LR
+        Plan["Canonical plan and hash"]
+        Broker["Root-owned broker<br/>independent verification"]
+        Guard["Trusted DozeyGuard<br/>and approval checks"]
+    end
+
+    subgraph Targets["RUNTIME AND OUTPUTS"]
+        direction LR
+        Docker[("Docker Engine")]
+        Store[("File state / optional PostgreSQL")]
+        CI["Generated pipeline files<br/>GitHub Actions / GitLab CI / Jenkins"]
+    end
+
+    Operator --> CLI
+    Operator --> Web
+    Assistant --> MCP
+    CLI --> Core
+    Web --> API
+    API --> Core
+    MCP --> MCPPolicy
+    Core --> Docker
+    MCPPolicy --> Docker
+    Core --> Store
+    API --> Store
+    Core --> Pipelines
+    API --> Pipelines
+    Pipelines --> CI
+    API -.-> Plan
+    Plan -.-> Broker
+    Broker --> Guard
+    Broker --> Docker
+
+    classDef entry fill:#e9f2ff,stroke:#5485bc,color:#193653,stroke-width:1px
+    classDef app fill:#e8f6f0,stroke:#438d74,color:#183e33,stroke-width:1px
+    classDef secure fill:#fff0e2,stroke:#be8254,color:#553319,stroke-width:1px
+    classDef target fill:#f1eef9,stroke:#8473b1,color:#342853,stroke-width:1px
+    class CLI,Web,MCP entry
+    class Core,API,MCPPolicy,Pipelines app
+    class Plan,Broker,Guard secure
+    class Docker,Store,CI target
+~~~
+
+**Reading the diagram:** Solid arrows show normal runtime or data flows; dashed arrows show the optional Secure Deploy route. The MCP server uses its own policy-gated Docker operations rather than passing through the interactive CLI. Secure Deploy crosses a separate Unix-socket broker boundary, where the broker independently verifies plans and enforces broker-owned approval before the constrained canary path. Pipeline generation writes CI configuration files; it does **not** mean DockerPilot runs a GitHub Actions, GitLab CI, or Jenkins runner.
+
+Related details: [MCP integration](docs/mcp.md), [DockerPilotExtras](DockerPilotExtras/README.md), and the [Secure Deploy threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_MODEL.md).
+
 ## Why Secure Deploy
 
 A web application that can access the Docker daemon has substantial host authority. DockerPilot's Secure Deploy profile is designed to keep that authority out of the DockerPilotExtras control plane.
@@ -27,21 +101,40 @@ A web application that can access the Docker daemon has substantial host authori
 ### Secure Deploy flow
 
 ~~~mermaid
-flowchart TB
-    Operator["Operator"] --> Extras["DockerPilotExtras<br/>unprivileged control plane"]
-    Extras --> Plan["Validate spec and create<br/>canonical deployment plan"]
-    Plan --> Hash["plan_sha256"]
-    Hash --> Control["Broker control socket<br/>request verification / challenge"]
-    Control --> Broker["Root-owned Secure Deploy broker"]
-    Broker --> Verify["Recompute plan, Compose,<br/>firewall and DozeyGuard"]
-    Verify --> Challenge["Non-authorizing approval challenge"]
-    Challenge --> Approver["Allowlisted local process"]
-    Approver --> Socket["Root-only approver.sock<br/>SO_PEERCRED + UID allowlist"]
-    Socket --> Ledger["Broker-owned approval ledger"]
-    Ledger --> Broker
-    Broker --> Admission["Fixed canary admission<br/>and execution state machine"]
-    Admission --> Docker["Docker Engine"]
-    Tamper["Plan drift / forged result / expired approval"] --> Reject["Reject before Docker action"]
+flowchart LR
+    subgraph PlanStage["PLAN AND CONTROL PLANE"]
+        direction TB
+        Operator["Operator"] --> Extras["DockerPilotExtras<br/>unprivileged control plane"]
+        Extras --> Plan["Validate spec and create<br/>canonical deployment plan"]
+        Plan --> Hash["plan_sha256"]
+        Hash --> Control["Broker control socket<br/>request verification"]
+    end
+
+    subgraph BrokerStage["ROOT-OWNED BROKER"]
+        direction TB
+        Broker["Secure Deploy broker"] --> Verify["Recompute plan, Compose,<br/>firewall and DozeyGuard"]
+        Verify --> Challenge["Create non-authorizing<br/>approval challenge"]
+    end
+
+    subgraph ApprovalStage["SEPARATE APPROVER CHANNEL"]
+        direction TB
+        Approver["Allowlisted local process"] --> Socket["Root-only approver.sock<br/>SO_PEERCRED + UID allowlist"]
+    end
+
+    subgraph ExecutionStage["CONSTRAINED EXECUTION"]
+        direction TB
+        Admission["Fixed canary admission<br/>and execution state machine"]
+        Docker[("Docker Engine")]
+        Admission --> Docker
+    end
+
+    Control --> Broker
+    Challenge --> Approver
+    Socket --> Broker
+    Broker --> Ledger["Broker-owned approval ledger<br/>checked before execution"]
+    Ledger -.-> Admission
+
+    Tamper["Plan drift / forged result /<br/>expired or revoked approval"] --> Reject["Reject before Docker action"]
 ~~~
 
 The approval socket proves that the request came from an allowlisted local UID outside the Extras service-account boundary. It does not make the Extras UI an independently trusted plan display. The repository does not currently provide a separate trusted plan viewer for the root approver; plan contents and hash must be verified out of band. Approval by hash alone is not proof that the plan contents were reviewed.
