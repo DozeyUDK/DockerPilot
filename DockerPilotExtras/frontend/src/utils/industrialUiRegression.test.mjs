@@ -13,9 +13,9 @@ test('mobile server menu stays within the viewport content area', async () => {
   for (const rule of [
     /position:\s*fixed;/,
     /top:\s*calc\(4rem\s*\+\s*var\(--space-1\)\);/,
-    /left:\s*calc\(3\.5rem\s*\+\s*var\(--space-2\)\);/,
+    /left:\s*auto;/,
     /right:\s*var\(--space-2\);/,
-    /width:\s*auto;/,
+    /width:\s*min\(24rem,\s*calc\(100vw\s*-\s*4\.5rem\)\);/,
     /min-width:\s*0;/,
     /max-width:\s*none;/,
     /overflow-y:\s*auto;/,
@@ -25,12 +25,13 @@ test('mobile server menu stays within the viewport content area', async () => {
 
   const railWidth = 3.5 * 16
   const margin = 0.5 * 16
-  for (const width of [320, 375, 390, 768]) {
-    const menuLeft = railWidth + margin
+  for (const width of [320, 375, 390, 480, 768]) {
+    const popupWidth = Math.min(24 * 16, width - 4.5 * 16)
     const menuRight = width - margin
-    assert.ok(menuLeft >= railWidth, 'menu must never overlap sidebar')
+    const menuLeft = menuRight - popupWidth
+    assert.ok(menuLeft >= railWidth + margin, 'menu must stay clear of the sidebar')
     assert.ok(menuRight <= width, 'menu must never extend beyond the viewport')
-    assert.ok(menuRight - menuLeft > 0, 'menu must have positive usable width')
+    assert.ok(popupWidth > 0 && popupWidth <= 24 * 16, 'menu must stay usable and compact')
   }
 })
 
