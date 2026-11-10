@@ -299,3 +299,47 @@ def test_redaction_happens_before_records_propagate_to_root_handlers(tmp_path):
     assert secret not in file_output
     assert "redacted" in root_output
     assert "redacted" in file_output
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "O_NOFOLLOW"), reason="POSIX O_NOFOLLOW required")
+def test_logging_refuses_symlink_log_file_without_touching_target(tmp_path):
+    app = Flask("logging-symlink-file-test")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(mode=0o700)
+    target = tmp_path / "do-not-touch.txt"
+    target.write_text("preserve-this-content", encoding="utf-8")
+    (log_dir / "extras.jsonl").symlink_to(target)
+
+    log_path = configure_logging(
+        app,
+        log_dir=log_dir,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+    )
+
+    assert log_path is None
+    assert target.read_text(encoding="utf-8") == "preserve-this-content"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions required")
+def test_logging_refuses_symlink_log_directory_without_chmodding_target(tmp_path):
+    app = Flask("logging-symlink-directory-test")
+    target_dir = tmp_path / "existing-shared-directory"
+    target_dir.mkdir()
+    os.chmod(target_dir, 0o755)
+    symlink_dir = tmp_path / "logs-link"
+    try:
+        symlink_dir.symlink_to(target_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Symlink creation is unavailable: {exc}")
+
+    log_path = configure_logging(
+        app,
+        log_dir=symlink_dir,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+    )
+
+    assert log_path is None
+    assert stat.S_IMODE(target_dir.stat().st_mode) == 0o755
+    assert not (target_dir / "extras.jsonl").exists()
