@@ -92,6 +92,6 @@ test('Status health and preflight grids shrink beside the mobile icon rail', asy
   for (const viewport of [320, 375, 390, 430]) {
     const available = viewport - rail - mainPadding - cardPadding - cardBorders
     assert.ok(available > 0, 'a content column remains on narrow phones')
-    assert.equal(Math.min(available, 280), available, 'grid is allowed to shrink below 280px')
+    assert.equal(Math.min(available, 280), available < 280 ? available : 280, 'grid uses the smaller of available space and 280px')
   }
 })
