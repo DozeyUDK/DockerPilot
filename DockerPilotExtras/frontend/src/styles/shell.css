@@ -240,6 +240,10 @@
   font-size: 0.8125rem;
 }
 
+.nav-logout-icon {
+  display: none;
+}
+
 .theme-toggle {
   width: 2.5rem;
   padding: 0;
@@ -474,8 +478,13 @@
     gap: var(--space-2);
   }
 
+  /* The DP mark remains in the rail: give mobile controls sufficient room. */
   .nav-brand {
-    font-size: 0.82rem;
+    display: none;
+  }
+
+  .nav-workspace {
+    justify-content: flex-end;
   }
 
   .nav-user {
@@ -483,12 +492,20 @@
   }
 
   .nav-logout {
-    padding-inline: var(--space-2);
-    font-size: 0.72rem;
+    width: 2.5rem;
+    padding: 0;
+  }
+
+  .nav-logout-icon {
+    display: inline-block;
+  }
+
+  .nav-logout-label {
+    display: none;
   }
 
   .server-selector-trigger {
-    max-width: 7.25rem;
+    max-width: min(12rem, 35vw);
     padding-inline: var(--space-2);
   }
 
