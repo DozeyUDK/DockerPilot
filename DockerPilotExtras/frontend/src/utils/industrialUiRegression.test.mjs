@@ -69,3 +69,29 @@ test('dark primary accent and on-accent text have readable contrast', async () =
   const contrast = (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
   assert.ok(contrast >= 4.5, `expected at least 4.5:1, got ${contrast.toFixed(2)}:1`)
 })
+
+
+test('Status health and preflight grids shrink beside the mobile icon rail', async () => {
+  const css = await source('../App.css')
+  const shell = await source('../styles/shell.css')
+
+  for (const selector of ['status-health-grid', 'status-preflight-grid']) {
+    const body = css.match(new RegExp(`\\.${selector}\\s*\\{([^}]+)\\}`))?.[1]
+    assert.ok(body, `missing ${selector}`)
+    assert.match(body, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\);/)
+    assert.doesNotMatch(body, /minmax\(280px,\s*1fr\)/)
+  }
+
+  assert.match(shell, /grid-template-columns:\s*3\.5rem minmax\(0, 1fr\)/)
+  // The content track can be narrower than 280px after the 56px rail,
+  // main-content padding, card padding and borders are subtracted.
+  const rail = 3.5 * 16
+  const mainPadding = 0.75 * 16 * 2
+  const cardPadding = 1.5 * 16 * 2
+  const cardBorders = 2
+  for (const viewport of [320, 375, 390, 430]) {
+    const available = viewport - rail - mainPadding - cardPadding - cardBorders
+    assert.ok(available > 0, 'a content column remains on narrow phones')
+    assert.equal(Math.min(available, 280), available, 'grid is allowed to shrink below 280px')
+  }
+})
