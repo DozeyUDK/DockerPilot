@@ -110,3 +110,39 @@ def test_config_import_does_not_follow_preexisting_symlink(tmp_path, monkeypatch
     monkeypatch.chdir(work)
     assert not import_configuration(FakeConsole(), FakeLogger(), str(archive))
     assert external.read_text(encoding="utf-8") == "original"
+
+
+def test_config_import_rejects_root_metadata_without_changing_cwd(tmp_path, monkeypatch):
+    """Even a dot-only TAR must not chmod/chown the caller's working directory."""
+    from io import BytesIO
+    import stat
+    import tarfile
+
+    work = tmp_path / "work"
+    work.mkdir()
+    work.chmod(0o700)
+    monkeypatch.chdir(work)
+
+    for with_file in (False, True):
+        archive_path = tmp_path / f"root-metadata-{with_file}.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as archive:
+            if with_file:
+                payload = b"name: demo\n"
+                entry = tarfile.TarInfo("deployment.yml")
+                entry.size = len(payload)
+                archive.addfile(entry, BytesIO(payload))
+            root_entry = tarfile.TarInfo(".")
+            root_entry.type = tarfile.DIRTYPE
+            root_entry.mode = 0o777
+            root_entry.uid = os.getuid()
+            root_entry.gid = os.getgid()
+            archive.addfile(root_entry)
+
+        logger = FakeLogger()
+        try:
+            assert not import_configuration(FakeConsole(), logger, str(archive_path))
+            assert stat.S_IMODE(work.stat().st_mode) == 0o700
+            assert list(work.iterdir()) == []
+            assert logger.messages
+        finally:
+            work.chmod(0o700)
