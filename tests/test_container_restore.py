@@ -433,3 +433,103 @@ def test_restore_does_not_overwrite_symlink_hardlink_destination(tmp_path):
     assert (destination / "alias.txt").is_symlink()
     assert outside.read_text() == "external-content"
     assert not (destination / "main.txt").exists()
+
+
+def test_restore_tar_add_internal_symlink_chain(tmp_path):
+    """tar.add() produces valid links to earlier archive-created symlinks."""
+    source = tmp_path / "source" / "data"
+    source.mkdir(parents=True)
+    (source / "a.txt").write_text("original", encoding="utf-8")
+    (source / "b-link").symlink_to("a.txt")
+    (source / "c-link").symlink_to("b-link")
+
+    archive = tmp_path / "chain.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(source, arcname="data")
+
+    destination = tmp_path / "restore" / "data"
+    host = SimpleNamespace(logger=_Logger())
+    assert container_restore.restore_from_tar(host, archive, str(destination))
+    assert (destination / "b-link").is_symlink()
+    assert (destination / "c-link").is_symlink()
+    assert (destination / "c-link").read_text(encoding="utf-8") == "original"
+
+
+def test_restore_chain_through_preexisting_safe_symlink(tmp_path):
+    """A previously existing in-root target link is allowed for symlinks."""
+    destination = tmp_path / "volume"
+    destination.mkdir()
+    (destination / "base-link").symlink_to("data.txt")
+    archive = tmp_path / "chain.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./data.txt", "file", "safe"),
+        ("./new-link", "symlink", "base-link"),
+    ])
+
+    assert container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert (destination / "new-link").is_symlink()
+    assert (destination / "new-link").read_text(encoding="utf-8") == "safe"
+
+
+def test_restore_rejects_symlink_chain_to_existing_outside_target(tmp_path):
+    """Following an existing symlink out of the restore root remains blocked."""
+    destination = tmp_path / "volume"
+    destination.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("original", encoding="utf-8")
+    (destination / "escape-link").symlink_to(outside)
+    archive = tmp_path / "escape.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./safe.txt", "file", "should not be written"),
+        ("./new-link", "symlink", "escape-link"),
+    ])
+
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert not (destination / "safe.txt").exists()
+    assert outside.read_text(encoding="utf-8") == "original"
+    assert not (destination / "new-link").exists()
+
+
+def test_restore_rejects_target_traversal_hidden_by_symlink_parent(tmp_path):
+    """Lexical normalization alone must not hide a path via an outside symlink."""
+    destination = tmp_path / "volume"
+    destination.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (destination / "alias").symlink_to(outside_dir, target_is_directory=True)
+    archive = tmp_path / "escape.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./safe.txt", "file", "should not be written"),
+        ("./nested-link", "symlink", "alias/../outside.txt"),
+    ])
+
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert not (destination / "safe.txt").exists()
+    assert not (destination / "nested-link").exists()
+
+
+def test_restore_rejects_write_through_existing_internal_symlink(tmp_path):
+    """A valid symlink target does not make writes through symlinks safe."""
+    destination = tmp_path / "volume"
+    destination.mkdir()
+    (destination / "data").mkdir()
+    (destination / "alias").symlink_to("data", target_is_directory=True)
+    archive = tmp_path / "write.tar.gz"
+    _tar_fixture(archive, [
+        (".", "directory", ""),
+        ("./alias/new.txt", "file", "must not write through alias"),
+    ])
+
+    assert not container_restore.restore_from_tar(
+        SimpleNamespace(logger=_Logger()), archive, str(destination)
+    )
+    assert not (destination / "data" / "new.txt").exists()
