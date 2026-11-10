@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Structured JSONL logging for DockerPilot Extras with bounded rotation, restrictive permissions, request IDs and an importable Grafana Loki dashboard
+- Optional Grafana Alloy file-source example and documentation for connecting Extras to an existing Grafana/Loki/Alloy stack
+- Regression coverage for log redaction, HTTP polling noise, request correlation and remote-failure aggregation
+
+### Changed
+- Console output now defaults to warnings while full application diagnostics are retained in the local JSONL log
+- Repeated SSH probe and container-list failures are aggregated, with a single recovery event when connectivity returns
+- Flask debug mode and the development reloader are opt-in through DOCKERPILOT_EXTRAS_DEBUG
+
 ### Planned
 - Kubernetes integration
 - Docker Compose support
