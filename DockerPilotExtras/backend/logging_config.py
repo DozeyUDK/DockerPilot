@@ -106,6 +106,8 @@ class SafeConsoleFormatter(logging.Formatter):
             except Exception:
                 safe_record.exc_text = "<exception formatting failed>"
             safe_record.exc_info = None
+        elif safe_record.exc_text:
+            safe_record.exc_text = _safe_text(safe_record.exc_text)
         if safe_record.stack_info:
             safe_record.stack_info = _safe_text(safe_record.stack_info)
         return super().format(safe_record)
