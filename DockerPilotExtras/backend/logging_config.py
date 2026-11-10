@@ -366,12 +366,23 @@ def configure_logging(
     log_path = None
     try:
         resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=True)
+        directory_existed = resolved_dir.exists()
         resolved_dir.mkdir(parents=True, exist_ok=True, mode=resolved_directory_mode)
         # Re-check after creation; a path component may have appeared between
         # the initial validation and mkdir. Safe ancestors cannot be swapped by
         # an untrusted local user between this check and file creation.
         resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=False)
-        os.chmod(resolved_dir, resolved_directory_mode)
+        if directory_existed:
+            current_mode = stat.S_IMODE(os.stat(resolved_dir, follow_symlinks=False).st_mode)
+            if current_mode & ~resolved_directory_mode:
+                raise OSError(
+                    "Existing log directory permissions are broader than configured; "
+                    "correct the directory mode explicitly before starting Extras"
+                )
+        else:
+            # Only chmod a directory this process has just created. Never
+            # change permissions on an arbitrary pre-existing system directory.
+            os.chmod(resolved_dir, resolved_directory_mode)
         log_path = resolved_dir / "extras.jsonl"
         file_handler = _PermissionedRotatingFileHandler(
             str(log_path),
