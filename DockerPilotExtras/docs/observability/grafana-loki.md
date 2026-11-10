@@ -40,6 +40,8 @@ Set these variables in the environment of the process that starts Extras:
 | DOCKERPILOT_EXTRAS_LOG_BACKUP_COUNT | Number of rotated files to retain |
 | DOCKERPILOT_EXTRAS_LOG_DIR_MODE | Directory permissions in octal, for example 0700 |
 | DOCKERPILOT_EXTRAS_LOG_FILE_MODE | File permissions in octal, for example 0600 |
+
+Safe supported modes are directory `0700`, `0750`, or `2750`, and file `0600` or `0640`. Other modes are rejected so a typo cannot make logs world-readable or writable. Existing directories are checked but never chmodded by Extras.
 | DOCKERPILOT_EXTRAS_SLOW_REQUEST_MS | Slow-request warning threshold |
 | DOCKERPILOT_EXTRAS_DEBUG | Set to true only to enable Flask debug mode and reloader |
 
