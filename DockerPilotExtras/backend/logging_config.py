@@ -167,6 +167,11 @@ def install_request_logging(app, *, logger=None, slow_request_ms: int | None = N
         status = int(response.status_code)
         level = None
 
+        # Some polling resources already emit an aggregated domain event. Avoid
+        # duplicating that event as one HTTP error per frontend poll.
+        if request.environ.get("dockerpilot_extras.suppress_http_log"):
+            return response
+
         if status >= 500:
             level = logging.ERROR
         elif status >= 400:
