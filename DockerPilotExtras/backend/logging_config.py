@@ -167,6 +167,21 @@ class _PermissionedRotatingFileHandler(RotatingFileHandler):
         super().__init__(filename, **kwargs)
 
     def _open(self):
+        # O_NOFOLLOW prevents a pre-created extras.jsonl symlink from redirecting
+        # log writes or chmod to an unrelated file on POSIX systems.
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | nofollow
+            descriptor = os.open(self.baseFilename, flags, self.file_mode)
+            try:
+                os.fchmod(descriptor, self.file_mode)
+                return os.fdopen(descriptor, self.mode, encoding=self.encoding)
+            except Exception:
+                os.close(descriptor)
+                raise
+
+        if Path(self.baseFilename).is_symlink():
+            raise OSError("Refusing to open a symlink as the DockerPilot Extras log file")
         stream = super()._open()
         try:
             os.chmod(self.baseFilename, self.file_mode)
@@ -310,6 +325,8 @@ def configure_logging(
     file_handler = None
     log_path = None
     try:
+        if resolved_dir.is_symlink():
+            raise OSError("Refusing to use a symlink as the DockerPilot Extras log directory")
         resolved_dir.mkdir(parents=True, exist_ok=True, mode=resolved_directory_mode)
         os.chmod(resolved_dir, resolved_directory_mode)
         log_path = resolved_dir / "extras.jsonl"
