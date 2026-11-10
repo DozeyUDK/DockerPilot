@@ -12,13 +12,31 @@ loki.source.file "dockerpilot_extras" {
     },
   ]
 
-  forward_to = [loki.write.dockerpilot_extras.receiver]
+  forward_to = [loki.process.dockerpilot_extras.receiver]
   tail_from_end = true
 
   file_match {
     enabled = true
     sync_period = "10s"
   }
+}
+
+loki.process "dockerpilot_extras" {
+  // Preserve the event time from the JSONL record when Alloy replays backlog.
+  // If a malformed/legacy record has no valid timestamp, keep scrape time.
+  stage.json {
+    expressions = {
+      timestamp = "timestamp",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  forward_to = [loki.write.dockerpilot_extras.receiver]
 }
 
 loki.write "dockerpilot_extras" {
