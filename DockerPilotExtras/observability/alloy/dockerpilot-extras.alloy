@@ -13,7 +13,8 @@ loki.source.file "dockerpilot_extras" {
   ]
 
   forward_to = [loki.process.dockerpilot_extras.receiver]
-  tail_from_end = true
+  // Keep the default start-at-beginning behavior for files without saved
+  // positions so rotated backlog is not silently skipped after Alloy downtime.
 
   file_match {
     enabled = true
