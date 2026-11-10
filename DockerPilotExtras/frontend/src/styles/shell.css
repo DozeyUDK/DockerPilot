@@ -468,6 +468,23 @@
     max-width: min(11rem, 29vw);
   }
 
+  /* On mobile, the popup belongs to the content viewport, not to the
+     narrow trigger sitting before Logout and the theme control. A fixed
+     inset keeps it clear of the 56px sidebar regardless of button widths. */
+  .server-selector-menu {
+    position: fixed;
+    top: calc(4rem + var(--space-1));
+    left: calc(3.5rem + var(--space-2));
+    right: var(--space-2);
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100vh - 4.5rem);
+    max-height: calc(100dvh - 4.5rem);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .main-content {
     padding: var(--space-3);
   }
