@@ -1,3 +1,5 @@
+> **Historical implementation note:** This record documents the earlier #11D.2B dry-run stage and predates broker-owned approval v2. Any v1 actor/session/nonce observations below are historical, not the current approval contract. For current behavior, see [Secure Deploy Approval Model](SECURE_DEPLOY_APPROVAL_MODEL.md) and [Approval Provenance](APPROVAL_PROVENANCE_V1.md).
+
 # #11D.2B — dry_run canary (host)
 
 **Verdict:** `PASS_ROOT_BROKER_DRY_RUN_CANARY`

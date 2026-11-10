@@ -97,3 +97,21 @@ bash demo/stop.sh
 - the DockerPilot CLI sees the seeded demo containers.
 
 This catches changes in the real application that would break the Codespaces demo.
+
+## Secure Deploy verification demo
+
+After demo/bootstrap.sh has completed, run:
+
+~~~bash
+bash demo/secure-deploy-demo.sh
+~~~
+
+The script runs three focused regression scenarios from the real repository test suite:
+
+1. **Broker dry-run:** creates a plan, asks the in-process broker for a challenge, approves it in temporary broker-owned state, and runs independent verification. It then submits a forged DozeyGuard result and verifies that the broker rejects it; it also checks that revocation blocks a later dry-run.
+2. **Approver provenance:** verifies that the approver service uses the peer-credential result rather than a UID supplied in request JSON. The test injects the peer-credential result; it is not a live test of an installed root-owned socket.
+3. **Plan expiry binding:** verifies that changing expires_at without recomputing the plan hash is rejected.
+
+The harness uses temporary directories, a fake DozeyGuard executable, and a local test socket. It does not access the host Docker daemon, install systemd units, change firewall rules, read secrets, or deploy a container. It demonstrates the validation and authorization code paths, not a production broker installation.
+
+The script installs the optional test dependency set into the Codespaces .venv on first use. Outside Codespaces, create a virtual environment and install the test extra before running it.

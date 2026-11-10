@@ -1,4 +1,4 @@
-# Approval provenance v1
+# Approval provenance: protocol v1, broker record v2
 
 ## Current status
 
