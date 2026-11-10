@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import stat
 import time
 import uuid
 from datetime import datetime, timezone
@@ -85,6 +86,38 @@ def _parse_octal(value: object, default: int) -> int:
         return int(str(value), 8)
     except (TypeError, ValueError):
         return default
+
+
+def _validate_log_directory_hierarchy(path: Path, *, allow_missing: bool) -> Path:
+    """Reject symlinks and directories writable by untrusted users in the log path."""
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    current = Path(absolute.anchor)
+    components = absolute.parts[1:]
+    effective_uid = os.geteuid() if os.name == "posix" else None
+
+    for component in components:
+        current = current / component
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            if allow_missing:
+                continue
+            raise OSError(f"Log directory component does not exist: {current}")
+
+        if stat.S_ISLNK(info.st_mode):
+            raise OSError(f"Refusing symlink in DockerPilot Extras log path: {current}")
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError(f"Log path component is not a directory: {current}")
+
+        if effective_uid is not None:
+            if info.st_uid not in {0, effective_uid}:
+                raise OSError(f"Untrusted owner on DockerPilot Extras log path: {current}")
+            writable_by_others = bool(info.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+            trusted_sticky_directory = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+            if writable_by_others and not trusted_sticky_directory:
+                raise OSError(f"Unsafe group/world-writable log path component: {current}")
+
+    return absolute
 
 
 class JsonLineFormatter(logging.Formatter):
@@ -332,9 +365,12 @@ def configure_logging(
     file_handler = None
     log_path = None
     try:
-        if resolved_dir.is_symlink():
-            raise OSError("Refusing to use a symlink as the DockerPilot Extras log directory")
+        resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=True)
         resolved_dir.mkdir(parents=True, exist_ok=True, mode=resolved_directory_mode)
+        # Re-check after creation; a path component may have appeared between
+        # the initial validation and mkdir. Safe ancestors cannot be swapped by
+        # an untrusted local user between this check and file creation.
+        resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=False)
         os.chmod(resolved_dir, resolved_directory_mode)
         log_path = resolved_dir / "extras.jsonl"
         file_handler = _PermissionedRotatingFileHandler(
