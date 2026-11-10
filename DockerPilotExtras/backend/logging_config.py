@@ -91,6 +91,8 @@ def _parse_octal(value: object, default: int) -> int:
 def _validate_log_directory_hierarchy(path: Path, *, allow_missing: bool) -> Path:
     """Reject symlinks and directories writable by untrusted users in the log path."""
     absolute = Path(os.path.abspath(os.fspath(path)))
+    if absolute == Path(absolute.anchor):
+        raise OSError("The filesystem root cannot be used as the DockerPilot Extras log directory")
     current = Path(absolute.anchor)
     components = absolute.parts[1:]
     effective_uid = os.geteuid() if os.name == "posix" else None
@@ -212,8 +214,14 @@ class _PermissionedRotatingFileHandler(RotatingFileHandler):
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         if nofollow:
             flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | nofollow
+            flags |= getattr(os, "O_NONBLOCK", 0)
             descriptor = os.open(self.baseFilename, flags, self.file_mode)
             try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise OSError("Refusing a non-regular or hard-linked DockerPilot Extras log file")
+                if os.name == "posix" and info.st_uid != os.geteuid():
+                    raise OSError("DockerPilot Extras log file is not owned by the service user")
                 os.fchmod(descriptor, self.file_mode)
                 return os.fdopen(descriptor, self.mode, encoding=self.encoding)
             except Exception:
@@ -365,6 +373,16 @@ def configure_logging(
     file_handler = None
     log_path = None
     try:
+        if (
+            resolved_directory_mode & 0o700 != 0o700
+            or resolved_directory_mode & ~0o2750
+            or resolved_file_mode & 0o600 != 0o600
+            or resolved_file_mode & ~0o640
+        ):
+            raise OSError(
+                "Unsafe log permissions requested; use directory mode 0700/0750/2750 "
+                "and file mode 0600/0640"
+            )
         resolved_dir = _validate_log_directory_hierarchy(resolved_dir, allow_missing=True)
         directory_existed = resolved_dir.exists()
         resolved_dir.mkdir(parents=True, exist_ok=True, mode=resolved_directory_mode)
