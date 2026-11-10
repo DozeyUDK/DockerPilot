@@ -68,6 +68,10 @@ See the [current broker threat model](docs/security/SECURE_DEPLOY_BROKER_THREAT_
 
 DockerPilot can also generate CI pipeline configuration for GitHub Actions, GitLab CI, and Jenkins. It writes pipeline files; the external CI runner executes them.
 
+### Saved Pipelines
+
+DockerPilotExtras includes a **Saved Pipelines** library for listing, opening, and downloading allowlisted pipeline artifacts stored on the Extras server. It does not execute a pipeline or push anything to a Git remote. Generated files must be reviewed and committed or published separately; an external CI runner is responsible for execution. See the [DockerPilotExtras guide](DockerPilotExtras/README.md#pipeline-generator) for details.
+
 The CLI and ordinary MCP operations use the Docker permissions of their process. Membership in the Docker group or unrestricted access to docker.sock is effectively root-equivalent. Prefer rootless Docker where practical and grant daemon access only to trusted operators.
 
 MCP read-only mode is the default, but it can be changed through configuration. The MCP tool's **confirm: true** argument is caller acknowledgement, not independent human approval. MCP and Secure Deploy are separate execution paths; see the [MCP safety model](docs/mcp.md).
@@ -167,7 +171,8 @@ Avoid **--break-system-packages** on PEP 668 distributions. The installer's expl
 ~~~bash
 dockerpilot --help
 dockerpilot container list --all
-dockerpilot monitor dashboard myapp --duration 300
+dockerpilot monitor dashboard --duration 300
+dockerpilot monitor dashboard webapp database cache --duration 600
 dockerpilot tui
 dockerpilot deploy init --output deployment.yml
 ~~~
