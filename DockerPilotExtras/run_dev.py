@@ -22,7 +22,8 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 5000))
     host = (os.environ.get('HOST') or '127.0.0.1').strip() or '127.0.0.1'
-    debug = os.environ.get('FLASK_ENV') == 'development'
+    # The development reloader is opt-in; FLASK_ENV alone must not enable it.
+    debug = os.environ.get('DOCKERPILOT_EXTRAS_DEBUG', 'false').lower() == 'true'
     
     print(f"Starting DockerPilot Extras backend on http://{host}:{port}")
     print(f"Debug mode: {debug}")
@@ -30,5 +31,5 @@ if __name__ == '__main__':
     print(f"  cd frontend && npm run dev")
     print(f"\nPress Ctrl+C to stop")
     
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug, use_reloader=debug)
 
