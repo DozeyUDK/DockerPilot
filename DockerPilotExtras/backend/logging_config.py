@@ -169,7 +169,7 @@ class _PermissionedRotatingFileHandler(RotatingFileHandler):
     def handleError(self, record):
         """Never let logging's default handler print the original secret-bearing record."""
         try:
-            os.write(2, b"DockerPilot Extras file logging failed; event dropped\\n")
+            os.write(2, b"DockerPilot Extras file logging failed; event dropped\n")
         except OSError:
             pass
 
