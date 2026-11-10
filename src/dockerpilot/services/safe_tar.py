@@ -93,6 +93,66 @@ def _link_destination(
     return root / linked
 
 
+def _validate_symlink_graph(
+    root: Path,
+    symlinks: dict[Path, str],
+) -> None:
+    """Validate link targets against *all* archive-created links.
+
+    A symlink may precede another symlink on which its target depends. Checking
+    only the on-disk filesystem at creation time cannot detect a later escape.
+    Walk every path component in order, resolving both archived and existing
+    symlinks before interpreting ".." (which must never pop above the root).
+    """
+    from collections import deque
+
+    for source, linkname in symlinks.items():
+        pending = deque([*source.parent.parts, *linkname.split("/")])
+        resolved: list[str] = []
+        hops = 0
+
+        while pending:
+            component = pending.popleft()
+            if component in ("", "."):
+                continue
+            if component == "..":
+                if not resolved:
+                    raise UnsafeArchiveError(
+                        f"Symlink escapes restore root: {source} -> {linkname!r}"
+                    )
+                resolved.pop()
+                continue
+
+            relative = Path(*resolved, component)
+            target = symlinks.get(relative)
+            if target is None:
+                existing = root / relative
+                if existing.is_symlink():
+                    target = os.readlink(existing)
+
+            if target is None:
+                resolved.append(component)
+                continue
+
+            hops += 1
+            if hops > 40:
+                raise UnsafeArchiveError(f"Symlink chain is cyclic or too deep: {source}")
+
+            if target.startswith("/"):
+                # Existing absolute links are permitted only when they point
+                # inside the restore root; archived absolute links are
+                # already rejected by _link_destination().
+                absolute = Path(target).resolve(strict=False)
+                if not absolute.is_relative_to(root):
+                    raise UnsafeArchiveError(
+                        f"Symlink target outside restore root: {source} -> {target!r}"
+                    )
+                resolved.clear()
+                pending.extendleft(reversed(absolute.relative_to(root).parts))
+            else:
+                pending.extendleft(reversed(target.split("/")))
+
+
 def extract_safe(
     archive: tarfile.TarFile,
     root: Path,
@@ -125,6 +185,12 @@ def extract_safe(
         if not parts:
             if not member.isdir():
                 raise UnsafeArchiveError("Only the archive's root directory may be empty")
+            # Configuration imports may only write named regular files. A root
+            # directory member must never chmod/chown the caller's cwd.
+            if allowed_files is not None:
+                raise UnsafeArchiveError(
+                    "Root directory metadata is forbidden in configuration archives"
+                )
             if root_directory is not None:
                 raise UnsafeArchiveError("Duplicate archive root directory")
             # Both dot-rooted volume backups and stripped bind-mount backups
@@ -163,6 +229,14 @@ def extract_safe(
                 raise UnsafeArchiveError(f"Hardlink refers to itself: {member.name!r}")
             if target.relative_to(root) in kinds and not kinds[target.relative_to(root)].isfile():
                 raise UnsafeArchiveError(f"Hardlink does not refer to a regular file: {member.linkname!r}")
+
+    # Resolve the *complete* archive symlink graph before writing anything.
+    # In particular, x -> alias/../outside is unsafe when alias -> . appears
+    # later in the archive, even though x looks safe on an empty filesystem.
+    _validate_symlink_graph(
+        root,
+        {relative: member.linkname for member, relative in entries if member.issym()},
+    )
 
     directories = [(member, rel) for member, rel in entries if member.isdir()]
     files = [(member, rel) for member, rel in entries if member.isfile()]
