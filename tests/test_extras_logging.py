@@ -391,3 +391,47 @@ def test_file_handler_write_failure_never_prints_the_original_record(capfd, tmp_
     assert "file logging failed" in stderr
     assert secret not in stderr
     assert "simulated disk full" not in stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory ownership and modes required")
+def test_logging_rejects_symlink_ancestor_without_touching_target(tmp_path):
+    app = Flask("logging-symlink-ancestor-test")
+    target_parent = tmp_path / "real-parent"
+    target_parent.mkdir(mode=0o755)
+    os.chmod(target_parent, 0o755)
+    symlink_parent = tmp_path / "shared-link"
+    try:
+        symlink_parent.symlink_to(target_parent, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Symlink creation is unavailable: {exc}")
+
+    log_path = configure_logging(
+        app,
+        log_dir=symlink_parent / "logs",
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+    )
+
+    assert log_path is None
+    assert stat.S_IMODE(target_parent.stat().st_mode) == 0o755
+    assert not (target_parent / "logs").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions required")
+def test_logging_does_not_chmod_an_existing_directory(tmp_path):
+    app = Flask("logging-existing-directory-mode-test")
+    existing_dir = tmp_path / "existing-shared-directory"
+    existing_dir.mkdir(mode=0o755)
+    os.chmod(existing_dir, 0o755)
+
+    log_path = configure_logging(
+        app,
+        log_dir=existing_dir,
+        file_level=logging.INFO,
+        console_level=logging.CRITICAL,
+        directory_mode=0o700,
+    )
+
+    assert log_path is None
+    assert stat.S_IMODE(existing_dir.stat().st_mode) == 0o755
+    assert not (existing_dir / "extras.jsonl").exists()
