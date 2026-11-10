@@ -1066,7 +1066,7 @@ def _build_status_context(server_config):
     return _svc_build_status_context(server_config)
 
 
-def _run_remote_probe(server_config, command, attempts=2):
+def _run_remote_probe(server_config, command, attempts=2, operation="status_probe"):
     """Compatibility wrapper for remote probe (kept for test monkeypatching)."""
     return _svc_run_remote_probe(
         server_config,
@@ -1076,6 +1076,7 @@ def _run_remote_probe(server_config, command, attempts=2):
         attempts=attempts,
         retry_delay=0.25,
         failure_aggregator=_remote_failure_aggregator,
+        operation=operation,
     )
 
 
@@ -1086,7 +1087,9 @@ def _probe_remote_binary_version(server_config, binary_name: str, missing_marker
         binary_name=binary_name,
         missing_marker=missing_marker,
         no_version_marker=no_version_marker,
-        run_remote_probe_fn=lambda cmd: _run_remote_probe(server_config, cmd, attempts=1),
+        run_remote_probe_fn=lambda cmd: _run_remote_probe(
+            server_config, cmd, attempts=1, operation="dockerpilot_version"
+        ),
     )
 
 
@@ -1108,8 +1111,8 @@ EnvironmentStatus, StatusCheck, PreflightCheck = create_status_resources(
     build_environment_status=_svc_build_environment_status,
     get_selected_server_config=lambda: globals()["get_selected_server_config"](),
     build_status_context=lambda server_config: globals()["_build_status_context"](server_config),
-    run_remote_probe=lambda server_config, command, attempts=2: globals()["_run_remote_probe"](
-        server_config, command, attempts=attempts
+    run_remote_probe=lambda server_config, command, attempts=2, operation="status_probe": globals()["_run_remote_probe"](
+        server_config, command, attempts=attempts, operation=operation
     ),
     probe_remote_binary_version=lambda server_config, binary_name, missing_marker, no_version_marker: globals()[
         "_probe_remote_binary_version"
