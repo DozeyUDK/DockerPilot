@@ -54,6 +54,8 @@ export DOCKERPILOT_EXTRAS_LOG_BACKUP_COUNT=5
 tail -f ~/.dockerpilot_extras/logs/extras.jsonl
 ~~~
 
+The log directory is created automatically with the configured mode. Existing directories are never chmodded by Extras: if an existing directory is more permissive than the configured mode, file logging is disabled and you must correct its permissions explicitly. Symlink components and directories writable by untrusted users are rejected to prevent redirected log writes. Use a dedicated directory for Extras rather than pointing the setting at a shared system directory such as `/var/log` itself.
+
 The log directory is created automatically. If file logging cannot be initialized, Extras continues with console logging and emits a warning.
 
 ## Send logs to an existing Grafana + Loki + Alloy
