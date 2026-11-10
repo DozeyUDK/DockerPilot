@@ -452,3 +452,24 @@ def test_logging_rejects_world_readable_or_writable_modes(tmp_path):
 
     assert log_path is None
     assert not log_dir.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions required")
+def test_new_intermediate_log_directories_stay_private_with_permissive_umask(tmp_path):
+    app = Flask("logging-private-parent-test")
+    parent = tmp_path / "private-parent"
+    log_dir = parent / "logs"
+    previous_umask = os.umask(0)
+    try:
+        log_path = configure_logging(
+            app,
+            log_dir=log_dir,
+            file_level=logging.INFO,
+            console_level=logging.CRITICAL,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert log_path is not None
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
