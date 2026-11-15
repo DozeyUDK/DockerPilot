@@ -16,7 +16,6 @@ from dockerpilot.cli.tui import (
     should_launch_in_external_terminal,
     should_refresh_targets_after_command,
     TuiCommandHandoff,
-    requires_tty_or_live_ui,
     selector_height,
     should_tui_require_value,
 )
@@ -253,19 +252,19 @@ def test_selector_height_gives_multi_option_lists_visible_viewport():
     assert selector_height(8, single=True) == 6
 
 
-def test_requires_tty_or_live_ui_flags_unsupported_inline_commands():
+def test_terminal_execution_is_used_for_shell_and_live_monitoring():
     parser = build_cli_parser()
     commands = build_command_tree(parser, exclude_commands={"tui"})
 
     exec_node = _find_leaf(commands, ["container", "exec"])
     dashboard_node = _find_leaf(commands, ["monitor", "dashboard"])
+    live_node = _find_leaf(commands, ["monitor", "live"])
     logs_node = _find_leaf(commands, ["container", "logs"])
 
-    assert requires_tty_or_live_ui(exec_node, {"name": "web"}) is None
     assert should_launch_in_external_terminal(exec_node) is True
-    assert requires_tty_or_live_ui(dashboard_node, {"containers": ["web"]}) is not None
-    assert requires_tty_or_live_ui(logs_node, {"name": ""}) is not None
-    assert requires_tty_or_live_ui(logs_node, {"name": "web"}) is None
+    assert should_launch_in_external_terminal(dashboard_node) is True
+    assert should_launch_in_external_terminal(live_node) is True
+    assert should_launch_in_external_terminal(logs_node) is False
 
 
 def test_only_resource_mutations_request_automatic_target_refresh():
@@ -372,7 +371,7 @@ def test_run_tui_relaunches_after_terminal_handoff(monkeypatch):
     class FakeApp:
         run_calls = 0
 
-        def __init__(self, active_parser, pilot):
+        def __init__(self, active_parser, pilot, *, global_values=None):
             self.active_parser = active_parser
             self.pilot = pilot
 

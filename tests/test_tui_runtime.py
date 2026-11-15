@@ -1,6 +1,7 @@
 """Headless TUI regressions. Docker calls are replaced by in-memory fakes."""
 
 import asyncio
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -255,7 +256,7 @@ def test_overlapping_form_renders_finish_in_request_order(monkeypatch):
             assert set(app.selector_specs) == {'name'}
             assert len(app.query('#command-form .arg-row')) == len(final_command.arguments)
             assert all(widget.is_mounted for widget in app.command_widgets.values())
-            assert 'container rename' in str(app.query_one('#selected-command', Static).render())
+            assert 'Rename' in str(app.query_one('#selected-command', Static).render())
 
     asyncio.run(scenario())
 
@@ -605,5 +606,62 @@ def test_external_terminal_handoff_releases_busy_state(monkeypatch):
             command_start = exits[0].argv.index("container")
             assert exits[0].argv[command_start : command_start + 3] == ["container", "exec", "web"]
             assert not app._command_running
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path,argument", [
+    (("monitor", "dashboard"), "containers"),
+    (("monitor", "live"), "container"),
+])
+def test_live_monitoring_opens_from_tui_and_preserves_the_form(monkeypatch, path, argument):
+    events = []
+
+    @contextmanager
+    def suspend():
+        events.append("suspend")
+        yield
+        events.append("resume")
+
+    def interrupt_monitor(_backend, _parser, argv):
+        events.append(argv)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tui, "execute_cli_argv", interrupt_monitor)
+
+    async def scenario():
+        app = tui.DockerPilotTUI(
+            build_cli_parser(), FakePilot(), global_values={"log_level": "DEBUG"},
+        )
+        monkeypatch.setattr(app, "suspend", suspend)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            assert app.selected_command.path == ("container", "list")
+            assert not app.query("#global-form")
+
+            selected = command(app, *path)
+            await app._render_command_form(selected)
+            target = app.command_widgets[argument]
+            if isinstance(target, Select):
+                target.value = "web"
+            else:
+                target.select("web")
+            app.command_widgets["duration"].value = "42"
+            await pilot.pause()
+            run = app.query_one("#run-command", Button)
+            assert str(run.label) == "Open terminal"
+            assert "Ctrl+C to return" in str(app.query_one("#selected-help", Static).render())
+            assert await pilot.click("#run-command")
+            await run_finished(app, pilot)
+
+            assert events == [
+                "suspend",
+                ["--log-level", "DEBUG", *path, "web", "--duration", "42"],
+                "resume",
+            ]
+            assert app.selected_command is selected
+            assert app.command_widgets["duration"].value == "42"
+            assert not run.disabled
+            assert "interrupted" in str(app.query_one("#status", Static).render())
 
     asyncio.run(scenario())

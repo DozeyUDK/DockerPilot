@@ -8,6 +8,7 @@ import asyncio
 import io
 import logging
 import shlex
+import signal
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
@@ -374,24 +375,6 @@ def selector_height(option_count: int, *, single: bool = False) -> int:
     return min(max(option_count + 1, 4), 10)
 
 
-def requires_tty_or_live_ui(command: CommandNode, values: Dict[str, Any]) -> Optional[str]:
-    """Return a reason when a command is not suitable for inline TUI execution."""
-    path = command.path
-
-    if path == ("monitor", "dashboard"):
-        return "The monitoring dashboard uses a live full-screen view that does not embed cleanly in the output panel."
-    if path == ("monitor", "live"):
-        return "Live monitoring clears the screen repeatedly and is not suitable for the inline output panel."
-    if path == ("container", "logs") and not str(values.get("name", "")).strip():
-        return "Select at least one container for logs in TUI mode."
-    if path == ("container", "run"):
-        missing = [field for field in ("image", "name") if not str(values.get(field, "")).strip()]
-        if missing:
-            return "Container run inside TUI requires both image and container name."
-
-    return None
-
-
 def should_tui_require_value(command: CommandNode, argument: ArgumentSpec) -> bool:
     """Apply TUI-specific validation for flows that would otherwise drop into prompt mode."""
     if command.path == ("container", "run") and argument.dest in {"image", "name"}:
@@ -401,9 +384,33 @@ def should_tui_require_value(command: CommandNode, argument: ArgumentSpec) -> bo
     return argument.required
 
 
+_COMMAND_LABELS = {
+    ("container",): "Containers & images",
+    ("container", "exec"): "Container shell",
+    ("container", "exec-simple"): "Run one command",
+    ("container", "run"): "Create container",
+    ("container", "list"): "List containers",
+    ("container", "logs"): "View logs",
+    ("monitor",): "Monitoring",
+    ("monitor", "dashboard"): "Live dashboard",
+    ("monitor", "live"): "Watch container",
+    ("monitor", "stats"): "Show stats once",
+}
+
+_TERMINAL_HELP = {
+    ("container", "exec"): "Exit the container shell to return here.",
+    ("monitor", "dashboard"): "Select containers, or leave blank to watch all running containers. Press Ctrl+C to return.",
+    ("monitor", "live"): "Watch CPU and memory for one container. Press Ctrl+C to return.",
+}
+
+
 def should_launch_in_external_terminal(command: CommandNode) -> bool:
-    """Return True when a command should temporarily hand off to the real terminal."""
-    return command.path == ("container", "exec")
+    """Return True for commands that take control of the terminal."""
+    return command.path in _TERMINAL_HELP
+
+
+def command_label(command: CommandNode) -> str:
+    return _COMMAND_LABELS.get(command.path, command.name.replace("-", " ").capitalize())
 
 
 def capture_cli_execution(
@@ -463,7 +470,7 @@ def capture_cli_execution(
 
 try:
     from rich.text import Text
-    from textual.app import App, ComposeResult
+    from textual.app import App, ComposeResult, SuspendNotSupported
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.css.query import NoMatches
@@ -491,7 +498,7 @@ if TEXTUAL_AVAILABLE:
 
         def compose(self) -> ComposeResult:
             for label, value in self.entries:
-                yield Checkbox(label, value=value in self._initial_selected)
+                yield Checkbox(Text(label), value=value in self._initial_selected)
 
         @property
         def selected(self) -> List[str]:
@@ -524,6 +531,8 @@ if TEXTUAL_AVAILABLE:
 
     class DockerPilotTUI(App):
         """Mouse-friendly command browser that emits argv for the real CLI."""
+
+        TITLE = "DockerPilot"
 
         CSS = """
         Screen {
@@ -564,8 +573,8 @@ if TEXTUAL_AVAILABLE:
         }
 
         #command-tree {
-            width: 36;
-            min-width: 30;
+            width: 35%;
+            min-width: 27;
             max-width: 42;
             border: round $primary;
             padding: 0 1;
@@ -573,7 +582,7 @@ if TEXTUAL_AVAILABLE:
 
         #details {
             width: 1fr;
-            padding: 1 2;
+            padding: 0 1;
         }
 
         #selected-command {
@@ -583,12 +592,6 @@ if TEXTUAL_AVAILABLE:
 
         #selected-help {
             color: $text-muted;
-            margin-bottom: 1;
-        }
-
-        .section-title {
-            text-style: bold;
-            margin: 1 0 0 0;
         }
 
         .arg-row {
@@ -609,6 +612,8 @@ if TEXTUAL_AVAILABLE:
 
         .resource-selector Checkbox {
             width: 1fr;
+            border: none;
+            height: 1;
         }
 
         .resource-single-selector {
@@ -619,7 +624,7 @@ if TEXTUAL_AVAILABLE:
             height: 6;
         }
 
-        #global-form, #command-form {
+        #command-form {
             height: auto;
         }
 
@@ -630,26 +635,31 @@ if TEXTUAL_AVAILABLE:
         }
 
         #preview {
-            height: 5;
-            border: round $accent;
+            height: 2;
+            color: $text-muted;
             padding: 0 1;
-            margin-top: 1;
         }
 
         #results {
-            height: 12;
+            height: 25%;
             border: round $primary;
-            margin-top: 1;
         }
 
         #button-row {
             height: auto;
-            margin-top: 1;
+        }
+
+        #button-row Button {
+            min-width: 0;
+            padding: 0 1;
+        }
+
+        #run-command {
+            width: 18;
         }
 
         #status {
             color: $success;
-            margin-top: 1;
         }
         """
 
@@ -658,14 +668,20 @@ if TEXTUAL_AVAILABLE:
             Binding("ctrl+r", "run_selected", "Run"),
         ]
 
-        def __init__(self, parser: argparse.ArgumentParser, pilot_instance: Any) -> None:
+        def __init__(
+            self,
+            parser: argparse.ArgumentParser,
+            pilot_instance: Any,
+            *,
+            global_values: Optional[Dict[str, Any]] = None,
+        ) -> None:
             super().__init__()
             self.global_parser = parser
             self.pilot_instance = pilot_instance
             self.global_arguments = collect_argument_specs(parser, exclude_dests={"version"})
+            self.global_values = global_values or {}
             self.command_tree = build_command_tree(parser, exclude_commands={"tui"})
             self.selected_command: Optional[CommandNode] = None
-            self.global_widgets: Dict[str, Any] = {}
             self.command_widgets: Dict[str, Any] = {}
             self.command_drafts: Dict[Tuple[str, ...], Dict[str, Any]] = {}
             self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
@@ -688,19 +704,14 @@ if TEXTUAL_AVAILABLE:
                     yield Static("Select a command", id="selected-command")
                     yield Static("Click a command on the left to open its arguments.", id="selected-help")
                     with VerticalScroll(id="form-scroll"):
-                        yield Vertical(id="global-form")
                         yield Vertical(id="command-form")
                     yield Static("Command preview will appear here.", id="preview")
                     yield RichLog(id="results", wrap=False, highlight=False, markup=False)
                     with Horizontal(id="button-row"):
-                        yield Button("Run In TUI", id="run-command", variant="success", disabled=True)
-                        yield Button("Clear Output", id="clear-output")
-                        yield Button("Refresh Targets", id="refresh-targets")
-                        yield Button("Close", id="close-tui")
-                    yield Static(
-                        "This UI builds and runs the same DockerPilot commands you already have.",
-                        id="status",
-                    )
+                        yield Button("Run", id="run-command", variant="success", disabled=True)
+                        yield Button("Clear output", id="clear-output")
+                        yield Button("Refresh", id="refresh-targets", tooltip="Reload Docker containers and images")
+                    yield Static("", id="status")
             yield Footer()
 
         async def on_mount(self) -> None:
@@ -722,11 +733,18 @@ if TEXTUAL_AVAILABLE:
 
             self._set_loading_message("Loading live Docker targets...")
             status_message = await self._refresh_available_targets_async()
-            await self._render_global_form()
-            self._refresh_preview()
+            for group in tree.root.children:
+                if group.data.path == ("container",):
+                    group.expand()
+                    for node in group.children:
+                        if node.data.path == ("container", "list"):
+                            await self._render_command_form(node.data)
+                            tree.move_cursor(node)
+                            break
+                    break
             self.query_one("#status", Static).update(status_message)
             self._show_main_ui()
-            self.query_one("#results", RichLog).write("Output panel ready. Run a command to see results here.")
+            tree.focus()
 
         def _set_loading_message(self, message: str) -> None:
             """Update the startup loader text."""
@@ -767,24 +785,12 @@ if TEXTUAL_AVAILABLE:
         def _add_tree_node(self, parent: Any, command: CommandNode) -> None:
             """Mount one command node, showing an expand marker only for real branches."""
             branch = parent.add(
-                command.name,
+                command_label(command),
                 data=command,
                 allow_expand=bool(command.children),
             )
             for child in command.children:
                 self._add_tree_node(branch, child)
-
-        async def _render_global_form(self) -> None:
-            container = self.query_one("#global-form", Vertical)
-            await container.remove_children()
-            self.global_widgets = {}
-
-            if not self.global_arguments:
-                return
-
-            await container.mount(Static("Global Options", classes="section-title"))
-            for argument in self.global_arguments:
-                await self._mount_argument_widget(container, argument, self.global_widgets)
 
         async def _render_command_form(
             self,
@@ -823,6 +829,7 @@ if TEXTUAL_AVAILABLE:
             title = self.query_one("#selected-command", Static)
             help_text = self.query_one("#selected-help", Static)
             run_button = self.query_one("#run-command", Button)
+            run_button.label = "Run"
 
             if command is None:
                 title.update("Select a command")
@@ -833,8 +840,12 @@ if TEXTUAL_AVAILABLE:
                 return
 
             self.selected_command = command
-            title.update(f"Selected: {' '.join(command.path)}")
-            help_text.update(command.help_text or "Configure the arguments below, then click Run Command.")
+            title.update(command_label(command))
+            description = command.help_text
+            if should_launch_in_external_terminal(command):
+                run_button.label = "Open terminal"
+                description = _TERMINAL_HELP[command.path]
+            help_text.update(description if command.arguments else "")
             run_button.disabled = self._controls_busy() or not command.is_leaf
 
             if not command.is_leaf:
@@ -842,7 +853,6 @@ if TEXTUAL_AVAILABLE:
                 self._refresh_preview()
                 return
 
-            await container.mount(Static("Command Arguments", classes="section-title"))
             if not command.arguments:
                 await container.mount(Static("This command has no command-specific arguments.", classes="arg-help"))
             else:
@@ -855,6 +865,8 @@ if TEXTUAL_AVAILABLE:
                         values,
                     )
 
+            if previous_command is not command:
+                self.query_one("#form-scroll", VerticalScroll).scroll_home(animate=False)
             self._refresh_preview()
 
         async def _mount_argument_widget(
@@ -888,7 +900,7 @@ if TEXTUAL_AVAILABLE:
                     if selector_spec.mode == "single":
                         selected_value = selected_values[0] if selected_values else Select.BLANK
                         widget = Select(
-                            entries,
+                            [(Text(label), value) for label, value in entries],
                             value=selected_value,
                             allow_blank=True,
                             classes="resource-single-selector",
@@ -902,7 +914,7 @@ if TEXTUAL_AVAILABLE:
                         # Keep multi-selectors in the parent form scroll instead of
                         # nesting another scrolling viewport. One row per checkbox
                         # makes the target list reliably visible and clickable.
-                        widget.styles.height = max(1, len(entries))
+                        widget.styles.height = max(1, len(entries)) + 2
                 else:
                     widget = TextArea(
                         self._textarea_value(value), language=None, classes="multi-input"
@@ -1055,7 +1067,7 @@ if TEXTUAL_AVAILABLE:
                     self.selected_command,
                     self._values_from_widgets(self.command_widgets),
                     global_arguments=self.global_arguments,
-                    global_values=self._values_from_widgets(self.global_widgets),
+                    global_values=self.global_values,
                 )
             except ValueError as exc:
                 preview.update(Text(f"Command preview error: {exc}"))
@@ -1068,14 +1080,9 @@ if TEXTUAL_AVAILABLE:
 
             try:
                 command_values = self._values_from_widgets(self.command_widgets)
-                global_values = self._values_from_widgets(self.global_widgets)
-                for spec in [*self.global_arguments, *self.selected_command.arguments]:
-                    value = (global_values if spec.dest in global_values else command_values).get(spec.dest)
-                    is_required = spec.required
-                    if self.selected_command and spec in self.selected_command.arguments:
-                        is_required = should_tui_require_value(self.selected_command, spec)
-
-                    if spec.is_bool or not is_required:
+                for spec in self.selected_command.arguments:
+                    value = command_values.get(spec.dest)
+                    if spec.is_bool or not should_tui_require_value(self.selected_command, spec):
                         continue
                     if spec.multiple and not split_multi_value(value):
                         return False, f"Missing required values for {spec.label}."
@@ -1097,7 +1104,7 @@ if TEXTUAL_AVAILABLE:
                     self.selected_command,
                     command_values,
                     global_arguments=self.global_arguments,
-                    global_values=global_values,
+                    global_values=self.global_values,
                 )
             except ValueError as exc:
                 return False, f"Invalid shell-style value: {exc}"
@@ -1115,8 +1122,6 @@ if TEXTUAL_AVAILABLE:
                 self.query_one("#status", Static).update("Output panel cleared.")
             elif event.button.id == "refresh-targets":
                 await self._refresh_targets()
-            elif event.button.id == "close-tui":
-                self.action_quit()
 
         def _set_run_state(self, running: bool) -> None:
             """Enable or disable controls around command execution."""
@@ -1203,27 +1208,17 @@ if TEXTUAL_AVAILABLE:
                     return
 
                 executed_command = self.selected_command
+                command_values = self._values_from_widgets(self.command_widgets)
                 argv = build_command_argv(
                     executed_command,
-                    self._values_from_widgets(self.command_widgets),
+                    command_values,
                     global_arguments=self.global_arguments,
-                    global_values=self._values_from_widgets(self.global_widgets),
+                    global_values=self.global_values,
                 )
-                command_values = self._values_from_widgets(self.command_widgets)
                 command_text = " ".join(shlex.quote(part) for part in argv)
 
                 if should_launch_in_external_terminal(executed_command):
-                    self.exit(TuiCommandHandoff(argv=argv))
-                    return
-
-                blocking_reason = requires_tty_or_live_ui(executed_command, command_values)
-                if blocking_reason:
-                    self._append_result_block(
-                        command_text,
-                        None,
-                        f"Inline execution skipped.\n{blocking_reason}",
-                    )
-                    status.update(blocking_reason)
+                    self._run_in_terminal(argv, status)
                     return
 
                 status.update(f"Running inside TUI: dockerpilot {command_text}")
@@ -1261,6 +1256,28 @@ if TEXTUAL_AVAILABLE:
             finally:
                 self._set_run_state(False)
 
+        def _run_in_terminal(self, argv: List[str], status: Static) -> None:
+            """Give the command the terminal and resume the current screen afterwards."""
+            try:
+                with self.suspend():
+                    # Ctrl+C belongs to the CLI command while the asyncio app is suspended.
+                    previous_sigint = signal.signal(signal.SIGINT, signal.default_int_handler)
+                    # Catch interruptions inside the context so Textual can resume its driver.
+                    try:
+                        code = execute_cli_argv(self.pilot_instance, self.global_parser, argv)
+                    except KeyboardInterrupt:
+                        message = "Terminal command interrupted."
+                    except Exception as exc:
+                        message = f"Terminal command failed: {exc}"
+                    else:
+                        message = f"Terminal command finished with exit status {code}."
+                    finally:
+                        signal.signal(signal.SIGINT, previous_sigint)
+                status.update(Text(message))
+                self.refresh(repaint=True, layout=True)
+            except SuspendNotSupported:
+                self.exit(TuiCommandHandoff(argv=argv))
+
 
 def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str]) -> int:
     """Execute argv through the same CLI dispatcher used by the regular command."""
@@ -1275,7 +1292,12 @@ def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str]) ->
         return code if isinstance(code, int) else 1
 
 
-def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
+def run_tui(
+    pilot,
+    parser: Optional[argparse.ArgumentParser] = None,
+    *,
+    global_values: Optional[Dict[str, Any]] = None,
+) -> None:
     """Launch the optional mouse-friendly terminal UI."""
     if not TEXTUAL_AVAILABLE:
         pilot.console.print(f"[red]{icon('error')} Textual is not installed.[/red]")
@@ -1293,9 +1315,12 @@ def run_tui(pilot, parser: Optional[argparse.ArgumentParser] = None) -> None:
 
     active_parser = parser or argparse.ArgumentParser()
     while True:
-        result = DockerPilotTUI(active_parser, pilot).run()
+        result = DockerPilotTUI(active_parser, pilot, global_values=global_values).run()
         if not isinstance(result, TuiCommandHandoff):
             break
 
-        execute_cli_argv(pilot, active_parser, result.argv)
+        try:
+            execute_cli_argv(pilot, active_parser, result.argv)
+        except KeyboardInterrupt:
+            pilot.console.print("Terminal command interrupted.")
         pilot.console.print()

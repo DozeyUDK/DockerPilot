@@ -46,7 +46,7 @@ def dispatch_cli_args(pilot, args, parser) -> None:
 
     try:
         if args.command == 'tui':
-            run_tui(pilot, parser)
+            run_tui(pilot, parser, global_values={'config': args.config, 'log_level': args.log_level})
         elif args.command == 'container' or has_container_action:
             handle_container_cli(pilot, args)
         elif args.command == 'monitor':
