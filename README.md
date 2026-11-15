@@ -270,7 +270,7 @@ dockerpilot tui
 dockerpilot deploy init --output deployment.yml
 ~~~
 
-The TUI opens on **Containers**. Click a row or press Enter to select a container, then use **Logs**, **Stats**, **Shell**, or the available lifecycle actions. The selection stays active as you switch actions. **Container commands** has the full forms for tasks such as operating on multiple containers. **Open terminal** starts the live dashboard or single-container monitoring from the monitoring forms. Exit a shell or press Ctrl+C in a live monitor to return. Set global options at launch with `dockerpilot --config PATH --log-level DEBUG tui`.
+The TUI opens on **Containers**. Press Ctrl+F to filter by name, image, state, or ID and Esc to clear the filter. Click a row or press Enter to select a container, then use **Logs**, **Stats**, **Shell**, or the available lifecycle actions. The selection stays active as you switch actions. **Container commands** has the full forms for tasks such as operating on multiple containers. **Open terminal** starts the live dashboard or single-container monitoring from the monitoring forms. Exit a shell or press Ctrl+C in a live monitor to return. Set global options at launch with `dockerpilot --config PATH --log-level DEBUG tui`.
 
 Classic CLI deployment commands use the current process's Docker permissions and the legacy deployment configuration format. They do not automatically use the Secure Deploy broker. See [Quick Deploy](docs/quick-deploy.md) for the classic deployment workflow.
 

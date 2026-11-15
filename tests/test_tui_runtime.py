@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip('textual')
-from textual.widgets import Button, Checkbox, DataTable, Label, Select, Static, TextArea, Tree
+from textual.widgets import Button, Checkbox, DataTable, Input, Label, Select, Static, TextArea, Tree
 
 from dockerpilot.cli import tui
 from dockerpilot.cli.parser import build_cli_parser
@@ -758,5 +758,60 @@ def test_container_view_reuses_selected_id_for_logs_stats_and_lifecycle(monkeypa
             assert app.selected_container_id is None
             assert app.query_one("#container-action-logs", Button).disabled
             assert not results.display
+
+    asyncio.run(scenario())
+
+
+def test_container_filter_matches_cached_rows_and_clears_hidden_selection():
+    backend = FakePilot()
+    backend.containers = [
+        {"id": "abc123", "name": "Web", "state": "running", "image": "nginx:demo"},
+        {"id": "def456", "name": "api", "state": "exited", "image": "python:demo"},
+    ]
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            table = app.query_one("#container-table", DataTable)
+            field = app.query_one("#container-filter", Input)
+            logs = app.query_one("#container-action-logs", Button)
+
+            await pilot.press("ctrl+f")
+            assert app.focused is field
+            await pilot.press("W", "E", "B")
+            await pilot.pause()
+            assert table.row_count == 1
+            assert "(1/2)" in str(app.query_one("#containers-title", Static).render())
+            await pilot.press("enter")
+            assert app.focused is table
+            assert app.selected_container_id == "abc123"
+            assert not logs.disabled
+
+            await pilot.press("ctrl+f")
+            for query in ("NGINX", "running", "abc1"):
+                field.value = query
+                await pilot.pause()
+                assert table.row_count == 1
+                assert app.selected_container_id == "abc123"
+            field.value = "exited"
+            await pilot.pause()
+            assert app.selected_container_id is None
+            assert logs.disabled
+            await pilot.press("enter")
+            assert app.selected_container_id == "def456"
+
+            await pilot.press("ctrl+f")
+            field.value = "no-match"
+            await pilot.pause()
+            assert table.row_count == 0
+            assert "No containers match" in str(app.query_one("#container-summary", Static).render())
+            await pilot.press("enter")
+            assert app.focused is field
+            await pilot.press("escape")
+            assert not field.value
+            assert app.focused is table
+            assert table.row_count == 2
+            assert backend.container_list_calls == 1
 
     asyncio.run(scenario())

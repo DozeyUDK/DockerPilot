@@ -658,6 +658,10 @@ if TEXTUAL_AVAILABLE:
             width: 1fr;
         }
 
+        #container-filter {
+            width: 1fr;
+        }
+
         #containers-title, #selected-command {
             text-style: bold;
             color: $accent;
@@ -760,6 +764,8 @@ if TEXTUAL_AVAILABLE:
         BINDINGS = [
             Binding("q", "quit", "Quit"),
             Binding("ctrl+r", "run_selected", "Run"),
+            Binding("ctrl+f", "find_container", "Find container"),
+            Binding("escape", "close_container_filter", "Clear filter", show=False),
         ]
 
         def __init__(
@@ -801,6 +807,7 @@ if TEXTUAL_AVAILABLE:
                         with Horizontal(id="containers-header"):
                             yield Static("Containers", id="containers-title")
                             yield Button("Refresh", id="refresh-containers", tooltip="Reload Docker containers and images")
+                        yield Input(placeholder="Filter by name, image, state or ID", id="container-filter")
                         yield DataTable(id="container-table", cursor_type="row", zebra_stripes=True)
                         yield Static("Click a row or press Enter.", id="container-summary")
                         for actions in (("logs", "stats", "shell"), ("start", "stop", "restart", "resume")):
@@ -892,25 +899,36 @@ if TEXTUAL_AVAILABLE:
             return message
 
         def _update_container_table(self, rows: List[Dict[str, Any]]) -> None:
-            table = self.query_one("#container-table", DataTable)
             self.container_rows = {
                 row.get("id") or row["name"]: row
                 for row in rows
                 if row.get("id") or row.get("name")
             }
+            self._render_container_table()
+
+        def _render_container_table(self) -> None:
+            table = self.query_one("#container-table", DataTable)
+            query = self.query_one("#container-filter", Input).value.strip().casefold()
             table.clear()
-            for index, (container_id, row) in enumerate(self.container_rows.items()):
-                table.add_row(
-                    Text(row.get("name") or container_id),
-                    Text(row.get("state") or row.get("status") or "unknown"),
-                    Text(row.get("image") or "—"),
-                    key=container_id,
-                )
+            selected_row = None
+            for container_id, row in self.container_rows.items():
+                name = row.get("name") or container_id
+                state = row.get("state") or row.get("status") or "unknown"
+                image = row.get("image") or "—"
+                if not any(query in field.casefold() for field in (name, state, image, container_id)):
+                    continue
                 if container_id == self.selected_container_id:
-                    table.move_cursor(row=index, animate=False)
-            if self.selected_container_id not in self.container_rows:
+                    selected_row = table.row_count
+                table.add_row(Text(name), Text(state), Text(image), key=container_id)
+
+            title = "Containers"
+            if query:
+                title = f"Containers ({table.row_count}/{len(self.container_rows)})"
+            self.query_one("#containers-title", Static).update(title)
+            if selected_row is None:
                 self._select_container(None)
             else:
+                table.move_cursor(row=selected_row, animate=False)
                 self._update_container_summary()
 
         def _select_container(self, container_id: Optional[str]) -> None:
@@ -923,7 +941,13 @@ if TEXTUAL_AVAILABLE:
 
         def _update_container_summary(self) -> None:
             row = self.container_rows.get(self.selected_container_id)
-            summary = "Click a row or press Enter." if self.container_rows else "No containers loaded."
+            table = self.query_one("#container-table", DataTable)
+            if table.row_count:
+                summary = "Click a row or press Enter."
+            elif self.container_rows:
+                summary = "No containers match the filter."
+            else:
+                summary = "No containers loaded."
             if row:
                 name = row.get("name") or self.selected_container_id
                 state = row.get("state") or row.get("status") or "unknown"
@@ -1142,10 +1166,31 @@ if TEXTUAL_AVAILABLE:
         def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
             if action == "run_selected":
                 return self.selected_command is not None
+            if action == "find_container":
+                return self.selected_command is None and not self._controls_busy()
+            if action == "close_container_filter":
+                return isinstance(self.focused, Input) and self.focused.id == "container-filter"
             return super().check_action(action, parameters)
 
-        def on_input_changed(self, _event: Input.Changed) -> None:
-            self._refresh_preview()
+        def action_find_container(self) -> None:
+            self.query_one("#container-filter", Input).focus()
+
+        def action_close_container_filter(self) -> None:
+            self.query_one("#container-filter", Input).value = ""
+            self.query_one("#container-table", DataTable).focus()
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id == "container-filter":
+                self._render_container_table()
+            else:
+                self._refresh_preview()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            if event.input.id == "container-filter" and not self._controls_busy():
+                table = self.query_one("#container-table", DataTable)
+                if table.row_count:
+                    table.focus()
+                    table.action_select_cursor()
 
         def on_checkbox_changed(self, _event: Checkbox.Changed) -> None:
             self._refresh_preview()
@@ -1321,7 +1366,9 @@ if TEXTUAL_AVAILABLE:
             run_button.disabled = busy or not (self.selected_command and self.selected_command.is_leaf)
             refresh_button.disabled = busy
             self.query_one("#refresh-containers", Button).disabled = busy
+            self.query_one("#container-filter", Input).disabled = busy
             self.query_one("#container-table", DataTable).disabled = busy
+            self.refresh_bindings()
             for action in _CONTAINER_ACTIONS:
                 button = self.query_one(f"#container-action-{action}", Button)
                 button.disabled = busy or not self._container_action_available(action)
