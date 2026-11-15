@@ -723,14 +723,16 @@ def test_container_view_reuses_selected_id_for_logs_stats_and_lifecycle(monkeypa
             ]
             assert app.selected_container_id == "a1b2c3d4e5f6"
 
+            # Textual suppresses repeated presses while this button animates.
+            stop = app.query_one("#container-action-stop", Button)
+            stop.active_effect_duration = 0
             assert await pilot.click("#container-action-stop")
             assert isinstance(app.screen, tui.ConfirmContainerAction)
             await pilot.press("escape")
             assert not isinstance(app.screen, tui.ConfirmContainerAction)
             assert len(dispatched) == 2
 
-            app.query_one("#container-action-stop", Button).focus()
-            await pilot.press("enter")
+            assert await pilot.click("#container-action-stop")
             assert isinstance(app.screen, tui.ConfirmContainerAction)
             app.screen.query_one("#confirm", Button).focus()
             await pilot.press("enter")
