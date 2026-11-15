@@ -297,10 +297,7 @@ fn interpolation_body_embeds_literal(body: &str) -> bool {
     if let Some(word) = rest.strip_prefix(":+").or_else(|| rest.strip_prefix('+')) {
         return !word.is_empty();
     }
-    if rest.starts_with(":?") || rest.starts_with('?') {
-        return false;
-    }
-    true
+    !(rest.starts_with(":?") || rest.starts_with('?'))
 }
 
 fn env_ident_len(body: &str) -> usize {

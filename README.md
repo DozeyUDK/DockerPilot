@@ -270,6 +270,8 @@ dockerpilot tui
 dockerpilot deploy init --output deployment.yml
 ~~~
 
+The TUI opens on **List containers**. **Open terminal** starts the container shell, live dashboard, or single-container live monitoring from the selected form. Exit the shell or press Ctrl+C in a live monitor to return. Set global options at launch with `dockerpilot --config PATH --log-level DEBUG tui`.
+
 Classic CLI deployment commands use the current process's Docker permissions and the legacy deployment configuration format. They do not automatically use the Secure Deploy broker. See [Quick Deploy](docs/quick-deploy.md) for the classic deployment workflow.
 
 ## Documentation
