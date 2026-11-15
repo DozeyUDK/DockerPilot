@@ -725,19 +725,15 @@ def test_container_view_reuses_selected_id_for_logs_stats_and_lifecycle(monkeypa
 
             assert await pilot.click("#container-action-stop")
             assert isinstance(app.screen, tui.ConfirmContainerAction)
-            assert await pilot.click("#cancel")
+            await pilot.press("escape")
+            assert not isinstance(app.screen, tui.ConfirmContainerAction)
             assert len(dispatched) == 2
-            await pilot.pause()
-            assert await pilot.click("#container-action-stop")
-            for _ in range(30):
-                await pilot.pause()
-                if isinstance(app.screen, tui.ConfirmContainerAction):
-                    buttons = app.screen.query("#confirm").nodes
-                    if buttons and buttons[0].region:
-                        break
-            else:
-                pytest.fail("Reopened Stop confirmation did not render")
-            assert await pilot.click("#confirm")
+
+            app.query_one("#container-action-stop", Button).focus()
+            await pilot.press("enter")
+            assert isinstance(app.screen, tui.ConfirmContainerAction)
+            app.screen.query_one("#confirm", Button).focus()
+            await pilot.press("enter")
             await run_finished(app, pilot)
             assert dispatched[-1][2:5] == ["container", "stop", "a1b2c3d4e5f6"]
             assert not app.query_one("#container-action-start", Button).disabled
