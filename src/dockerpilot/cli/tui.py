@@ -70,6 +70,24 @@ class TuiCommandHandoff:
     argv: List[str]
 
 
+_CONTAINER_ACTIONS = {
+    "logs": (("container", "logs"), "name", "Logs"),
+    "stats": (("monitor", "stats"), "container", "Stats"),
+    "shell": (("container", "exec"), "name", "Shell"),
+    "start": (("container", "start"), "name", "Start"),
+    "stop": (("container", "stop"), "name", "Stop"),
+    "restart": (("container", "restart"), "name", "Restart"),
+    "resume": (("container", "unpause"), "name", "Resume"),
+}
+
+_CONTAINER_ACTIONS_BY_STATE = {
+    "running": {"stats", "shell", "stop", "restart"},
+    "created": {"start"},
+    "exited": {"start"},
+    "paused": {"resume"},
+}
+
+
 _TARGET_MUTATING_COMMANDS = frozenset(
     {
         ("container", "start"),
@@ -385,7 +403,7 @@ def should_tui_require_value(command: CommandNode, argument: ArgumentSpec) -> bo
 
 
 _COMMAND_LABELS = {
-    ("container",): "Containers & images",
+    ("container",): "Container commands",
     ("container", "exec"): "Container shell",
     ("container", "exec-simple"): "Run one command",
     ("container", "run"): "Create container",
@@ -474,7 +492,8 @@ try:
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.css.query import NoMatches
-    from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, LoadingIndicator, RichLog, Select, Static, TextArea, Tree
+    from textual.screen import ModalScreen
+    from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, LoadingIndicator, RichLog, Select, Static, TextArea, Tree
 
     TEXTUAL_AVAILABLE = True
 except ImportError:
@@ -482,6 +501,48 @@ except ImportError:
 
 
 if TEXTUAL_AVAILABLE:
+
+    class ConfirmContainerAction(ModalScreen[bool]):
+        """Confirm a container action that interrupts a running service."""
+
+        DEFAULT_CSS = """
+        ConfirmContainerAction {
+            align: center middle;
+            background: $background 65%;
+        }
+        ConfirmContainerAction > Vertical {
+            width: 48;
+            height: auto;
+            padding: 1 2;
+            border: round $warning;
+            background: $surface;
+        }
+        ConfirmContainerAction Horizontal {
+            height: auto;
+            margin-top: 1;
+        }
+        """
+        BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+        def __init__(self, label: str, name: str) -> None:
+            super().__init__()
+            self.label = label
+            self.container_name = name
+
+        def compose(self) -> ComposeResult:
+            with Vertical():
+                yield Static(Text(f"{self.label} {self.container_name}?"))
+                with Horizontal():
+                    yield Button("Cancel", id="cancel")
+                    yield Button(self.label, id="confirm", variant="warning")
+
+        def action_cancel(self) -> None:
+            self.dismiss(False)
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            self.dismiss(event.button.id == "confirm")
+
 
     class ResourceMultiSelector(Vertical):
         """Simple checkbox-backed multi selector with reliable mouse interaction."""
@@ -530,7 +591,7 @@ if TEXTUAL_AVAILABLE:
 
 
     class DockerPilotTUI(App):
-        """Mouse-friendly command browser that emits argv for the real CLI."""
+        """Browse containers and run actions through the DockerPilot CLI dispatcher."""
 
         TITLE = "DockerPilot"
 
@@ -585,9 +646,46 @@ if TEXTUAL_AVAILABLE:
             padding: 0 1;
         }
 
-        #selected-command {
+        #container-view, #command-view, #container-table {
+            height: 1fr;
+        }
+
+        #containers-header, .container-actions {
+            height: auto;
+        }
+
+        #containers-title {
+            width: 1fr;
+        }
+
+        #container-filter {
+            width: 1fr;
+        }
+
+        #containers-title, #selected-command {
             text-style: bold;
             color: $accent;
+        }
+
+        #container-summary {
+            height: auto;
+            color: $text-muted;
+        }
+
+        .container-actions Button, #refresh-containers {
+            min-width: 0;
+            padding: 0 1;
+        }
+
+        .container-actions Button {
+            border: none;
+            height: 1;
+            margin: 0 1 1 0;
+        }
+
+        #container-results {
+            height: 40%;
+            border: round $primary;
         }
 
         #selected-help {
@@ -666,6 +764,8 @@ if TEXTUAL_AVAILABLE:
         BINDINGS = [
             Binding("q", "quit", "Quit"),
             Binding("ctrl+r", "run_selected", "Run"),
+            Binding("ctrl+f", "find_container", "Find container"),
+            Binding("escape", "close_container_filter", "Clear filter", show=False),
         ]
 
         def __init__(
@@ -686,6 +786,8 @@ if TEXTUAL_AVAILABLE:
             self.command_drafts: Dict[Tuple[str, ...], Dict[str, Any]] = {}
             self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
             self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
+            self.container_rows: Dict[str, Dict[str, Any]] = {}
+            self.selected_container_id: Optional[str] = None
             self._command_running = False
             self._targets_refreshing = False
             self._form_render_lock = asyncio.Lock()
@@ -701,16 +803,33 @@ if TEXTUAL_AVAILABLE:
             with Horizontal(id="main", classes="hidden"):
                 yield Tree("DockerPilot Commands", id="command-tree")
                 with Vertical(id="details"):
-                    yield Static("Select a command", id="selected-command")
-                    yield Static("Click a command on the left to open its arguments.", id="selected-help")
-                    with VerticalScroll(id="form-scroll"):
-                        yield Vertical(id="command-form")
-                    yield Static("Command preview will appear here.", id="preview")
-                    yield RichLog(id="results", wrap=False, highlight=False, markup=False)
-                    with Horizontal(id="button-row"):
-                        yield Button("Run", id="run-command", variant="success", disabled=True)
-                        yield Button("Clear output", id="clear-output")
-                        yield Button("Refresh", id="refresh-targets", tooltip="Reload Docker containers and images")
+                    with Vertical(id="container-view"):
+                        with Horizontal(id="containers-header"):
+                            yield Static("Containers", id="containers-title")
+                            yield Button("Refresh", id="refresh-containers", tooltip="Reload Docker containers and images")
+                        yield Input(placeholder="Filter by name, image, state or ID", id="container-filter")
+                        yield DataTable(id="container-table", cursor_type="row", zebra_stripes=True)
+                        yield Static("Click a row or press Enter.", id="container-summary")
+                        for actions in (("logs", "stats", "shell"), ("start", "stop", "restart", "resume")):
+                            with Horizontal(classes="container-actions"):
+                                for action in actions:
+                                    yield Button(
+                                        _CONTAINER_ACTIONS[action][2],
+                                        id=f"container-action-{action}",
+                                        disabled=True,
+                                    )
+                        yield RichLog(id="container-results", wrap=True, markup=False, classes="hidden")
+                    with Vertical(id="command-view", classes="hidden"):
+                        yield Static("Select a command", id="selected-command")
+                        yield Static("", id="selected-help")
+                        with VerticalScroll(id="form-scroll"):
+                            yield Vertical(id="command-form")
+                        yield Static("", id="preview")
+                        yield RichLog(id="results", wrap=False, highlight=False, markup=False)
+                        with Horizontal(id="button-row"):
+                            yield Button("Run", id="run-command", variant="success", disabled=True)
+                            yield Button("Clear output", id="clear-output")
+                            yield Button("Refresh", id="refresh-targets", tooltip="Reload Docker containers and images")
                     yield Static("", id="status")
             yield Footer()
 
@@ -728,23 +847,18 @@ if TEXTUAL_AVAILABLE:
             tree.show_root = False
             tree.root.expand()
 
+            containers = tree.root.add_leaf("Containers")
             for command in self.command_tree:
                 self._add_tree_node(tree.root, command)
 
+            table = self.query_one("#container-table", DataTable)
+            table.add_columns("Name", "State", "Image")
             self._set_loading_message("Loading live Docker targets...")
             status_message = await self._refresh_available_targets_async()
-            for group in tree.root.children:
-                if group.data.path == ("container",):
-                    group.expand()
-                    for node in group.children:
-                        if node.data.path == ("container", "list"):
-                            await self._render_command_form(node.data)
-                            tree.move_cursor(node)
-                            break
-                    break
             self.query_one("#status", Static).update(status_message)
             self._show_main_ui()
-            tree.focus()
+            tree.move_cursor(containers)
+            table.focus()
 
         def _set_loading_message(self, message: str) -> None:
             """Update the startup loader text."""
@@ -757,15 +871,16 @@ if TEXTUAL_AVAILABLE:
 
         def _load_available_targets(
             self,
-        ) -> Tuple[Optional[List[Tuple[str, str]]], Optional[List[Tuple[str, str]]], str]:
+        ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[Tuple[str, str]]], str]:
             """Fetch live Docker targets without touching UI state."""
             try:
-                container_rows = self.pilot_instance.list_containers(show_all=True, format_output="json") or []
-                image_rows = self.pilot_instance.list_images(show_all=True, format_output="json", hide_untagged=False) or []
-                container_targets = format_container_targets(container_rows)
+                container_rows = self.pilot_instance.list_containers(show_all=True, format_output="json")
+                image_rows = self.pilot_instance.list_images(show_all=True, format_output="json", hide_untagged=False)
+                if container_rows is None or image_rows is None:
+                    return None, None, "Could not reload Docker targets. Showing the last loaded list."
                 image_targets = format_image_targets(image_rows)
-                message = f"Loaded {len(container_targets)} containers and {len(image_targets)} images."
-                return container_targets, image_targets, message
+                message = f"Loaded {len(container_rows)} containers and {len(image_targets)} images."
+                return container_rows, image_targets, message
             except Exception as exc:
                 return (
                     None,
@@ -775,12 +890,102 @@ if TEXTUAL_AVAILABLE:
 
         async def _refresh_available_targets_async(self) -> str:
             """Refresh cached Docker targets for selector widgets."""
-            container_targets, image_targets, message = await asyncio.to_thread(self._load_available_targets)
-            if container_targets is not None:
-                self.available_targets["container"] = container_targets
+            container_rows, image_targets, message = await asyncio.to_thread(self._load_available_targets)
+            if container_rows is not None:
+                self.available_targets["container"] = format_container_targets(container_rows)
+                self._update_container_table(container_rows)
             if image_targets is not None:
                 self.available_targets["image"] = image_targets
             return message
+
+        def _update_container_table(self, rows: List[Dict[str, Any]]) -> None:
+            self.container_rows = {
+                row.get("id") or row["name"]: row
+                for row in rows
+                if row.get("id") or row.get("name")
+            }
+            self._render_container_table()
+
+        def _render_container_table(self) -> None:
+            table = self.query_one("#container-table", DataTable)
+            query = self.query_one("#container-filter", Input).value.strip().casefold()
+            table.clear()
+            selected_row = None
+            for container_id, row in self.container_rows.items():
+                name = row.get("name") or container_id
+                state = row.get("state") or row.get("status") or "unknown"
+                image = row.get("image") or "—"
+                if not any(query in field.casefold() for field in (name, state, image, container_id)):
+                    continue
+                if container_id == self.selected_container_id:
+                    selected_row = table.row_count
+                table.add_row(Text(name), Text(state), Text(image), key=container_id)
+
+            title = "Containers"
+            if query:
+                title = f"Containers ({table.row_count}/{len(self.container_rows)})"
+            self.query_one("#containers-title", Static).update(title)
+            if selected_row is None:
+                self._select_container(None)
+            else:
+                table.move_cursor(row=selected_row, animate=False)
+                self._update_container_summary()
+
+        def _select_container(self, container_id: Optional[str]) -> None:
+            if container_id != self.selected_container_id:
+                results = self.query_one("#container-results", RichLog)
+                results.clear()
+                results.add_class("hidden")
+            self.selected_container_id = container_id
+            self._update_container_summary()
+
+        def _update_container_summary(self) -> None:
+            row = self.container_rows.get(self.selected_container_id)
+            table = self.query_one("#container-table", DataTable)
+            if table.row_count:
+                summary = "Click a row or press Enter."
+            elif self.container_rows:
+                summary = "No containers match the filter."
+            else:
+                summary = "No containers loaded."
+            if row:
+                name = row.get("name") or self.selected_container_id
+                state = row.get("state") or row.get("status") or "unknown"
+                summary = f"{name} · {state}"
+            self.query_one("#container-summary", Static).update(Text(summary))
+            self._set_run_state(self._command_running)
+
+        def _container_action_available(self, action: str) -> bool:
+            row = self.container_rows.get(self.selected_container_id)
+            if not row:
+                return False
+            state = row.get("state") or row.get("status")
+            return action == "logs" or action in _CONTAINER_ACTIONS_BY_STATE.get(state, ())
+
+        def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+            container_id = event.row_key.value
+            if not self._controls_busy() and container_id in self.container_rows:
+                self._select_container(container_id)
+
+        def _request_container_action(self, action: str) -> None:
+            container_id = self.selected_container_id
+            if (
+                container_id is None
+                or self.selected_command is not None
+                or self._controls_busy()
+                or not self._container_action_available(action)
+            ):
+                return
+            if action in {"stop", "restart"}:
+                name = self.container_rows[container_id].get("name") or container_id
+
+                def on_confirm(confirmed: bool | None) -> None:
+                    if confirmed and self.selected_container_id == container_id:
+                        self._start_run(action)
+
+                self.push_screen(ConfirmContainerAction(_CONTAINER_ACTIONS[action][2], name), on_confirm)
+            else:
+                self._start_run(action)
 
         def _add_tree_node(self, parent: Any, command: CommandNode) -> None:
             """Mount one command node, showing an expand marker only for real branches."""
@@ -830,16 +1035,15 @@ if TEXTUAL_AVAILABLE:
             help_text = self.query_one("#selected-help", Static)
             run_button = self.query_one("#run-command", Button)
             run_button.label = "Run"
+            self.selected_command = command
+            self.query_one("#command-view").set_class(command is None, "hidden")
+            self.query_one("#container-view").set_class(command is not None, "hidden")
+            self.refresh_bindings()
 
             if command is None:
-                title.update("Select a command")
-                help_text.update("Click a command on the left to open its arguments.")
-                run_button.disabled = True
-                self.selected_command = None
-                self._refresh_preview()
+                self.query_one("#container-table", DataTable).focus()
                 return
 
-            self.selected_command = command
             title.update(command_label(command))
             description = command.help_text
             if should_launch_in_external_terminal(command):
@@ -957,12 +1161,36 @@ if TEXTUAL_AVAILABLE:
                 await row.mount(Static(argument.help_text, classes="arg-help"))
 
         async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-            command = event.node.data
-            if isinstance(command, CommandNode):
-                await self._render_command_form(command)
+            await self._render_command_form(event.node.data)
 
-        def on_input_changed(self, _event: Input.Changed) -> None:
-            self._refresh_preview()
+        def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+            if action == "run_selected":
+                return self.selected_command is not None
+            if action == "find_container":
+                return self.selected_command is None and not self._controls_busy()
+            if action == "close_container_filter":
+                return isinstance(self.focused, Input) and self.focused.id == "container-filter"
+            return super().check_action(action, parameters)
+
+        def action_find_container(self) -> None:
+            self.query_one("#container-filter", Input).focus()
+
+        def action_close_container_filter(self) -> None:
+            self.query_one("#container-filter", Input).value = ""
+            self.query_one("#container-table", DataTable).focus()
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id == "container-filter":
+                self._render_container_table()
+            else:
+                self._refresh_preview()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            if event.input.id == "container-filter" and not self._controls_busy():
+                table = self.query_one("#container-table", DataTable)
+                if table.row_count:
+                    table.focus()
+                    table.action_select_cursor()
 
         def on_checkbox_changed(self, _event: Checkbox.Changed) -> None:
             self._refresh_preview()
@@ -1115,12 +1343,15 @@ if TEXTUAL_AVAILABLE:
             self._start_run()
 
         async def on_button_pressed(self, event: Button.Pressed) -> None:
-            if event.button.id == "run-command":
+            button_id = event.button.id or ""
+            if button_id.startswith("container-action-"):
+                self._request_container_action(button_id.removeprefix("container-action-"))
+            elif button_id == "run-command":
                 self._start_run()
-            elif event.button.id == "clear-output":
+            elif button_id == "clear-output":
                 self.query_one("#results", RichLog).clear()
                 self.query_one("#status", Static).update("Output panel cleared.")
-            elif event.button.id == "refresh-targets":
+            elif button_id in {"refresh-targets", "refresh-containers"}:
                 await self._refresh_targets()
 
         def _set_run_state(self, running: bool) -> None:
@@ -1131,8 +1362,16 @@ if TEXTUAL_AVAILABLE:
                 refresh_button = self.query_one("#refresh-targets", Button)
             except NoMatches:
                 return
-            run_button.disabled = self._controls_busy() or not (self.selected_command and self.selected_command.is_leaf)
-            refresh_button.disabled = self._controls_busy()
+            busy = self._controls_busy()
+            run_button.disabled = busy or not (self.selected_command and self.selected_command.is_leaf)
+            refresh_button.disabled = busy
+            self.query_one("#refresh-containers", Button).disabled = busy
+            self.query_one("#container-filter", Input).disabled = busy
+            self.query_one("#container-table", DataTable).disabled = busy
+            self.refresh_bindings()
+            for action in _CONTAINER_ACTIONS:
+                button = self.query_one(f"#container-action-{action}", Button)
+                button.disabled = busy or not self._container_action_available(action)
 
         async def _refresh_targets(self) -> None:
             """Reload live selectors while retaining the form the user sees on completion."""
@@ -1177,9 +1416,8 @@ if TEXTUAL_AVAILABLE:
                 return
             self.exit(None)
 
-        def _append_result_block(self, command_text: str, return_code: Optional[int], output: str) -> None:
+        def _append_result_block(self, results: RichLog, command_text: str, return_code: Optional[int], output: str) -> None:
             """Append a command result block to the output panel."""
-            results = self.query_one("#results", RichLog)
             results.write(f"$ dockerpilot {command_text}")
             if return_code is not None:
                 results.write(f"[exit {return_code}]")
@@ -1190,25 +1428,35 @@ if TEXTUAL_AVAILABLE:
                 results.write("[no output]")
             results.write("")
 
-        def _start_run(self) -> None:
+        def _start_run(self, container_action: Optional[str] = None) -> None:
             if self._controls_busy():
                 self.query_one("#status", Static).update("A command or target refresh is already running.")
                 return
+            if container_action and not self._container_action_available(container_action):
+                return
             # Claim execution before scheduling so repeated clicks or Ctrl+R cannot race.
             self._set_run_state(True)
-            asyncio.create_task(self._run_selected_command())
+            asyncio.create_task(self._run_selected_command(container_action))
 
-        async def _run_selected_command(self) -> None:
+        async def _run_selected_command(self, container_action: Optional[str]) -> None:
             status = self.query_one("#status", Static)
+            results = self.query_one("#container-results" if container_action else "#results", RichLog)
             command_text = "<unavailable>"
             try:
-                valid, message = self._validate_required_arguments()
-                if not valid or not self.selected_command:
-                    status.update(message or "Select a runnable command first.")
-                    return
-
-                executed_command = self.selected_command
-                command_values = self._values_from_widgets(self.command_widgets)
+                if container_action:
+                    path, argument, _ = _CONTAINER_ACTIONS[container_action]
+                    group = next(group for group in self.command_tree if group.name == path[0])
+                    executed_command = next(command for command in group.children if command.name == path[1])
+                    command_values = {argument: self.selected_container_id}
+                    if container_action == "shell":
+                        command_values["command"] = "/bin/sh"
+                else:
+                    valid, message = self._validate_required_arguments()
+                    if not valid or not self.selected_command:
+                        status.update(message or "Select a runnable command first.")
+                        return
+                    executed_command = self.selected_command
+                    command_values = self._values_from_widgets(self.command_widgets)
                 argv = build_command_argv(
                     executed_command,
                     command_values,
@@ -1221,9 +1469,11 @@ if TEXTUAL_AVAILABLE:
                     self._run_in_terminal(argv, status)
                     return
 
+                if container_action:
+                    results.clear()
+                    results.remove_class("hidden")
                 status.update(f"Running inside TUI: dockerpilot {command_text}")
-                results_widget = self.query_one("#results", RichLog)
-                panel_width = max(60, getattr(results_widget.size, "width", 0) or getattr(results_widget.content_size, "width", 0) or 120)
+                panel_width = max(60, results.size.width or results.content_size.width or 120)
                 return_code, output = await asyncio.to_thread(
                     capture_cli_execution,
                     self.pilot_instance,
@@ -1231,7 +1481,10 @@ if TEXTUAL_AVAILABLE:
                     argv,
                     console_width=panel_width,
                 )
-                self._append_result_block(command_text, return_code, output)
+                if container_action and return_code == 0 and output.strip():
+                    results.write(output.rstrip())
+                else:
+                    self._append_result_block(results, command_text, return_code, output)
 
                 refresh_message = None
                 if should_refresh_targets_after_command(executed_command, command_values):
@@ -1251,7 +1504,7 @@ if TEXTUAL_AVAILABLE:
                         completion_message = f"{completion_message} {refresh_message}"
                     status.update(completion_message)
             except Exception as exc:
-                self._append_result_block(command_text, 1, f"Inline execution failed.\n{exc}")
+                self._append_result_block(results, command_text, 1, f"Inline execution failed.\n{exc}")
                 status.update(f"Inline execution failed: {exc}")
             finally:
                 self._set_run_state(False)

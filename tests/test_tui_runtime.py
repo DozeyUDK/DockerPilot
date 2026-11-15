@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip('textual')
-from textual.widgets import Button, Checkbox, Label, Select, Static, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Input, Label, Select, Static, TextArea, Tree
 
 from dockerpilot.cli import tui
 from dockerpilot.cli.parser import build_cli_parser
@@ -636,7 +636,7 @@ def test_live_monitoring_opens_from_tui_and_preserves_the_form(monkeypatch, path
         monkeypatch.setattr(app, "suspend", suspend)
         async with app.run_test(size=(80, 24)) as pilot:
             await ready(app, pilot)
-            assert app.selected_command.path == ("container", "list")
+            assert app.query_one("#container-view").display
             assert not app.query("#global-form")
 
             selected = command(app, *path)
@@ -663,5 +663,161 @@ def test_live_monitoring_opens_from_tui_and_preserves_the_form(monkeypatch, path
             assert app.command_widgets["duration"].value == "42"
             assert not run.disabled
             assert "interrupted" in str(app.query_one("#status", Static).render())
+
+    asyncio.run(scenario())
+
+
+def test_container_view_reuses_selected_id_for_logs_stats_and_lifecycle(monkeypatch):
+    backend = FakePilot()
+    backend.containers = [
+        {"id": "a1b2c3d4e5f6", "name": "web", "state": "running", "image": "demo"},
+        {"id": "b1c2d3e4f5a6", "name": "api", "state": "exited", "image": "demo"},
+    ]
+    dispatched = []
+    terminal_calls = []
+
+    @contextmanager
+    def suspend():
+        yield
+
+    def execute(_backend, _parser, argv, **kwargs):
+        dispatched.append(argv)
+        if "stop" in argv:
+            backend.containers[0] = {**backend.containers[0], "state": "exited"}
+        return 0, f"Output for {argv[3]}"
+
+    monkeypatch.setattr(tui, "capture_cli_execution", execute)
+    monkeypatch.setattr(
+        tui, "execute_cli_argv",
+        lambda _backend, _parser, argv: terminal_calls.append(argv) or 0,
+    )
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        monkeypatch.setattr(app, "suspend", suspend)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            table = app.query_one("#container-table", DataTable)
+            assert app.focused is table
+            assert table.row_count == 2
+            assert app.query_one("#container-action-logs", Button).disabled
+            await pilot.press("enter")
+            assert app.selected_container_id == "a1b2c3d4e5f6"
+            assert "web · running" in str(app.query_one("#container-summary", Static).render())
+
+            for action in ("logs", "stats"):
+                assert await pilot.click(f"#container-action-{action}")
+                await run_finished(app, pilot)
+            assert dispatched == [
+                ["--log-level", "INFO", "container", "logs", "a1b2c3d4e5f6", "--tail", "50"],
+                ["--log-level", "INFO", "monitor", "stats", "a1b2c3d4e5f6"],
+            ]
+            results = app.query_one("#container-results")
+            assert "Output for stats" in str(results.lines)
+            assert "Output for logs" not in str(results.lines)
+
+            assert await pilot.click("#container-action-shell")
+            await run_finished(app, pilot)
+            assert terminal_calls == [
+                ["--log-level", "INFO", "container", "exec", "a1b2c3d4e5f6", "--command", "/bin/sh"],
+            ]
+            assert app.selected_container_id == "a1b2c3d4e5f6"
+
+            # Textual suppresses repeated presses while this button animates.
+            stop = app.query_one("#container-action-stop", Button)
+            stop.active_effect_duration = 0
+            assert await pilot.click("#container-action-stop")
+            assert isinstance(app.screen, tui.ConfirmContainerAction)
+            await pilot.press("escape")
+            assert not isinstance(app.screen, tui.ConfirmContainerAction)
+            assert len(dispatched) == 2
+
+            assert await pilot.click("#container-action-stop")
+            assert isinstance(app.screen, tui.ConfirmContainerAction)
+            app.screen.query_one("#confirm", Button).focus()
+            await pilot.press("enter")
+            await run_finished(app, pilot)
+            assert dispatched[-1][2:5] == ["container", "stop", "a1b2c3d4e5f6"]
+            assert not app.query_one("#container-action-start", Button).disabled
+            assert app.query_one("#container-action-stats", Button).disabled
+            assert "web · exited" in str(app.query_one("#container-summary", Static).render())
+
+            backend.containers[0] = {**backend.containers[0], "name": "renamed"}
+            assert await pilot.click("#refresh-containers")
+            await pilot.pause()
+            assert app.selected_container_id == "a1b2c3d4e5f6"
+            assert "renamed · exited" in str(app.query_one("#container-summary", Static).render())
+
+            tree = app.query_one("#command-tree", Tree)
+            monitor = next(node for node in tree.root.children if node.data and node.data.name == "monitor")
+            monitor.expand()
+            tree.select_node(monitor)
+            await pilot.pause()
+            assert app.query_one("#command-view").display
+            tree.select_node(tree.root.children[0])
+            await pilot.pause()
+            assert app.query_one("#container-view").display
+            assert app.selected_container_id == "a1b2c3d4e5f6"
+
+            backend.containers[0] = {**backend.containers[0], "id": "c1d2e3f4a5b6"}
+            await app._refresh_targets()
+            assert app.selected_container_id is None
+            assert app.query_one("#container-action-logs", Button).disabled
+            assert not results.display
+
+    asyncio.run(scenario())
+
+
+def test_container_filter_matches_cached_rows_and_clears_hidden_selection():
+    backend = FakePilot()
+    backend.containers = [
+        {"id": "abc123", "name": "Web", "state": "running", "image": "nginx:demo"},
+        {"id": "def456", "name": "api", "state": "exited", "image": "python:demo"},
+    ]
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            table = app.query_one("#container-table", DataTable)
+            field = app.query_one("#container-filter", Input)
+            logs = app.query_one("#container-action-logs", Button)
+
+            await pilot.press("ctrl+f")
+            assert app.focused is field
+            await pilot.press("W", "E", "B")
+            await pilot.pause()
+            assert table.row_count == 1
+            assert "(1/2)" in str(app.query_one("#containers-title", Static).render())
+            await pilot.press("enter")
+            assert app.focused is table
+            assert app.selected_container_id == "abc123"
+            assert not logs.disabled
+
+            await pilot.press("ctrl+f")
+            for query in ("NGINX", "running", "abc1"):
+                field.value = query
+                await pilot.pause()
+                assert table.row_count == 1
+                assert app.selected_container_id == "abc123"
+            field.value = "exited"
+            await pilot.pause()
+            assert app.selected_container_id is None
+            assert logs.disabled
+            await pilot.press("enter")
+            assert app.selected_container_id == "def456"
+
+            await pilot.press("ctrl+f")
+            field.value = "no-match"
+            await pilot.pause()
+            assert table.row_count == 0
+            assert "No containers match" in str(app.query_one("#container-summary", Static).render())
+            await pilot.press("enter")
+            assert app.focused is field
+            await pilot.press("escape")
+            assert not field.value
+            assert app.focused is table
+            assert table.row_count == 2
+            assert backend.container_list_calls == 1
 
     asyncio.run(scenario())
