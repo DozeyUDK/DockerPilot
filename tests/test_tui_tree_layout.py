@@ -35,7 +35,7 @@ def test_tree_expanders_are_only_shown_for_nodes_with_children():
             tree = app.query_one("#command-tree", Tree)
 
             container = next(
-                node for node in tree.root.children if node.data.path == ("container",)
+                node for node in tree.root.children if node.data and node.data.path == ("container",)
             )
             list_command = next(
                 node for node in container.children if node.data.path == ("container", "list")
@@ -45,7 +45,7 @@ def test_tree_expanders_are_only_shown_for_nodes_with_children():
             assert not list_command.allow_expand
 
             for node in tree.root.children:
-                assert node.allow_expand == bool(node.data.children)
+                assert node.allow_expand == bool(node.data and node.data.children)
                 for child in node.children:
                     assert child.allow_expand == bool(child.data.children)
 
