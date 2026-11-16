@@ -407,3 +407,80 @@ def test_run_tui_relaunches_after_terminal_handoff(monkeypatch):
 
     assert FakeApp.run_calls == 2
     assert executed == [(pilot, parser, ["container", "exec", "web", "--command", "/bin/bash"])]
+
+
+def test_build_pull_can_be_disabled_and_untagged_images_are_selectable():
+    parser = build_cli_parser()
+    build = _find_leaf(build_command_tree(parser), ["build"])
+    args = parser.parse_args(build_command_argv(build, {
+        "dockerfile_path": ".", "tag": "demo:v1", "pull": False,
+    }))
+    assert args.pull is False
+    assert parser.parse_args(["build", ".", "demo:v1"]).pull is True
+    assert format_image_targets([{"id": "abc123", "tags": [], "size": "2MB"}]) == [
+        ("abc123 [2MB]", "abc123"),
+    ]
+
+
+def test_every_tui_command_reaches_its_real_cli_handler():
+    from unittest.mock import Mock
+
+    routes = {
+        ("container", "list"): "list_containers",
+        ("container", "list-images"): "list_images",
+        ("container", "remove-image"): "remove_image",
+        ("container", "prune-images"): "prune_dangling_images",
+        ("container", "start"): "container_operation",
+        ("container", "stop"): "container_operation",
+        ("container", "restart"): "container_operation",
+        ("container", "remove"): "container_operation",
+        ("container", "pause"): "container_operation",
+        ("container", "unpause"): "container_operation",
+        ("container", "rename"): "rename_container",
+        ("container", "stop-remove"): "stop_and_remove_container",
+        ("container", "run"): "run_new_container",
+        ("container", "exec-simple"): "exec_command_non_interactive",
+        ("container", "exec"): "exec_container",
+        ("container", "logs"): "view_container_logs",
+        ("monitor", "dashboard"): "monitor_containers_dashboard",
+        ("monitor", "live"): "monitor_container_live",
+        ("monitor", "stats"): "get_container_stats_once",
+        ("monitor", "health"): "health_check_standalone",
+        ("deploy", "config"): "deploy_from_config",
+        ("deploy", "init"): "create_deployment_config",
+        ("deploy", "history"): "show_deployment_history",
+        ("deploy", "quick"): "quick_deploy",
+        ("validate",): "validate_system_requirements",
+        ("backup", "create"): "backup_deployment_state",
+        ("backup", "restore"): "restore_deployment_state",
+        ("backup", "container-data"): "backup_container_data",
+        ("backup", "restore-data"): "restore_container_data",
+        ("config", "export"): "export_configuration",
+        ("config", "import"): "import_configuration",
+        ("pipeline", "create"): "create_pipeline_config",
+        ("test",): "run_integration_tests",
+        ("promote",): "environment_promotion",
+        ("alerts",): "setup_monitoring_alerts",
+        ("docs",): "generate_documentation",
+        ("build",): "build_image_standalone",
+        ("checklist",): "create_production_checklist",
+    }
+
+    parser = build_cli_parser()
+    groups = build_command_tree(parser, exclude_commands={"tui"})
+    commands = {node.path: node for group in groups for node in (group.children or [group])}
+    assert routes.keys() == commands.keys()
+
+    for path, command in commands.items():
+        backend = Mock()
+        backend._parse_multi_target.side_effect = lambda text: text.split(",")
+        backend.prune_dangling_images.return_value = {"images_deleted": 0}
+        values = {
+            spec.dest: "8080" if spec.dest == "port" else spec.choices[0] if spec.choices else "demo"
+            for spec in command.arguments if should_tui_require_value(command, spec)
+        }
+        argv = build_command_argv(command, values)
+        assert execute_cli_argv(backend, parser, argv, interactive=False) == 0, path
+        assert getattr(backend, routes[path]).call_count == 1, path
+        if path == ("container", "remove"):
+            backend.container_operation.assert_called_once_with("remove", "demo", force=False, interactive=False)

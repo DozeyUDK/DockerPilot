@@ -171,7 +171,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     build_parser.add_argument('dockerfile_path', help='Path to a Dockerfile directory or Dockerfile file')
     build_parser.add_argument('tag', help='Image tag (e.g., myapp:latest)')
     build_parser.add_argument('--no-cache', action='store_true', help='Build without cache')
-    build_parser.add_argument('--pull', action='store_true', default=True, help='Pull base image updates')
+    build_parser.add_argument('--pull', action=argparse.BooleanOptionalAction, default=True, help='Pull base image updates')
     build_parser.add_argument(
         '--pull-if-missing',
         action='store_true',

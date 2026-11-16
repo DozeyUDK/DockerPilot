@@ -1,11 +1,12 @@
 """Image management operations."""
 from dockerpilot.ui_icons import icon
 import docker
+from collections import Counter
 from typing import List, Any
 from rich.table import Table
 from rich.panel import Panel
 
-from .utils import format_image_size, format_creation_date, count_containers_using_image
+from .utils import format_image_size, format_creation_date
 
 
 class ImageManager:
@@ -82,7 +83,12 @@ class ImageManager:
             
             # Use proportional widths that adapt to terminal size
             # For smaller terminals, some columns will be narrower
-            if available_width >= 140:
+            compact = terminal_width < 75
+            if compact:
+                table.add_column("ID", width=12)
+                table.add_column("Image", ratio=1, overflow="fold")
+                table.add_column("Size", width=9, overflow="fold")
+            elif available_width >= 140:
                 # Large terminal - full width columns
                 table.add_column("Nr", style="bold blue", width=4, overflow="fold")
                 table.add_column("ID", style="cyan", width=12, overflow="fold")
@@ -110,6 +116,17 @@ class ImageManager:
                 table.add_column("Created", style="bright_blue", width=min(15, int(available_width * 0.25)), overflow="fold")
                 # Remove "Used By" for very small terminals to save space
 
+            usage = Counter()
+            if include_used_by and images:
+                try:
+                    containers = self.client.containers.list(all=True)
+                    usage.update(
+                        container.attrs.get("Image") or container.image.id
+                        for container in containers
+                    )
+                except Exception as exc:
+                    self.logger.warning("Could not count containers using images: %s", exc)
+
             for idx, img in enumerate(images, start=1):
                 # Parse repository and tag
                 if img.tags:
@@ -125,6 +142,11 @@ class ImageManager:
                 # Format size
                 size = format_image_size(img.attrs.get('Size', 0))
                 
+                if compact:
+                    reference = f"{repository}:{tag}" if img.tags else "<untagged>"
+                    table.add_row(img.id.removeprefix("sha256:")[:12], reference, size)
+                    continue
+
                 # Format creation date
                 created = format_creation_date(img.attrs.get('Created'))
                 
@@ -140,8 +162,7 @@ class ImageManager:
                 
                 # Add "Used By" only if column exists
                 if include_used_by:
-                    used_by = count_containers_using_image(self.client, img.id)
-                    row_data.append(str(used_by))
+                    row_data.append(str(usage[img.id]))
                 
                 table.add_row(*row_data)
             

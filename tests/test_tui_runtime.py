@@ -1,7 +1,7 @@
 """Headless TUI regressions. Docker calls are replaced by in-memory fakes."""
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -114,8 +114,9 @@ def test_multi_selector_does_not_collapse_inside_form_scroll():
             assert isinstance(widget, tui.ResourceMultiSelector)
             assert len(widget.query(Checkbox)) == 12
             expected_height = tui.selector_height(12)
-            assert widget.size.height >= expected_height
-            assert widget.parent.size.height >= expected_height
+            assert widget.size.height > 2
+            assert widget.outer_size.height == expected_height
+            assert widget.virtual_size.height >= 12
 
             widget.select("app-7")
             await pilot.pause()
@@ -819,5 +820,97 @@ def test_container_filter_matches_cached_rows_and_clears_hidden_selection():
             assert app.focused is table
             assert table.row_count == 2
             assert backend.container_list_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_every_command_renders_and_dispatches_at_supported_terminal_sizes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tui, "capture_cli_execution",
+        lambda _backend, parser, argv, **kwargs: calls.append(parser.parse_args(argv)) or (0, "result"),
+    )
+    monkeypatch.setattr(
+        tui, "execute_cli_argv",
+        lambda _backend, parser, argv: calls.append(parser.parse_args(argv)) or 0,
+    )
+
+    def leaves(nodes):
+        for node in nodes:
+            if node.children:
+                yield from leaves(node.children)
+            else:
+                yield node
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        monkeypatch.setattr(app, "suspend", nullcontext)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            for index, node in enumerate(leaves(app.command_tree), 1):
+                await app._render_command_form(node)
+                for spec in node.arguments:
+                    if not tui.should_tui_require_value(node, spec):
+                        continue
+                    widget = app.command_widgets[spec.dest]
+                    if isinstance(widget, tui.ResourceMultiSelector):
+                        widget.select("web")
+                    elif isinstance(widget, Select):
+                        widget.value = "web"
+                    elif isinstance(widget, TextArea):
+                        widget.load_text("demo")
+                    elif isinstance(widget, Input):
+                        widget.value = "8080" if spec.dest == "port" else "demo"
+
+                await pilot.pause()
+                run = app.query_one("#run-command", Button)
+                assert run.region in app.screen.region, node.path
+                assert not run.disabled, node.path
+                app._start_run()
+                await run_finished(app, pilot)
+                assert len(calls) == index, node.path
+                args = calls[-1]
+                if len(node.path) == 2:
+                    assert getattr(args, f"{node.path[0]}_action") == node.path[1]
+                else:
+                    assert args.command == node.path[0]
+            assert len(calls) == 38
+
+            await pilot.resize_terminal(180, 52)
+            await app._render_command_form(command(app, "container", "list-images"))
+            await pilot.pause()
+            assert not app.query_one("#results").display
+            app._start_run()
+            await run_finished(app, pilot)
+            assert app.query_one("#results").size.height > app.query_one("#form-scroll").size.height
+
+    asyncio.run(scenario())
+
+
+def test_destructive_form_uses_confirmation_and_prune_defaults_to_preview(monkeypatch):
+    dispatched = []
+    monkeypatch.setattr(
+        tui, "capture_cli_execution",
+        lambda _backend, _parser, argv, **kwargs: dispatched.append(argv) or (0, "result"),
+    )
+
+    async def scenario():
+        app = tui.DockerPilotTUI(build_cli_parser(), FakePilot())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app, pilot)
+            await app._render_command_form(command(app, "container", "prune-images"))
+            preview = app.command_widgets["dry_run"]
+            assert preview.value
+            app.action_run_selected()
+            await run_finished(app, pilot)
+            assert "--dry-run" in dispatched[-1]
+
+            preview.value = False
+            app.action_run_selected()
+            await pilot.pause()
+            assert isinstance(app.screen, tui.ConfirmContainerAction)
+            assert len(dispatched) == 1
+            await pilot.press("escape")
+            assert len(dispatched) == 1
 
     asyncio.run(scenario())
