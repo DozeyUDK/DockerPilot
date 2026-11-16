@@ -132,6 +132,9 @@ def remove_container(host: Any, container_name: str, force: bool = False, **kwar
         container = host.client.containers.get(container_name)
 
         if container.status == "running" and not force:
+            if not kwargs.get("interactive", True):
+                host.console.print("[red]Stop the container first or enable Force removal.[/red]")
+                return False
             if not Confirm.ask(f"Container {container_name} is running. Force removal?"):
                 host.console.print(f"[yellow]{icon('error')} Removal cancelled[/yellow]")
                 return False

@@ -59,7 +59,12 @@ def list_containers(host: Any, show_all: bool = True, format_output: str = "tabl
 
         include_size_uptime = available_width >= 100
 
-        if available_width >= 140:
+        compact = terminal_width < 75
+        if compact:
+            table.add_column("Name", ratio=3, overflow="fold")
+            table.add_column("State", width=10, overflow="fold")
+            table.add_column("Image", ratio=3, overflow="fold")
+        elif available_width >= 140:
             table.add_column("Nr", style="bold blue", width=4, overflow="fold")
             table.add_column("ID", style="cyan", width=12, overflow="fold")
             table.add_column("Name", style="green", width=min(25, int(available_width * 0.15)), overflow="fold")
@@ -88,6 +93,9 @@ def list_containers(host: Any, show_all: bool = True, format_output: str = "tabl
         for idx, container in enumerate(containers, start=1):
             status_color = "green" if container.status == "running" else "red" if container.status == "exited" else "yellow"
             status = f"[{status_color}]{container.status}[/{status_color}]"
+            if compact:
+                table.add_row(container.name, status, container_image_label(container.attrs))
+                continue
             ports = format_ports(container.ports)
             row_data = [
                 str(idx),

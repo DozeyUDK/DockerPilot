@@ -32,6 +32,7 @@ class ArgumentSpec:
     is_bool: bool = False
     bool_flag_value: bool = True
     multiple: bool = False
+    negative_flag: Optional[str] = None
 
     @property
     def primary_flag(self) -> Optional[str]:
@@ -85,6 +86,14 @@ _CONTAINER_ACTIONS_BY_STATE = {
     "created": {"start"},
     "exited": {"start"},
     "paused": {"resume"},
+}
+
+
+_CONFIRM_REMOVAL = {
+    ("container", "remove"),
+    ("container", "remove-image"),
+    ("container", "stop-remove"),
+    ("container", "prune-images"),
 }
 
 
@@ -163,7 +172,10 @@ def collect_argument_specs(
 
         positional = not action.option_strings
         default = _default_value(action)
-        is_bool = _is_store_true_action(action) or _is_store_false_action(action)
+        negative_flag = next(
+            (flag for flag in action.option_strings if flag.startswith("--no-")), None
+        ) if isinstance(action, argparse.BooleanOptionalAction) else None
+        is_bool = negative_flag is not None or _is_store_true_action(action) or _is_store_false_action(action)
         bool_flag_value = not _is_store_false_action(action)
         multiple = _is_append_action(action) or action.nargs in ("*", "+")
         choices = tuple(str(choice) for choice in action.choices) if action.choices else ()
@@ -193,6 +205,7 @@ def collect_argument_specs(
                 is_bool=is_bool,
                 bool_flag_value=bool_flag_value,
                 multiple=multiple,
+                negative_flag=negative_flag,
             )
         )
 
@@ -279,7 +292,9 @@ def serialize_argument_values(arguments: List[ArgumentSpec], values: Dict[str, A
 
         if spec.is_bool:
             normalized = bool(value)
-            if _should_emit_bool(spec, normalized) and spec.primary_flag:
+            if spec.negative_flag and not normalized:
+                argv.append(spec.negative_flag)
+            elif _should_emit_bool(spec, normalized) and spec.primary_flag:
                 argv.append(spec.primary_flag)
             continue
 
@@ -291,7 +306,10 @@ def serialize_argument_values(arguments: List[ArgumentSpec], values: Dict[str, A
                 argv.extend(items)
             elif spec.primary_flag:
                 for item in items:
-                    argv.extend([spec.primary_flag, item])
+                    if item.startswith("-") and spec.primary_flag.startswith("--"):
+                        argv.append(f"{spec.primary_flag}={item}")
+                    else:
+                        argv.extend([spec.primary_flag, item])
             continue
 
         if isinstance(value, list):
@@ -308,7 +326,10 @@ def serialize_argument_values(arguments: List[ArgumentSpec], values: Dict[str, A
         if spec.positional:
             argv.append(normalized)
         elif spec.primary_flag:
-            argv.extend([spec.primary_flag, normalized])
+            if normalized.startswith("-") and spec.primary_flag.startswith("--"):
+                argv.append(f"{spec.primary_flag}={normalized}")
+            else:
+                argv.extend([spec.primary_flag, normalized])
 
     return argv
 
@@ -376,7 +397,8 @@ def format_image_targets(image_rows: List[Dict[str, Any]]) -> List[Tuple[str, st
     seen: Set[str] = set()
 
     for row in image_rows:
-        for tag in row.get("tags") or []:
+        image_id = row.get("id")
+        for tag in row.get("tags") or ([image_id] if image_id else []):
             if tag in seen:
                 continue
             seen.add(tag)
@@ -409,6 +431,10 @@ _COMMAND_LABELS = {
     ("container", "run"): "Create container",
     ("container", "list"): "List containers",
     ("container", "logs"): "View logs",
+    ("container", "remove-image"): "Remove images",
+    ("container", "prune-images"): "Prune dangling images",
+    ("container", "stop-remove"): "Stop and remove",
+    ("container", "unpause"): "Resume",
     ("monitor",): "Monitoring",
     ("monitor", "dashboard"): "Live dashboard",
     ("monitor", "live"): "Watch container",
@@ -452,7 +478,7 @@ def capture_cli_execution(
             capture_console = Console(file=buffer, force_terminal=False, width=width)
 
     console_targets: List[Any] = [pilot]
-    for attr in ("container_manager", "image_manager", "monitoring_manager"):
+    for attr in ("container_manager", "image_manager", "monitoring_manager", "alert_service"):
         target = getattr(pilot, attr, None)
         if target is not None:
             console_targets.append(target)
@@ -468,13 +494,13 @@ def capture_cli_execution(
     logger = getattr(pilot, "logger", None)
     if logger is not None:
         for handler in getattr(logger, "handlers", []):
-            if isinstance(handler, logging.StreamHandler):
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
                 original_logger_streams.append((handler, handler.stream))
                 handler.stream = buffer
 
     try:
         with redirect_stdout(buffer), redirect_stderr(buffer):
-            return_code = execute_cli_argv(pilot, parser, argv)
+            return_code = execute_cli_argv(pilot, parser, argv, interactive=False)
     finally:
         for handler, stream in original_logger_streams:
             handler.stream = stream
@@ -511,7 +537,8 @@ if TEXTUAL_AVAILABLE:
             background: $background 65%;
         }
         ConfirmContainerAction > Vertical {
-            width: 48;
+            width: 56;
+            max-width: 95%;
             height: auto;
             padding: 1 2;
             border: round $warning;
@@ -524,14 +551,14 @@ if TEXTUAL_AVAILABLE:
         """
         BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-        def __init__(self, label: str, name: str) -> None:
+        def __init__(self, label: str, name: str, *, question: Optional[str] = None) -> None:
             super().__init__()
             self.label = label
-            self.container_name = name
+            self.question = question or f"{label} {name}?"
 
         def compose(self) -> ComposeResult:
             with Vertical():
-                yield Static(Text(f"{self.label} {self.container_name}?"))
+                yield Static(Text(self.question))
                 with Horizontal():
                     yield Button("Cancel", id="cancel")
                     yield Button(self.label, id="confirm", variant="warning")
@@ -544,7 +571,7 @@ if TEXTUAL_AVAILABLE:
             self.dismiss(event.button.id == "confirm")
 
 
-    class ResourceMultiSelector(Vertical):
+    class ResourceMultiSelector(VerticalScroll):
         """Simple checkbox-backed multi selector with reliable mouse interaction."""
 
         def __init__(
@@ -699,7 +726,21 @@ if TEXTUAL_AVAILABLE:
 
         .arg-help {
             color: $text-muted;
-            margin-bottom: 1;
+        }
+
+        .arg-row Input, .arg-row Select {
+            max-width: 72;
+        }
+
+        .arg-row > Checkbox {
+            height: auto;
+            max-width: 100%;
+            border: none;
+            padding: 0;
+        }
+
+        .arg-row SelectCurrent {
+            padding: 0 1;
         }
 
         .resource-selector {
@@ -719,7 +760,8 @@ if TEXTUAL_AVAILABLE:
         }
 
         .multi-input {
-            height: 6;
+            height: 4;
+            max-width: 88;
         }
 
         #command-form {
@@ -727,19 +769,20 @@ if TEXTUAL_AVAILABLE:
         }
 
         #form-scroll {
-            height: 1fr;
-            border: round $surface;
+            height: auto;
+            max-height: 38%;
             padding: 0 1;
         }
 
         #preview {
-            height: 2;
+            height: auto;
+            max-height: 2;
             color: $text-muted;
             padding: 0 1;
         }
 
         #results {
-            height: 25%;
+            height: 1fr;
             border: round $primary;
         }
 
@@ -749,11 +792,14 @@ if TEXTUAL_AVAILABLE:
 
         #button-row Button {
             min-width: 0;
+            height: 1;
+            border: none;
             padding: 0 1;
+            margin-right: 1;
         }
 
         #run-command {
-            width: 18;
+            width: auto;
         }
 
         #status {
@@ -784,6 +830,7 @@ if TEXTUAL_AVAILABLE:
             self.selected_command: Optional[CommandNode] = None
             self.command_widgets: Dict[str, Any] = {}
             self.command_drafts: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+            self.command_result_path: Optional[Tuple[str, ...]] = None
             self.selector_specs: Dict[str, ResourceSelectorSpec] = {}
             self.available_targets: Dict[str, List[Tuple[str, str]]] = {"container": [], "image": []}
             self.container_rows: Dict[str, Dict[str, Any]] = {}
@@ -825,11 +872,12 @@ if TEXTUAL_AVAILABLE:
                         with VerticalScroll(id="form-scroll"):
                             yield Vertical(id="command-form")
                         yield Static("", id="preview")
-                        yield RichLog(id="results", wrap=False, highlight=False, markup=False)
                         with Horizontal(id="button-row"):
                             yield Button("Run", id="run-command", variant="success", disabled=True)
                             yield Button("Clear output", id="clear-output")
                             yield Button("Refresh", id="refresh-targets", tooltip="Reload Docker containers and images")
+                        yield Static("", id="command-result-hint")
+                        yield RichLog(id="results", wrap=False, highlight=False, markup=False, auto_scroll=False, min_width=1, classes="hidden")
                     yield Static("", id="status")
             yield Footer()
 
@@ -1036,6 +1084,9 @@ if TEXTUAL_AVAILABLE:
             run_button = self.query_one("#run-command", Button)
             run_button.label = "Run"
             self.selected_command = command
+            if previous_command is not command and not (self._command_running or self._targets_refreshing):
+                self.query_one("#status", Static).update("")
+            self._show_command_result()
             self.query_one("#command-view").set_class(command is None, "hidden")
             self.query_one("#container-view").set_class(command is not None, "hidden")
             self.refresh_bindings()
@@ -1049,25 +1100,22 @@ if TEXTUAL_AVAILABLE:
             if should_launch_in_external_terminal(command):
                 run_button.label = "Open terminal"
                 description = _TERMINAL_HELP[command.path]
-            help_text.update(description if command.arguments else "")
+            help_text.update(description)
             run_button.disabled = self._controls_busy() or not command.is_leaf
 
             if not command.is_leaf:
-                await container.mount(Static("This group has subcommands. Pick one from the tree.", classes="arg-help"))
+                help_text.update("Choose a subcommand from the menu.")
                 self._refresh_preview()
                 return
 
-            if not command.arguments:
-                await container.mount(Static("This command has no command-specific arguments.", classes="arg-help"))
-            else:
-                for argument in command.arguments:
-                    await self._mount_argument_widget(
-                        container,
-                        argument,
-                        self.command_widgets,
-                        command,
-                        values,
-                    )
+            for argument in sorted(command.arguments, key=lambda spec: not should_tui_require_value(command, spec)):
+                await self._mount_argument_widget(
+                    container,
+                    argument,
+                    self.command_widgets,
+                    command,
+                    values,
+                )
 
             if previous_command is not command:
                 self.query_one("#form-scroll", VerticalScroll).scroll_home(animate=False)
@@ -1087,10 +1135,13 @@ if TEXTUAL_AVAILABLE:
                 label_text = f"{label_text} *"
 
             await container.mount(row)
-            await row.mount(Label(label_text))
+            if not argument.is_bool:
+                await row.mount(Label(Text(label_text)))
 
             value = (values or {}).get(argument.dest, argument.default)
-            default_value = "" if value in (None, False) else str(value)
+            if command and command.path == ("container", "prune-images") and argument.dest == "dry_run":
+                value = (values or {}).get(argument.dest, True)
+            default_value = "" if value is None else str(value)
 
             selector_spec = infer_resource_selector(command, argument) if command else None
 
@@ -1115,16 +1166,13 @@ if TEXTUAL_AVAILABLE:
                             selected_values,
                             classes="resource-selector",
                         )
-                        # Keep multi-selectors in the parent form scroll instead of
-                        # nesting another scrolling viewport. One row per checkbox
-                        # makes the target list reliably visible and clickable.
-                        widget.styles.height = max(1, len(entries)) + 2
+                        widget.styles.height = selector_height(len(entries) + 1)
                 else:
                     widget = TextArea(
                         self._textarea_value(value), language=None, classes="multi-input"
                     )
             elif argument.is_bool:
-                widget = Checkbox(argument.help_text or "Enable this option", value=bool(value))
+                widget = Checkbox(Text(argument.help_text or argument.label), value=bool(value))
             elif argument.choices:
                 options = [(choice, choice) for choice in argument.choices]
                 select_value = str(value) if str(value) in argument.choices else Select.BLANK
@@ -1157,15 +1205,15 @@ if TEXTUAL_AVAILABLE:
                     selector_hint = "Choose one item from the live Docker list."
                 await row.mount(Static(selector_hint, classes="arg-help"))
 
-            if argument.help_text:
-                await row.mount(Static(argument.help_text, classes="arg-help"))
+            if argument.help_text and not argument.is_bool and not selector_spec:
+                await row.mount(Static(Text(argument.help_text), classes="arg-help"))
 
         async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
             await self._render_command_form(event.node.data)
 
         def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
             if action == "run_selected":
-                return self.selected_command is not None
+                return bool(self.selected_command and self.selected_command.is_leaf)
             if action == "find_container":
                 return self.selected_command is None and not self._controls_busy()
             if action == "close_container_filter":
@@ -1285,9 +1333,13 @@ if TEXTUAL_AVAILABLE:
             )
 
         def _refresh_preview(self) -> None:
-            preview = self.query_one("#preview", Static)
+            # A queued field change can arrive after a confirmation screen opens.
+            previews = self.query("#preview")
+            if not previews:
+                return
+            preview = previews.first(Static)
             if not self.selected_command or not self.selected_command.is_leaf:
-                preview.update("Command preview will appear here.")
+                preview.update("")
                 return
 
             try:
@@ -1300,7 +1352,7 @@ if TEXTUAL_AVAILABLE:
             except ValueError as exc:
                 preview.update(Text(f"Command preview error: {exc}"))
                 return
-            preview.update(Text(f"$ dockerpilot {' '.join(shlex.quote(part) for part in argv)}"))
+            preview.update(Text(f"$ dockerpilot {shlex.join(argv)}"))
 
         def _validate_required_arguments(self) -> Tuple[bool, str]:
             if not self.selected_command or not self.selected_command.is_leaf:
@@ -1319,7 +1371,7 @@ if TEXTUAL_AVAILABLE:
                         selector_spec
                         and selector_spec.mode == "single"
                         and isinstance(self.command_widgets.get(spec.dest), TextArea)
-                        and len(self._selector_values(value)) > 1
+                        and len(split_multi_value(value)) > 1
                     ):
                         return False, f"Select only one value for {spec.label}."
                     if isinstance(value, list) and not value:
@@ -1340,6 +1392,30 @@ if TEXTUAL_AVAILABLE:
             return True, ""
 
         def action_run_selected(self) -> None:
+            command = self.selected_command
+            if command is None or self._controls_busy():
+                return
+            valid, message = self._validate_required_arguments()
+            if not valid:
+                self.query_one("#status", Static).update(Text(message))
+                return
+            if command.path in _CONFIRM_REMOVAL:
+                values = self._values_from_widgets(self.command_widgets)
+                if not values.get("dry_run"):
+                    targets = self._selector_values(values.get("name"))
+                    shown = ", ".join(targets[:3])
+                    if len(targets) > 3:
+                        shown += f" and {len(targets) - 3} more"
+                    question = f"{command_label(command)}: {shown}?" if shown else "Remove all dangling images?"
+                    if values.get("force"):
+                        question += "\nForce removal is enabled."
+
+                    def confirm(confirmed: Optional[bool]) -> None:
+                        if confirmed and self.selected_command is command:
+                            self._start_run()
+
+                    self.push_screen(ConfirmContainerAction("Remove", "", question=question), confirm)
+                    return
             self._start_run()
 
         async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1347,9 +1423,11 @@ if TEXTUAL_AVAILABLE:
             if button_id.startswith("container-action-"):
                 self._request_container_action(button_id.removeprefix("container-action-"))
             elif button_id == "run-command":
-                self._start_run()
+                self.action_run_selected()
             elif button_id == "clear-output":
                 self.query_one("#results", RichLog).clear()
+                self.command_result_path = None
+                self._show_command_result()
                 self.query_one("#status", Static).update("Output panel cleared.")
             elif button_id in {"refresh-targets", "refresh-containers"}:
                 await self._refresh_targets()
@@ -1416,6 +1494,14 @@ if TEXTUAL_AVAILABLE:
                 return
             self.exit(None)
 
+        def _show_command_result(self) -> None:
+            command = self.selected_command
+            has_result = bool(command and command.path == self.command_result_path)
+            self.query_one("#results", RichLog).set_class(not has_result, "hidden")
+            hint = self.query_one("#command-result-hint", Static)
+            hint.set_class(has_result or not (command and command.is_leaf), "hidden")
+            hint.update("Run to see output here.")
+
         def _append_result_block(self, results: RichLog, command_text: str, return_code: Optional[int], output: str) -> None:
             """Append a command result block to the output panel."""
             results.write(f"$ dockerpilot {command_text}")
@@ -1463,17 +1549,20 @@ if TEXTUAL_AVAILABLE:
                     global_arguments=self.global_arguments,
                     global_values=self.global_values,
                 )
-                command_text = " ".join(shlex.quote(part) for part in argv)
+                command_text = shlex.join(argv)
 
                 if should_launch_in_external_terminal(executed_command):
                     self._run_in_terminal(argv, status)
                     return
 
+                results.clear()
                 if container_action:
-                    results.clear()
                     results.remove_class("hidden")
-                status.update(f"Running inside TUI: dockerpilot {command_text}")
-                panel_width = max(60, results.size.width or results.content_size.width or 120)
+                else:
+                    self.command_result_path = executed_command.path
+                    self._show_command_result()
+                status.update(Text(f"Running: {command_label(executed_command)}"))
+                panel_width = max(12, min(160, self.query_one("#details").content_size.width - 3))
                 return_code, output = await asyncio.to_thread(
                     capture_cli_execution,
                     self.pilot_instance,
@@ -1485,6 +1574,8 @@ if TEXTUAL_AVAILABLE:
                     results.write(output.rstrip())
                 else:
                     self._append_result_block(results, command_text, return_code, output)
+                if not container_action and self.selected_command is executed_command:
+                    results.scroll_home(animate=False)
 
                 refresh_message = None
                 if should_refresh_targets_after_command(executed_command, command_values):
@@ -1494,12 +1585,12 @@ if TEXTUAL_AVAILABLE:
                         refresh_message = f"Could not refresh Docker targets: {exc}"
 
                 if return_code == 0:
-                    completion_message = "Command completed inside TUI."
+                    completion_message = f"{command_label(executed_command)} · Command completed inside TUI."
                     if refresh_message:
                         completion_message = f"{completion_message} {refresh_message}"
                     status.update(completion_message)
                 else:
-                    completion_message = f"Command finished with exit status {return_code}."
+                    completion_message = f"{command_label(executed_command)} · Command finished with exit status {return_code}."
                     if refresh_message:
                         completion_message = f"{completion_message} {refresh_message}"
                     status.update(completion_message)
@@ -1532,12 +1623,14 @@ if TEXTUAL_AVAILABLE:
                 self.exit(TuiCommandHandoff(argv=argv))
 
 
-def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str]) -> int:
+def execute_cli_argv(pilot, parser: argparse.ArgumentParser, argv: List[str], *, interactive: bool = True) -> int:
     """Execute argv through the same CLI dispatcher used by the regular command."""
     from .handlers import dispatch_cli_args
 
     try:
         args = parser.parse_args(argv)
+        if not interactive:
+            args._interactive_terminal = False
         dispatch_cli_args(pilot, args, parser)
         return 0
     except SystemExit as exc:
@@ -1566,7 +1659,11 @@ def run_tui(
         )
         sys.exit(1)
 
-    active_parser = parser or argparse.ArgumentParser()
+    if parser is None:
+        from .parser import build_cli_parser
+
+        parser = build_cli_parser()
+    active_parser = parser
     while True:
         result = DockerPilotTUI(active_parser, pilot, global_values=global_values).run()
         if not isinstance(result, TuiCommandHandoff):

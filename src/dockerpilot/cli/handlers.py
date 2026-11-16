@@ -154,6 +154,8 @@ def handle_container_cli(pilot, args):
             kwargs['timeout'] = args.timeout
         if hasattr(args, 'force'):
             kwargs['force'] = args.force
+            if not getattr(args, '_interactive_terminal', True):
+                kwargs['interactive'] = False
 
         all_success = True
         for container in containers:
@@ -183,7 +185,8 @@ def handle_container_cli(pilot, args):
     elif args.container_action == 'logs':
         tail = args.tail if hasattr(args, 'tail') else 50
         if args.name:
-            pilot.view_container_logs(args.name, tail)
+            if pilot.view_container_logs(args.name, tail) is False:
+                sys.exit(1)
         else:
             pilot.view_container_logs(None, tail)
 
