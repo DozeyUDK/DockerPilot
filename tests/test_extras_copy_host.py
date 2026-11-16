@@ -76,7 +76,7 @@ def test_plan_and_copy_only_create_then_explicitly_start(copy_host):
     progress.begin_finalization.assert_called_once_with()
     create = commands[-1]
     assert create[0] == "create"
-    assert "--restart" not in create and "-v" not in create and "-d" not in create
+    assert "--restart" not in create and "-v" not in create and "--mount" not in create and "-d" not in create
     assert ["-p", "127.0.0.1:1053:53/udp"] == create[create.index("-p"):][:2]
     assert create[create.index("--user") + 1] == "1000"
     assert create[-1] == IMAGE
@@ -109,22 +109,39 @@ def test_copy_preserves_source_security_restrictions(copy_host):
     assert [create[index + 1] for index, arg in enumerate(create) if arg == "--cap-drop"] == ["ALL", "NET_RAW"]
 
 
+@pytest.mark.parametrize("include_data", [False, True])
 @pytest.mark.parametrize(("mount_options", "suffix"), [
     ({"Mode": "", "RW": False}, ":ro"),
     ({"Mode": "", "RW": True}, ""),
     ({"Mode": "ro"}, ":ro"),
 ])
-def test_copy_named_volumes_use_fresh_destination_names(copy_host, mount_options, suffix):
+def test_copy_named_volumes_use_fresh_destination_names(copy_host, mount_options, suffix, include_data):
     resource, source, commands, _ = copy_host
-    source.status = "exited"
-    source.attrs["Mounts"] = [{"Type": "volume", "Name": "source-data", "Source": "/data", "Destination": "/data", **mount_options}]
-    config = resource._copy_configuration(source, TARGET, True)
+    if include_data:
+        source.status = "exited"
+    source.attrs["HostConfig"]["ReadonlyRootfs"] = True
+    source.attrs["Mounts"] = [
+        {"Type": "volume", "Name": "source-data", "Source": "/data", "Destination": "/data", **mount_options}
+    ]
+    config = resource._copy_configuration(source, TARGET, include_data)
     transfer = resource._migrate_mount_data_between_servers = Mock(return_value={"total_migrated": 1})
-    resource._create_stopped_copy(source, TARGET, config, True, IMAGE, "target-engine", Mock(), Mock(), Mock())
-    mount = transfer.call_args.args[1]["mounts"][0]
-    assert mount["name"] == "source-data"
-    assert mount["copy_target_volume"].startswith("dockerpilot-copy-")
-    assert commands[-1][commands[-1].index("-v") + 1] == mount["copy_target_volume"] + ":/data" + suffix
+    resource._create_stopped_copy(
+        source, TARGET, config, include_data, IMAGE, "target-engine", Mock(), Mock(), Mock()
+    )
+    create = commands[-1]
+    assert "--read-only" in create
+    _, source_arg, destination, no_copy, *mode = create[create.index("--mount") + 1].split(",")
+    assert destination == "target=/data"
+    assert no_copy == "volume-nocopy"
+    assert mode == (["readonly"] if suffix else [])
+    assert source_arg.startswith("source=dockerpilot-copy-")
+    if include_data:
+        mount = transfer.call_args.args[1]["mounts"][0]
+        assert mount["name"] == "source-data"
+        assert source_arg == "source=" + mount["copy_target_volume"]
+    else:
+        transfer.assert_not_called()
+        source.reload.assert_not_called()
 
 
 @pytest.mark.parametrize("include_data", [False, True])

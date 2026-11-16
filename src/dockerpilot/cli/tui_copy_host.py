@@ -168,7 +168,7 @@ class CopyHostScreen(ModalScreen[None]):
                          f"Image: {plan['image']}", f"Network: {plan['network']}",
                          "Ports: " + (", ".join(plan["ports"]) or "None")]
                 for mount in plan["mounts"]:
-                    if mount["type"] == "tmpfs":
+                    if mount["type"] in {"tmpfs", "volume"} and not mount["copy"]:
                         state = "recreate empty"
                     else:
                         state = "copy data" if mount["copy"] else "omit source data"

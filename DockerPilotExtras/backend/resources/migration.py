@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
@@ -228,20 +230,24 @@ def create_migration_resource(
             check_cancel()
             if operation_context is not None:
                 operation_context.begin_finalization()
-            mounts = [mount for mount in config["mounts"] if include_data and mount["type"] == "volume"]
+            mounts = [mount.copy() for mount in config["mounts"] if mount["type"] == "volume"]
             config["volumes"] = {}
-            if mounts:
+            config["copy_volume_mounts"] = []
+            destination_volumes = {}
+            for mount in mounts:
+                name = mount["name"]
+                if name not in destination_volumes:
+                    destination_volumes[name] = "dockerpilot-copy-" + uuid.uuid4().hex
+                volume = destination_volumes[name]
+                mount["copy_target_volume"] = volume
+                read_only = mount["rw"] is False or (
+                    mount["rw"] is None and "ro" in mount["mode"].split(",")
+                )
+                config["copy_volume_mounts"].append((volume, mount["destination"], read_only))
+            if include_data and mounts:
                 source.reload()
                 if source.status not in {"created", "exited"}:
                     raise ValueError("Source must remain stopped while copying volume data.")
-                for mount in mounts:
-                    mount["copy_target_volume"] = "dockerpilot-copy-" + uuid.uuid4().hex
-                    read_only = mount["rw"] is False or (
-                        mount["rw"] is None and "ro" in mount["mode"].split(",")
-                    )
-                    config["volumes"][mount["copy_target_volume"]] = (
-                        mount["destination"] + (":ro" if read_only else "")
-                    )
                 summary = self._migrate_mount_data_between_servers(
                     source.name, {**config, "mounts": mounts}, None, target, check_cancel, update_progress
                 )
@@ -3001,6 +3007,13 @@ def create_migration_resource(
                     cmd_parts.extend(["--user", config["copy_user"]])
                 if config.get("copy_workdir"):
                     cmd_parts.extend(["--workdir", config["copy_workdir"]])
+                for volume, destination, read_only in config.get("copy_volume_mounts", []):
+                    options = ["type=volume", f"source={volume}", f"target={destination}", "volume-nocopy"]
+                    if read_only:
+                        options.append("readonly")
+                    mount_arg = io.StringIO()
+                    csv.writer(mount_arg).writerow(options)
+                    cmd_parts.extend(["--mount", mount_arg.getvalue().removesuffix("\r\n")])
                 for binding in config["copy_ports"]:
                     cmd_parts.extend(["-p", binding])
 
