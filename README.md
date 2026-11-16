@@ -272,6 +272,8 @@ dockerpilot deploy init --output deployment.yml
 
 The TUI opens on **Containers**. Press Ctrl+F to filter by name, image, state, or ID and Esc to clear the filter. Click a row or press Enter to select a container, then use **Logs**, **Stats**, **Shell**, or the available lifecycle actions. The selection stays active as you switch actions. **Container commands** has the full forms for tasks such as operating on multiple containers. **Open terminal** starts the live dashboard or single-container monitoring from the monitoring forms. Exit a shell or press Ctrl+C in a live monitor to return. Set global options at launch with `dockerpilot --config PATH --log-level DEBUG tui`.
 
+**Copy to host…** copies the selected container through DockerPilot Extras. Run Extras on the same Docker engine as the TUI, register the destination in **Extras → Servers**, then select the host and check the plan. The TUI defaults to `http://127.0.0.1:5000`. Set `DOCKERPILOT_EXTRAS_URL` if Extras uses a different loopback port or an HTTPS origin. The copy is created stopped and can be started separately from the result screen. The source stays in its current state and a destination with the same name blocks the copy. Named volume data is optional and requires an already stopped source. Bind mounts and restart policies are omitted. The action copies one container, including when it belongs to a Compose project.
+
 Classic CLI deployment commands use the current process's Docker permissions and the legacy deployment configuration format. They do not automatically use the Secure Deploy broker. See [Quick Deploy](docs/quick-deploy.md) for the classic deployment workflow.
 
 ## Documentation

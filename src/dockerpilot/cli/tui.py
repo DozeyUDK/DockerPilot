@@ -710,6 +710,8 @@ if TEXTUAL_AVAILABLE:
             margin: 0 1 1 0;
         }
 
+        .copy-host-action { height: 1; min-width: 0; border: none; }
+
         #container-results {
             height: 40%;
             border: round $primary;
@@ -865,6 +867,7 @@ if TEXTUAL_AVAILABLE:
                                         id=f"container-action-{action}",
                                         disabled=True,
                                     )
+                        yield Button("Copy to host…", id="copy-container-to-host", disabled=True, classes="copy-host-action")
                         yield RichLog(id="container-results", wrap=True, markup=False, classes="hidden")
                     with Vertical(id="command-view", classes="hidden"):
                         yield Static("Select a command", id="selected-command")
@@ -1422,6 +1425,19 @@ if TEXTUAL_AVAILABLE:
             button_id = event.button.id or ""
             if button_id.startswith("container-action-"):
                 self._request_container_action(button_id.removeprefix("container-action-"))
+            elif button_id == "copy-container-to-host":
+                if self._controls_busy() or self.selected_container_id is None:
+                    return
+                from .tui_copy_host import CopyHostScreen
+
+                row = self.container_rows[self.selected_container_id]
+                try:
+                    engine = await asyncio.to_thread(self.pilot_instance.client.info)
+                    engine_id = engine["ID"]
+                except Exception:
+                    self.query_one("#status", Static).update("Could not identify the local Docker engine.")
+                    return
+                self.push_screen(CopyHostScreen(row["name"], row["id"], engine_id))
             elif button_id == "run-command":
                 self.action_run_selected()
             elif button_id == "clear-output":
@@ -1447,6 +1463,8 @@ if TEXTUAL_AVAILABLE:
             self.query_one("#container-filter", Input).disabled = busy
             self.query_one("#container-table", DataTable).disabled = busy
             self.refresh_bindings()
+            selected = self.container_rows.get(self.selected_container_id, {})
+            self.query_one("#copy-container-to-host", Button).disabled = busy or not (selected.get("id") and selected.get("name"))
             for action in _CONTAINER_ACTIONS:
                 button = self.query_one(f"#container-action-{action}", Button)
                 button.disabled = busy or not self._container_action_available(action)

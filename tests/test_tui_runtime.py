@@ -914,3 +914,55 @@ def test_destructive_form_uses_confirmation_and_prune_defaults_to_preview(monkey
             assert len(dispatched) == 1
 
     asyncio.run(scenario())
+
+
+def test_copy_host_shows_plan_and_starts_only_on_request(monkeypatch):
+    from dockerpilot.cli.tui_copy_host import CopyHostScreen
+
+    requests = []
+
+    async def fake_request(_, method, path, payload=None):
+        requests.append((method, path, payload))
+        if path == "/api/auth/status":
+            return {}
+        if path == "/api/servers":
+            return {"servers": [{"id": "node", "name": "DozeyNode"}]}
+        if path.endswith("/copy-plan"):
+            return {"container": "web", "target": "DozeyNode", "image": "demo", "network": "bridge",
+                    "ports": [], "mounts": []}
+        if method == "POST":
+            return {"migration_id": "one"}
+        return {"job": {"status": "completed", "progress": 100, "message": "Done",
+                        "metadata": {"created_container_id": "b" * 64}}}
+
+    monkeypatch.setattr(CopyHostScreen, "request", fake_request)
+
+    async def scenario():
+        backend = FakePilot()
+        backend.containers[0]["id"] = "a" * 12
+        backend.client = SimpleNamespace(info=lambda: {"ID": "source-engine"})
+        app = tui.DockerPilotTUI(build_cli_parser(), backend)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await ready(app, pilot)
+            await pilot.press("enter")
+            await pilot.click("#copy-container-to-host")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, CopyHostScreen)
+            screen.query_one("#copy-host", Select).value = "node"
+            await pilot.pause()
+            await pilot.click("#copy-check")
+            await pilot.pause()
+            assert "DozeyNode" in str(screen.query_one("#copy-plan", Static).render())
+            await pilot.click("#copy-submit")
+            await pilot.pause()
+            assert screen.query_one("#copy-start").display
+            assert not any(path.endswith("/start-copy") for _, path, _ in requests)
+            payload = next(payload for method, path, payload in requests if method == "POST" and path.endswith("/migrations"))
+            assert payload["source_container_id"] == "a" * 12
+            assert payload["copy_only"] and not payload["stop_source"]
+            await pilot.click("#copy-start")
+            await pilot.pause()
+            assert requests[-1][1].endswith("/start-copy")
+
+    asyncio.run(scenario())
