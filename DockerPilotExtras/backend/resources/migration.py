@@ -139,7 +139,10 @@ def create_migration_resource(
                 "mounts": [
                     {"destination": m["destination"], "type": m["type"],
                      "copy": include_data and m["type"] == "volume"}
-                    for m in config["mounts"]
+                    for m in config["mounts"] if m["type"] != "tmpfs"
+                ] + [
+                    {"destination": destination, "type": "tmpfs", "copy": False}
+                    for destination in config["copy_tmpfs"]
                 ],
                 "compose_project": (source.attrs.get("Config", {}).get("Labels") or {}).get("com.docker.compose.project"),
             }
@@ -159,6 +162,13 @@ def create_migration_resource(
                 raise ValueError("Containers with host privileges, device mappings or custom security options require manual deployment.")
             if any(m.get("type") == "volume" and not m.get("name") for m in config["mounts"]):
                 raise ValueError("A source volume has no Docker volume name.")
+            tmpfs = host_config.get("Tmpfs") or {}
+            if any(mount.get("Type") == "tmpfs" for mount in (host_config.get("Mounts") or [])) or any(
+                mount["type"] == "tmpfs" and mount["destination"] not in tmpfs
+                for mount in config["mounts"]
+            ):
+                raise ValueError("Tmpfs mounts that cannot be restored from HostConfig.Tmpfs require manual deployment.")
+            config["copy_tmpfs"] = tmpfs
             named_volumes = [m["name"] for m in config["mounts"] if m["type"] == "volume"]
             if include_data and named_volumes:
                 if source.status not in {"created", "exited"}:
@@ -2982,6 +2992,9 @@ def create_migration_resource(
             if create_only:
                 if config.get("copy_read_only_rootfs"):
                     cmd_parts.append("--read-only")
+                for destination, options in config.get("copy_tmpfs", {}).items():
+                    mount_arg = f"{destination}:{options}" if options else destination
+                    cmd_parts.extend(["--tmpfs", mount_arg])
                 for capability in config.get("copy_cap_drop", []):
                     cmd_parts.extend(["--cap-drop", capability])
                 if config.get("copy_user"):

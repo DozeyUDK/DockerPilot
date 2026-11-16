@@ -168,7 +168,10 @@ class CopyHostScreen(ModalScreen[None]):
                          f"Image: {plan['image']}", f"Network: {plan['network']}",
                          "Ports: " + (", ".join(plan["ports"]) or "None")]
                 for mount in plan["mounts"]:
-                    state = "copy data" if mount["copy"] else "omit source data"
+                    if mount["type"] == "tmpfs":
+                        state = "recreate empty"
+                    else:
+                        state = "copy data" if mount["copy"] else "omit source data"
                     lines.append(f"{mount['destination']} ({mount['type']}): {state}")
                 if plan.get("compose_project"):
                     lines.append(f"Compose project: {plan['compose_project']} (single container)")

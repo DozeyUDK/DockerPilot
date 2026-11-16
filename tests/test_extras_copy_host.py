@@ -125,3 +125,40 @@ def test_copy_named_volumes_use_fresh_destination_names(copy_host, mount_options
     assert mount["name"] == "source-data"
     assert mount["copy_target_volume"].startswith("dockerpilot-copy-")
     assert commands[-1][commands[-1].index("-v") + 1] == mount["copy_target_volume"] + ":/data" + suffix
+
+
+@pytest.mark.parametrize("include_data", [False, True])
+def test_copy_recreates_tmpfs_with_original_options(copy_host, include_data):
+    resource, source, commands, _ = copy_host
+    source.attrs["HostConfig"].update(
+        ReadonlyRootfs=True, Tmpfs={"/tmp": "rw,noexec,nosuid,size=64m", "/run": ""}
+    )
+    source.attrs["Mounts"].append({"Type": "tmpfs", "Destination": "/tmp"})
+    payload = {**PAYLOAD, "include_data": include_data}
+    plan = resource.copy_plan(payload)
+    assert [mount["destination"] for mount in plan["mounts"] if mount["type"] == "tmpfs"] == ["/tmp", "/run"]
+
+    config = resource._copy_configuration(source, TARGET, include_data)
+    resource._migrate_mount_data_between_servers = transfer = Mock()
+    resource._create_stopped_copy(
+        source, TARGET, config, include_data, IMAGE, "target-engine", Mock(), Mock(), Mock()
+    )
+    create = commands[-1]
+    assert "--read-only" in create
+    assert [create[i + 1] for i, arg in enumerate(create) if arg == "--tmpfs"] == [
+        "/tmp:rw,noexec,nosuid,size=64m", "/run"
+    ]
+    transfer.assert_not_called()
+
+
+@pytest.mark.parametrize("inspect_field", ["HostConfig", "Mounts"])
+def test_copy_refuses_tmpfs_without_replayable_configuration(copy_host, inspect_field):
+    resource, source, commands, _ = copy_host
+    mount = {"Type": "tmpfs", "Target": "/tmp", "Destination": "/tmp"}
+    if inspect_field == "HostConfig":
+        source.attrs["HostConfig"]["Mounts"] = [mount]
+    else:
+        source.attrs["Mounts"].append(mount)
+    with pytest.raises(ValueError, match="require manual deployment"):
+        resource.copy_plan(PAYLOAD)
+    assert not any(cmd[0] == "create" for cmd in commands)
