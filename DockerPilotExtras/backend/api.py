@@ -122,6 +122,8 @@ def register_api_routes(
     ContainerMigrationJob,
     MigrationProgress,
     CancelMigration,
+    ContainerCopyPlan=None,
+    ContainerCopyStart=None,
     SecureDeployDrafts=None,
     SecureDeployDraftDetail=None,
     SecureDeployValidate=None,
@@ -192,6 +194,9 @@ def register_api_routes(
         ContainerMigrationJob,
         "/api/containers/migrations/<string:migration_id>",
     )
+    if ContainerCopyPlan is not None:
+        api.add_resource(ContainerCopyPlan, "/api/containers/copy-plan")
+        api.add_resource(ContainerCopyStart, "/api/containers/migrations/<string:migration_id>/start-copy")
     api.add_resource(MigrationProgress, "/api/containers/migration-progress")
     api.add_resource(CancelMigration, "/api/containers/cancel-migration")
     if SecureDeployDrafts is not None:
