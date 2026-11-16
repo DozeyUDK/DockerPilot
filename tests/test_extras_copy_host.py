@@ -98,14 +98,30 @@ def test_collision_and_engine_mismatch_block_copy(copy_host):
     assert {cmd[0] for cmd in commands} <= {"info", "ps"}
 
 
-def test_copy_named_volumes_use_fresh_destination_names(copy_host):
+def test_copy_preserves_source_security_restrictions(copy_host):
+    resource, source, commands, _ = copy_host
+    source.attrs["HostConfig"].update(CapDrop=["ALL", "NET_RAW"], ReadonlyRootfs=True)
+    config = resource._copy_configuration(source, TARGET, False)
+    resource._create_stopped_copy(source, TARGET, config, False, IMAGE, "target-engine", Mock(), Mock(), Mock())
+
+    create = commands[-1]
+    assert "--read-only" in create
+    assert [create[index + 1] for index, arg in enumerate(create) if arg == "--cap-drop"] == ["ALL", "NET_RAW"]
+
+
+@pytest.mark.parametrize(("mount_options", "suffix"), [
+    ({"Mode": "", "RW": False}, ":ro"),
+    ({"Mode": "", "RW": True}, ""),
+    ({"Mode": "ro"}, ":ro"),
+])
+def test_copy_named_volumes_use_fresh_destination_names(copy_host, mount_options, suffix):
     resource, source, commands, _ = copy_host
     source.status = "exited"
-    source.attrs["Mounts"] = [{"Type": "volume", "Name": "source-data", "Source": "/data", "Destination": "/data", "Mode": "ro"}]
+    source.attrs["Mounts"] = [{"Type": "volume", "Name": "source-data", "Source": "/data", "Destination": "/data", **mount_options}]
     config = resource._copy_configuration(source, TARGET, True)
     transfer = resource._migrate_mount_data_between_servers = Mock(return_value={"total_migrated": 1})
     resource._create_stopped_copy(source, TARGET, config, True, IMAGE, "target-engine", Mock(), Mock(), Mock())
     mount = transfer.call_args.args[1]["mounts"][0]
     assert mount["name"] == "source-data"
     assert mount["copy_target_volume"].startswith("dockerpilot-copy-")
-    assert commands[-1][commands[-1].index("-v") + 1] == mount["copy_target_volume"] + ":/data:ro"
+    assert commands[-1][commands[-1].index("-v") + 1] == mount["copy_target_volume"] + ":/data" + suffix

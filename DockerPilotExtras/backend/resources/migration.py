@@ -182,6 +182,8 @@ def create_migration_resource(
             if conflicts:
                 raise ValueError("Target Docker ports already in use: " + ", ".join(conflicts))
             config["copy_ports"] = ports
+            config["copy_cap_drop"] = host_config.get("CapDrop") or []
+            config["copy_read_only_rootfs"] = bool(host_config.get("ReadonlyRootfs"))
             config["restart_policy"] = "no"
             config["copy_user"] = (attrs.get("Config") or {}).get("User")
             config["copy_workdir"] = (attrs.get("Config") or {}).get("WorkingDir")
@@ -224,7 +226,12 @@ def create_migration_resource(
                     raise ValueError("Source must remain stopped while copying volume data.")
                 for mount in mounts:
                     mount["copy_target_volume"] = "dockerpilot-copy-" + uuid.uuid4().hex
-                    config["volumes"][mount["copy_target_volume"]] = mount["destination"] + (":ro" if mount["mode"] == "ro" else "")
+                    read_only = mount["rw"] is False or (
+                        mount["rw"] is None and "ro" in mount["mode"].split(",")
+                    )
+                    config["volumes"][mount["copy_target_volume"]] = (
+                        mount["destination"] + (":ro" if read_only else "")
+                    )
                 summary = self._migrate_mount_data_between_servers(
                     source.name, {**config, "mounts": mounts}, None, target, check_cancel, update_progress
                 )
@@ -1883,7 +1890,8 @@ def create_migration_resource(
                     'source': source,
                     'destination': destination,
                     'name': volume_name,
-                    'mode': mount.get('Mode', ''),
+                    'mode': mount.get('Mode') or '',
+                    'rw': mount.get('RW'),
                 })
                 if mount_type == 'bind':
                     if source:
@@ -2972,6 +2980,10 @@ def create_migration_resource(
                 cmd_parts.extend(['-p', f"{host_port}:{container_port}"])
             
             if create_only:
+                if config.get("copy_read_only_rootfs"):
+                    cmd_parts.append("--read-only")
+                for capability in config.get("copy_cap_drop", []):
+                    cmd_parts.extend(["--cap-drop", capability])
                 if config.get("copy_user"):
                     cmd_parts.extend(["--user", config["copy_user"]])
                 if config.get("copy_workdir"):
