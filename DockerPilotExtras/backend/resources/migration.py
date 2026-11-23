@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
 import shlex
 import subprocess
+import uuid
 
 from backend.security import redact_sensitive_text as _redact_sensitive_text
 from backend.security import safe_error_message as _safe_error_message
@@ -14,6 +17,39 @@ from backend.services.migration_runner import MigrationRunner, MigrationSpec
 
 
 _MAX_SAFE_ERROR_LENGTH = 500
+
+# Linux Docker/runc system-path defaults from the Docker Engine HostConfig
+# schema. Only these known baseline restrictions are replayable through Docker
+# CLI defaults; custom path policies require a manual deployment.
+_STANDARD_MASKED_PATHS = frozenset({
+    "/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys",
+    "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
+    "/proc/sched_debug", "/proc/scsi", "/sys/firmware",
+})
+_STANDARD_READONLY_PATHS = frozenset({
+    "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+})
+
+
+def _validate_copy_system_paths(host_config):
+    """Fail closed for non-default masked/read-only OCI paths.
+
+    Docker CLI exposes systempaths=unconfined but not a safe option for
+    replaying arbitrary per-path masks. Never silently discard custom policy.
+    """
+    masked = host_config.get("MaskedPaths")
+    readonly = host_config.get("ReadonlyPaths")
+    if masked is not None:
+        if (not isinstance(masked, list) or not all(isinstance(p, str) for p in masked)
+                or frozenset(masked) not in (
+                    _STANDARD_MASKED_PATHS,
+                    _STANDARD_MASKED_PATHS | {"/sys/devices/virtual/powercap"},
+                )):
+            raise ValueError("Custom MaskedPaths require manual deployment.")
+    if readonly is not None:
+        if (not isinstance(readonly, list) or not all(isinstance(p, str) for p in readonly)
+                or frozenset(readonly) != _STANDARD_READONLY_PATHS):
+            raise ValueError("Custom ReadonlyPaths require manual deployment.")
 
 
 def _classify_container_start_error(value, source_arch=None, target_arch=None):
@@ -72,7 +108,197 @@ def create_migration_resource(
         """Migrate container from one server to another"""
         def post(self):
             spec = MigrationSpec.from_payload(request.get_json())
+            if spec.copy_only is not False:
+                return {"error": "Use the asynchronous copy endpoint."}, 400
             return self.migration_runner.run_inline(spec).to_response()
+
+        def _copy_inputs(self, data):
+            if not isinstance(data, dict):
+                raise ValueError("Copy parameters are required")
+            name = data.get("container_name")
+            target_id = data.get("target_server_id")
+            source_id = data.get("source_container_id")
+            include_data = data.get("include_data", False)
+            if (
+                data.get("source_server_id") != "local"
+                or data.get("copy_only") is not True
+                or data.get("stop_source", False) is not False
+                or not isinstance(include_data, bool)
+                or not isinstance(name, str)
+                or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name)
+                or not isinstance(source_id, str)
+                or not re.fullmatch(r"[a-f0-9]{12,64}", source_id)
+                or not isinstance(target_id, str)
+                or target_id == "local"
+            ):
+                raise ValueError("Select a local source container and a different registered target.")
+            target = next(
+                (server for server in load_servers_config().get("servers", [])
+                 if server.get("id") == target_id), None
+            )
+            if target is None:
+                raise ValueError("Target server is not registered.")
+            client = get_dockerpilot().client
+            local_id = client.info().get("ID")
+            target_engine = self._copy_engine_id(target)
+            if not local_id or data.get("source_engine_id") != local_id or local_id == target_engine:
+                raise ValueError("Local and target Docker engines must match the selected, distinct hosts.")
+            source = client.containers.get(source_id)
+            if source.name != name or not source.id.startswith(source_id):
+                raise ValueError("Source selection changed. Refresh the container list.")
+            self._check_copy_target(target, name)
+            return source, target, include_data, target_engine
+
+        def _copy_engine_id(self, target):
+            engine = execute_docker_command_via_ssh(target, "info --format '{{.ID}}'").strip()
+            if not re.fullmatch(r"[a-zA-Z0-9:_-]{1,128}", engine):
+                raise ValueError("Could not identify the target Docker engine.")
+            return engine
+
+        def _check_copy_target(self, target, name):
+            names = execute_docker_command_via_ssh(target, "ps -a --format '{{.Names}}'")
+            if not isinstance(names, str):
+                raise ValueError("Could not list containers on the target Docker engine.")
+            if name in names.splitlines():
+                raise ValueError("A container with this name already exists on the target.")
+
+        def copy_plan(self, data):
+            source, target, include_data, _ = self._copy_inputs(data)
+            config = self._copy_configuration(source, target, include_data)
+            return {
+                "container": source.name,
+                "image": source.attrs.get("Config", {}).get("Image"),
+                "target": target.get("name") or target.get("hostname"),
+                "network": config["network"],
+                "ports": config["copy_ports"],
+                "mounts": [
+                    {"destination": m["destination"], "type": m["type"],
+                     "copy": include_data and m["type"] == "volume"}
+                    for m in config["mounts"] if m["type"] != "tmpfs"
+                ] + [
+                    {"destination": destination, "type": "tmpfs", "copy": False}
+                    for destination in config["copy_tmpfs"]
+                ],
+                "compose_project": (source.attrs.get("Config", {}).get("Labels") or {}).get("com.docker.compose.project"),
+            }
+
+        def _copy_configuration(self, source, target, include_data):
+            attrs = source.attrs
+            host_config = attrs.get("HostConfig") or {}
+            config = self._extract_container_config(source)
+            target_platform = execute_docker_command_via_ssh(target, "version --format '{{.Server.Os}}/{{.Server.Arch}}'").strip()
+            image = source.image.attrs
+            if target_platform != f"{image.get('Os')}/{image.get('Architecture')}":
+                raise ValueError("The source image platform does not match the target Docker platform.")
+            network = config["network"]
+            if network in {"host"} or network.startswith("container:") or len((attrs.get("NetworkSettings") or {}).get("Networks") or {}) > 1:
+                raise ValueError("Host, shared and multiple Docker networks require manual deployment.")
+            if any(host_config.get(key) for key in ("Privileged", "Devices", "DeviceRequests", "CapAdd", "SecurityOpt", "PidMode", "DeviceCgroupRules", "VolumesFrom")):
+                raise ValueError("Containers with host privileges, device mappings or custom security options require manual deployment.")
+            _validate_copy_system_paths(host_config)
+            groups = host_config.get("GroupAdd") or []
+            if not isinstance(groups, list) or any(
+                not isinstance(group, str) or not group.strip() for group in groups
+            ):
+                raise ValueError("Unsupported supplementary group configuration requires manual deployment.")
+            if any(m.get("type") == "volume" and not m.get("name") for m in config["mounts"]):
+                raise ValueError("A source volume has no Docker volume name.")
+            tmpfs = host_config.get("Tmpfs") or {}
+            if any(mount.get("Type") == "tmpfs" for mount in (host_config.get("Mounts") or [])) or any(
+                mount["type"] == "tmpfs" and mount["destination"] not in tmpfs
+                for mount in config["mounts"]
+            ):
+                raise ValueError("Tmpfs mounts that cannot be restored from HostConfig.Tmpfs require manual deployment.")
+            config["copy_tmpfs"] = tmpfs
+            named_volumes = [m["name"] for m in config["mounts"] if m["type"] == "volume"]
+            if include_data and named_volumes:
+                if source.status not in {"created", "exited"}:
+                    raise ValueError("Stop the source before copying volume data, or copy without data.")
+                if len(named_volumes) != len(set(named_volumes)):
+                    raise ValueError("A named volume mounted more than once requires manual deployment.")
+            if network not in {"bridge", "none", "host"}:
+                execute_docker_command_via_ssh(target, shlex.join(["network", "inspect", network]))
+            ports = []
+            allocated = {}
+            for port, bindings in (host_config.get("PortBindings") or {}).items():
+                for binding in bindings or []:
+                    ip = binding.get("HostIp") or ""
+                    if ":" in ip:
+                        ip = f"[{ip}]"
+                    host_port = binding.get("HostPort") or ""
+                    ports.append(f"{ip}:{host_port}:{port}" if ip else f"{host_port}:{port}")
+                    if host_port:
+                        allocated[str(len(allocated))] = host_port
+            conflicts = self._check_port_availability(target, allocated)
+            if conflicts:
+                raise ValueError("Target Docker ports already in use: " + ", ".join(conflicts))
+            config["copy_ports"] = ports
+            config["copy_cap_drop"] = host_config.get("CapDrop") or []
+            config["copy_group_add"] = groups
+            config["copy_read_only_rootfs"] = bool(host_config.get("ReadonlyRootfs"))
+            config["restart_policy"] = "no"
+            config["copy_user"] = (attrs.get("Config") or {}).get("User")
+            config["copy_workdir"] = (attrs.get("Config") or {}).get("WorkingDir")
+            config["port_mapping"] = {}
+            return config
+
+        def start_copy(self, metadata):
+            target = next(
+                (server for server in load_servers_config().get("servers", [])
+                 if server.get("id") == metadata["target_server_id"]), None
+            )
+            if target is None:
+                raise ValueError("Target server is no longer registered.")
+            container_id = metadata["created_container_id"]
+            if not re.fullmatch(r"[a-f0-9]{64}", container_id):
+                raise ValueError("Invalid destination container ID.")
+            if not metadata.get("target_engine_id") or self._copy_engine_id(target) != metadata["target_engine_id"]:
+                raise ValueError("The destination Docker engine changed.")
+            status = execute_docker_command_via_ssh(
+                target, shlex.join(["inspect", "--type", "container", "--format", "{{.State.Status}}", container_id])
+            ).strip()
+            if status != "created":
+                raise ValueError("The target copy is no longer in the created state.")
+            execute_docker_command_via_ssh(target, shlex.join(["start", container_id]))
+            return {"success": True, "container_id": container_id}
+
+        def _create_stopped_copy(self, source, target, config, include_data, image_id, target_engine, check_cancel, update_progress, operation_context):
+            if self._copy_engine_id(target) != target_engine:
+                raise ValueError("The destination Docker engine changed.")
+            self._check_copy_target(target, source.name)
+            execute_docker_command_via_ssh(target, shlex.join(["image", "inspect", image_id, "--format", "{{.Id}}"]))
+            check_cancel()
+            if operation_context is not None:
+                operation_context.begin_finalization()
+            mounts = [mount.copy() for mount in config["mounts"] if mount["type"] == "volume"]
+            config["volumes"] = {}
+            config["copy_volume_mounts"] = []
+            destination_volumes = {}
+            for mount in mounts:
+                name = mount["name"]
+                if name not in destination_volumes:
+                    destination_volumes[name] = "dockerpilot-copy-" + uuid.uuid4().hex
+                volume = destination_volumes[name]
+                mount["copy_target_volume"] = volume
+                read_only = mount["rw"] is False or (
+                    mount["rw"] is None and "ro" in mount["mode"].split(",")
+                )
+                config["copy_volume_mounts"].append((volume, mount["destination"], read_only))
+            if include_data and mounts:
+                source.reload()
+                if source.status not in {"created", "exited"}:
+                    raise ValueError("Source must remain stopped while copying volume data.")
+                summary = self._migrate_mount_data_between_servers(
+                    source.name, {**config, "mounts": mounts}, None, target, check_cancel, update_progress
+                )
+                if summary["total_migrated"] != len(mounts):
+                    raise ValueError("One or more named volumes could not be copied.")
+            update_progress("creating", 95, "Creating stopped container on target...")
+            cmd = self._build_docker_run_command(config, source.name, image_id, create_only=True)
+            created_id = execute_docker_command_via_ssh(target, cmd).strip()
+            if not re.fullmatch(r"[a-f0-9]{64}", created_id):
+                raise ValueError("Target Docker did not return a container ID.")
+            return {"success": True, "created_container_id": created_id, "target_engine_id": target_engine}
 
         def execute_migration(self, data, *, operation_context=None):
             """Run the legacy migration without reading Flask request state."""
@@ -81,6 +307,7 @@ def create_migration_resource(
                 safe_container_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', str(container_name or 'container'))
                 source_server_id = data.get('source_server_id', 'local')
                 target_server_id = data.get('target_server_id')
+                copy_only = data.get('copy_only', False)
                 include_data = data.get('include_data', False)  # Whether to migrate volumes/data
                 stop_source = data.get('stop_source', False)  # Whether to stop source container
                 
@@ -90,6 +317,15 @@ def create_migration_resource(
                 if source_server_id == target_server_id:
                     return {'error': 'Source and target servers must be different'}, 400
                 
+                if copy_only is not False:
+                    try:
+                        copy_source, copy_target, include_data, target_engine = self._copy_inputs(data)
+                        copy_config = self._copy_configuration(copy_source, copy_target, include_data)
+                    except ValueError as exc:
+                        return {"error": str(exc)}, 400
+                    except Exception:
+                        return {"error": "Could not verify the source or target Docker host"}, 502
+
                 # Initialize progress tracking
                 if operation_context is None:
                     _migration_progress[container_name] = {
@@ -170,12 +406,14 @@ def create_migration_resource(
                 # Create export image tag early (needed for deployment config)
                 timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
                 export_image_tag = f"{container_name}_migrated:{timestamp}"
+                if copy_only:
+                    export_image_tag = 'dockerpilot-copy:' + uuid.uuid4().hex
                 
                 if source_server_id == 'local':
                     # Get from local Docker
                     pilot = get_dockerpilot()
                     try:
-                        container = pilot.client.containers.get(container_name)
+                        container = copy_source if copy_only else pilot.client.containers.get(container_name)
                         attrs = container.attrs
                         
                         # Extract image tag
@@ -184,7 +422,7 @@ def create_migration_resource(
                             image_tag = container.image.tags[0] if container.image.tags else container.image.id
                         
                         # Extract full configuration
-                        container_config = self._extract_container_config(container)
+                        container_config = copy_config if copy_only else self._extract_container_config(container)
                     except Exception as e:
                         safe_error = _redact_sensitive_text(e)
                         app.logger.error(
@@ -245,48 +483,49 @@ def create_migration_resource(
                         f"Skipping {len(skipped)} bind mount(s) during migration for {container_name}: {skipped}"
                     )
                 
-                # Step 1.5: Save deployment config (YAML) for proper container recreation
-                update_progress('saving_config', 15, 'Saving deployment configuration...')
-                check_cancel()
+                if not copy_only:
+                    # Step 1.5: Save deployment config (YAML) for proper container recreation
+                    update_progress('saving_config', 15, 'Saving deployment configuration...')
+                    check_cancel()
                 
-                try:
-                    # Create deployment config structure
-                    deployment_config = {
-                        'deployment': {
-                            'image_tag': container_config.get('image_tag', image_tag),
-                            'container_name': container_name,
-                            'port_mapping': container_config.get('port_mapping', {}),
-                            'environment': container_config.get('environment', {}),
-                            'volumes': container_config.get('volumes', {}),
-                            'restart_policy': container_config.get('restart_policy', 'unless-stopped'),
-                            'network': container_config.get('network', 'bridge'),
-                            'cpu_limit': container_config.get('cpu_limit'),
-                            'memory_limit': container_config.get('memory_limit')
+                    try:
+                        # Create deployment config structure
+                        deployment_config = {
+                            'deployment': {
+                                'image_tag': container_config.get('image_tag', image_tag),
+                                'container_name': container_name,
+                                'port_mapping': container_config.get('port_mapping', {}),
+                                'environment': container_config.get('environment', {}),
+                                'volumes': container_config.get('volumes', {}),
+                                'restart_policy': container_config.get('restart_policy', 'unless-stopped'),
+                                'network': container_config.get('network', 'bridge'),
+                                'cpu_limit': container_config.get('cpu_limit'),
+                                'memory_limit': container_config.get('memory_limit')
+                            }
                         }
-                    }
                     
-                    # Add command if present
-                    if container_config.get('command'):
-                        # Convert list to string if needed
-                        cmd = container_config['command']
-                        if isinstance(cmd, list):
-                            deployment_config['deployment']['command'] = ' '.join(cmd) if cmd else None
-                        else:
-                            deployment_config['deployment']['command'] = cmd
+                        # Add command if present
+                        if container_config.get('command'):
+                            # Convert list to string if needed
+                            cmd = container_config['command']
+                            if isinstance(cmd, list):
+                                deployment_config['deployment']['command'] = ' '.join(cmd) if cmd else None
+                            else:
+                                deployment_config['deployment']['command'] = cmd
                     
-                    # Save deployment config
-                    config_path = save_deployment_config(
-                        container_name, 
-                        deployment_config, 
-                        image_tag=export_image_tag
-                    )
-                    app.logger.info(f"Saved deployment config to: {config_path}")
-                except Exception as e:
-                    app.logger.warning(
-                        "Failed to save deployment config: %s. Continuing with migration...",
-                        _safe_error_message(e),
-                    )
-                    # Don't fail migration if config save fails
+                        # Save deployment config
+                        config_path = save_deployment_config(
+                            container_name,
+                            deployment_config,
+                            image_tag=export_image_tag
+                        )
+                        app.logger.info(f"Saved deployment config to: {config_path}")
+                    except Exception as e:
+                        app.logger.warning(
+                            "Failed to save deployment config: %s. Continuing with migration...",
+                            _safe_error_message(e),
+                        )
+                        # Don't fail migration if config save fails
                 
                 # Step 2: Export image from source
                 update_progress('exporting', 20, f'Exporting image {image_tag} from source...')
@@ -304,7 +543,7 @@ def create_migration_resource(
                     
                     try:
                         # Get the image object
-                        source_image = pilot.client.images.get(image_tag)
+                        source_image = pilot.client.images.get(copy_source.attrs['Image'] if copy_only else image_tag)
                         image_id = source_image.id
                         app.logger.info(f"Source image ID: {image_id}, Tags: {source_image.tags}")
                         
@@ -570,6 +809,8 @@ def create_migration_resource(
 
                         # Upload image tar via SFTP
                         remote_tar_path = f"/tmp/{safe_container_name}_migrated_{datetime.now().strftime('%Y%m%d%H%M%S')}.tar"
+                        if copy_only:
+                            remote_tar_path = f"/tmp/dockerpilot-copy-{uuid.uuid4().hex}.tar"
                         
                         # Check if local file exists
                         if not os.path.exists(image_export_path.name):
@@ -730,6 +971,14 @@ def create_migration_resource(
                         # Use combined output for parsing
                         load_output = combined_output
                         
+                        if copy_only:
+                            execute_command_via_ssh(target_server, f"rm -f {shlex.quote(remote_tar_path)}", check_exit_status=False)
+                            os.unlink(image_export_path.name)
+                            return self._create_stopped_copy(
+                                copy_source, copy_target, copy_config, include_data,
+                                image_id, target_engine, check_cancel, update_progress, operation_context,
+                            )
+
                         # If still no output, check images after load
                         if not load_output or 'Loaded image:' not in load_output:
                             app.logger.warning(f"docker load output seems incomplete or empty. Checking images after load...")
@@ -742,7 +991,7 @@ def create_migration_resource(
                                 "Checked target image inventory after load (output_length=%d)",
                                 len(images_after_load or ''),
                             )
-                        
+
                         # After load, verify the image tag exists
                         # docker load preserves tags, so export_image_tag should be available
                         loaded_tags = []
@@ -756,7 +1005,7 @@ def create_migration_resource(
                                         if loaded_tag:
                                             loaded_tags.append(loaded_tag)
                                             app.logger.info(f"Image loaded with tag: {loaded_tag}")
-                                
+
                                 # Try to find matching tag
                                 if loaded_tags:
                                     # First, try exact match
@@ -769,7 +1018,7 @@ def create_migration_resource(
                                             if container_name in tag or export_image_tag.split(':')[0] in tag:
                                                 matching_tag = tag
                                                 break
-                                        
+
                                         if matching_tag:
                                             app.logger.info(f"Using matching tag: {matching_tag} (instead of {export_image_tag})")
                                             export_image_tag = matching_tag
@@ -783,14 +1032,14 @@ def create_migration_resource(
                                     "(output_length=%d)",
                                     len(load_output or ''),
                                 )
-                            
+
                             # Verify image exists on target with exact tag match
                             app.logger.info(f"Verifying image {export_image_tag} exists on target server...")
                             images_output = execute_docker_command_via_ssh(
                                 target_server,
                                 f"images --format '{{{{.Repository}}}}:{{{{.Tag}}}}'"
                             )
-                            
+
                             # Check if our tag exists in the output
                             image_found = False
                             for line in images_output.split('\n'):
@@ -799,7 +1048,7 @@ def create_migration_resource(
                                     image_found = True
                                     app.logger.info(f"Image {export_image_tag} successfully verified on target server")
                                     break
-                            
+
                             if not image_found:
                                 # Try without tag (just repository)
                                 repo_name = export_image_tag.split(':')[0]
@@ -811,17 +1060,17 @@ def create_migration_resource(
                                         export_image_tag = line
                                         image_found = True
                                         break
-                            
+
                             if not image_found:
                                 # Try to find and retag the loaded image
                                 app.logger.warning(f"Image {export_image_tag} not found after load. Attempting to find and retag...")
-                                
+
                                 # Get all images with their IDs
                                 images_with_ids = execute_docker_command_via_ssh(
                                     target_server,
                                     "images --format '{{.ID}} {{.Repository}}:{{.Tag}}' --no-trunc"
                                 )
-                                
+
                                 # Find the most recently loaded image (should be one of the loaded_tags)
                                 if loaded_tags:
                                     # Try to find image by matching repository name or by checking if it's untagged
@@ -858,10 +1107,10 @@ def create_migration_resource(
                                                             _safe_error_message(retag_error),
                                                         )
                                                         continue
-                                        
+
                                         if image_found:
                                             break
-                                
+
                                 # If still not found, try to use the first loaded tag
                                 if not image_found:
                                     if loaded_tags:
@@ -873,12 +1122,12 @@ def create_migration_resource(
                                         error_msg = f"Image {export_image_tag} was not found on target server after loading. Loaded tags: {loaded_tags}, Available images: {images_output[:500]}"
                                         app.logger.error(error_msg)
                                         raise Exception(error_msg)
-                                
+
                         except Exception as e:
                             error_msg = f"Failed to verify loaded image tag: {_redact_sensitive_text(e)}"
                             app.logger.error(error_msg)
                             raise Exception(error_msg)
-                        
+
                         # Clean up remote tar
                         execute_command_via_ssh(target_server, f"rm -f {shlex.quote(remote_tar_path)}", check_exit_status=False)
                         
@@ -1697,7 +1946,8 @@ def create_migration_resource(
                     'source': source,
                     'destination': destination,
                     'name': volume_name,
-                    'mode': mount.get('Mode', ''),
+                    'mode': mount.get('Mode') or '',
+                    'rw': mount.get('RW'),
                 })
                 if mount_type == 'bind':
                     if source:
@@ -2179,7 +2429,7 @@ def create_migration_resource(
                             )
                             execute_shell_script_via_ssh(target_server, legacy_restore_cmd)
                     else:
-                        vol_q = shlex.quote(effective_volume)
+                        vol_q = shlex.quote(mount.get("copy_target_volume") or effective_volume)
                         archive_q = shlex.quote(target_archive_path)
                         restore_cmd = (
                             f"docker volume create {vol_q} >/dev/null 2>&1 || true; "
@@ -2733,11 +2983,11 @@ def create_migration_resource(
             
             return conflicts
         
-        def _build_docker_run_command(self, config, container_name, image_tag, target_arch=None, source_arch=None):
+        def _build_docker_run_command(self, config, container_name, image_tag, target_arch=None, source_arch=None, *, create_only=False):
             """Build docker run command from configuration"""
             import shlex
     
-            cmd_parts = ['run', '-d', '--name', container_name]
+            cmd_parts = (['create'] if create_only else ['run', '-d']) + ['--name', container_name]
             
             # Helper to normalize memory limits for docker CLI (expects m/g, not Mi/Gi)
             def _normalize_memory_limit(mem_value):
@@ -2770,7 +3020,7 @@ def create_migration_resource(
                     f"(source server: {source_arch or 'unknown'})"
                 )
                 cmd_parts.extend(['--platform', target_arch])
-            else:
+            elif not create_only:
                 app.logger.error(
                     "ERROR CRITICAL ERROR: No --platform flag will be added! "
                     "target_arch is None. This WILL cause 'exec format error' if image architecture differs from target server. "
@@ -2778,13 +3028,37 @@ def create_migration_resource(
                 )
             
             # Add restart policy
-            if config.get('restart_policy') and config['restart_policy'] != 'no':
+            if not create_only and config.get('restart_policy') and config['restart_policy'] != 'no':
                 cmd_parts.extend(['--restart', config['restart_policy']])
             
             # Add port mappings
             for container_port, host_port in config.get('port_mapping', {}).items():
                 cmd_parts.extend(['-p', f"{host_port}:{container_port}"])
             
+            if create_only:
+                if config.get("copy_read_only_rootfs"):
+                    cmd_parts.append("--read-only")
+                for destination, options in config.get("copy_tmpfs", {}).items():
+                    mount_arg = f"{destination}:{options}" if options else destination
+                    cmd_parts.extend(["--tmpfs", mount_arg])
+                for capability in config.get("copy_cap_drop", []):
+                    cmd_parts.extend(["--cap-drop", capability])
+                for group in config.get("copy_group_add", []):
+                    cmd_parts.extend(["--group-add", group])
+                if config.get("copy_user"):
+                    cmd_parts.extend(["--user", config["copy_user"]])
+                if config.get("copy_workdir"):
+                    cmd_parts.extend(["--workdir", config["copy_workdir"]])
+                for volume, destination, read_only in config.get("copy_volume_mounts", []):
+                    options = ["type=volume", f"source={volume}", f"target={destination}", "volume-nocopy"]
+                    if read_only:
+                        options.append("readonly")
+                    mount_arg = io.StringIO()
+                    csv.writer(mount_arg).writerow(options)
+                    cmd_parts.extend(["--mount", mount_arg.getvalue().removesuffix("\r\n")])
+                for binding in config["copy_ports"]:
+                    cmd_parts.extend(["-p", binding])
+
             # Add environment variables
             for key, value in config.get('environment', {}).items():
                 cmd_parts.extend(['-e', f"{key}={value}"])

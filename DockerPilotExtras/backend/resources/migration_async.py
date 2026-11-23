@@ -12,7 +12,7 @@ from backend.services.migration_runner import MigrationSpec
 from backend.services.migration_service import MigrationQueueFull
 
 
-def create_async_migration_resources(*, Resource, request, migration_service):
+def create_async_migration_resources(*, Resource, request, migration_service, copy_resource=None):
     """Build collection/detail resources around an injected service."""
 
     class ContainerMigrationCollection(Resource):
@@ -36,6 +36,9 @@ def create_async_migration_resources(*, Resource, request, migration_service):
                 target_server_id=spec.target_server_id.strip(),
                 include_data=spec.include_data,
                 stop_source=spec.stop_source,
+                copy_only=spec.copy_only,
+                source_container_id=spec.source_container_id,
+                source_engine_id=spec.source_engine_id,
             )
             if spec.source_server_id == spec.target_server_id:
                 return {
@@ -51,6 +54,15 @@ def create_async_migration_resources(*, Resource, request, migration_service):
                     "code": "invalid_migration_request",
                 }, 400
             try:
+                if spec.copy_only is not False:
+                    if copy_resource is None:
+                        return {"error": "Copy to host is unavailable"}, 501
+                    try:
+                        copy_resource().copy_plan(spec.to_payload())
+                    except ValueError as exc:
+                        return {"error": str(exc)}, 400
+                    except Exception:
+                        return {"error": "Could not verify the source or target Docker host"}, 502
                 job = migration_service.submit(spec)
             except MigrationJobConflict as exc:
                 body = {
@@ -123,4 +135,36 @@ def create_async_migration_resources(*, Resource, request, migration_service):
             status = 200 if job["status"] in {"completed", "failed", "cancelled"} else 202
             return {"success": True, "job": job}, status
 
+    class ContainerCopyPlan(Resource):
+        def post(self):
+            data = request.get_json(silent=True)
+            try:
+                return copy_resource().copy_plan(data)
+            except ValueError as exc:
+                return {"error": str(exc)}, 400
+            except Exception:
+                return {"error": "Could not verify the source or target Docker host"}, 502
+
+    class ContainerCopyStart(Resource):
+        def post(self, migration_id):
+            try:
+                job = migration_service.get_async(migration_id)
+            except MigrationJobNotFound:
+                return {"error": "Copy job not found"}, 404
+            metadata = job.get("metadata", {})
+            if (job.get("status") != "completed" or not metadata.get("created_container_id")
+                    or metadata.get("copy_started")):
+                return {"error": "The job has no pending container copy to start"}, 409
+            try:
+                result = copy_resource().start_copy(metadata)
+                if result.get("success") is True:
+                    migration_service.acknowledge_copy_started(migration_id)
+                return result
+            except ValueError as exc:
+                return {"error": str(exc)}, 409
+            except Exception:
+                return {"error": "Could not start the copy on the target Docker host"}, 502
+
+    if copy_resource is not None:
+        return ContainerMigrationCollection, ContainerMigrationJob, ContainerCopyPlan, ContainerCopyStart
     return ContainerMigrationCollection, ContainerMigrationJob

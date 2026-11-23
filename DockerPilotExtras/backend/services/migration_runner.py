@@ -27,6 +27,9 @@ class MigrationSpec:
     target_server_id: Optional[str] = None
     include_data: Any = False
     stop_source: Any = False
+    copy_only: Any = False
+    source_container_id: Optional[str] = None
+    source_engine_id: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Optional[Mapping[str, Any]]) -> "MigrationSpec":
@@ -39,6 +42,9 @@ class MigrationSpec:
             target_server_id=data.get("target_server_id"),
             include_data=data.get("include_data", False),
             stop_source=data.get("stop_source", False),
+            copy_only=data.get("copy_only", False),
+            source_container_id=data.get("source_container_id"),
+            source_engine_id=data.get("source_engine_id"),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -48,6 +54,7 @@ class MigrationSpec:
             "target_server_id": self.target_server_id,
             "include_data": self.include_data,
             "stop_source": self.stop_source,
+            **({"copy_only": self.copy_only, "source_container_id": self.source_container_id, "source_engine_id": self.source_engine_id} if self.copy_only is not False else {}),
         }
 
 

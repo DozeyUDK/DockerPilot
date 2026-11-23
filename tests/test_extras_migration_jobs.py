@@ -271,3 +271,47 @@ def test_capacity_counts_retained_terminal_jobs_but_ttl_frees_capacity():
         registry.reserve("two")
     clock.advance(seconds=1)
     assert registry.reserve("two")["container_name"] == "two"
+
+def test_pending_container_copy_retains_start_metadata_beyond_terminal_ttl():
+    clock = FakeClock()
+    registry = MigrationJobRegistry(id_factory=IdFactory(), clock=clock)
+    metadata = {
+        "mode": "async",
+        "copy_only": True,
+        "created_container_id": "b" * 64,
+        "target_server_id": "node",
+        "target_engine_id": "target-engine",
+    }
+    pending = registry.reserve("copy-demo", metadata={"mode": "async", "copy_only": True})
+    registry.finish(pending["id"], "completed", metadata=metadata)
+    ordinary = registry.reserve("ordinary")
+    registry.finish(ordinary["id"], "completed")
+
+    clock.advance(minutes=6)
+    assert registry.snapshot(pending["id"])["metadata"]["created_container_id"] == "b" * 64
+    with pytest.raises(MigrationJobNotFound):
+        registry.snapshot(ordinary["id"])
+
+    started = registry.acknowledge_copy_started(pending["id"])
+    assert started["metadata"]["copy_started"] is True
+    assert started["events"][-1]["type"] == "copy_started"
+    assert registry.acknowledge_copy_started(pending["id"])["events"] == started["events"]
+    clock.advance(minutes=6)
+    with pytest.raises(MigrationJobNotFound):
+        registry.snapshot(pending["id"])
+
+
+def test_incomplete_or_failed_copy_does_not_bypass_job_expiration():
+    clock = FakeClock()
+    registry = MigrationJobRegistry(id_factory=IdFactory(), clock=clock)
+    broken = registry.reserve("broken", metadata={"mode": "async", "copy_only": True})
+    registry.finish(broken["id"], "failed", metadata={
+        "mode": "async", "copy_only": True, "created_container_id": "b" * 64,
+    })
+    incomplete = registry.reserve("incomplete", metadata={"mode": "async", "copy_only": True})
+    registry.finish(incomplete["id"], "completed", metadata={"mode": "async", "copy_only": True})
+
+    clock.advance(minutes=6)
+    for job in (broken, incomplete):
+        with pytest.raises(MigrationJobNotFound):
+            registry.snapshot(job["id"])

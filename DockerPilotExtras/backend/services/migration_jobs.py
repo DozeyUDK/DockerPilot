@@ -333,6 +333,31 @@ class MigrationJobRegistry:
             self._append_event_locked(job, now, "finalization_started")
             return self._snapshot_locked(job)
 
+    def acknowledge_copy_started(self, job_id: JobId) -> Dict[str, Any]:
+        """Mark a completed copy as started so normal terminal pruning resumes.
+
+        Called only after the destination Docker Engine confirms a successful
+        start. The copy's created-container identity is retained until then.
+        """
+        with self._lock:
+            now = self._now()
+            self._prune_locked(now)
+            job = self._job_locked(job_id)
+            if not (
+                job.status == "completed"
+                and job.metadata.get("copy_only") is True
+                and job.metadata.get("created_container_id")
+            ):
+                raise InvalidMigrationJobTransition(
+                    f"Migration job {job.job_id!r} is not a completed container copy"
+                )
+            if not job.metadata.get("copy_started"):
+                job.metadata["copy_started"] = True
+                job.updated_at = now
+                job.finished_at = now
+                self._append_event_locked(job, now, "copy_started")
+            return self._snapshot_locked(job)
+
     def release(self, job_id: JobId) -> bool:
         """Remove one job and its reservation, without releasing a newer job.
 
@@ -429,6 +454,14 @@ class MigrationJobRegistry:
             if job.status in TERMINAL_STATUSES
             and job.finished_at is not None
             and now - job.finished_at >= self._terminal_ttl
+            # A stopped copy is a pending user action, not just job history.
+            # Retain its verified destination identity until it is started.
+            and not (
+                job.status == "completed"
+                and job.metadata.get("copy_only") is True
+                and job.metadata.get("created_container_id")
+                and not job.metadata.get("copy_started", False)
+            )
         ]
         for job in stale:
             if self._active_for_container.get(job.container_name) is job:

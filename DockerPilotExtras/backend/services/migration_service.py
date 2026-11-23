@@ -141,6 +141,7 @@ class MigrationService:
                     "target_server_id": spec.target_server_id,
                     "include_data": bool(spec.include_data),
                     "stop_source": bool(spec.stop_source),
+                    **({"copy_only": True} if spec.copy_only is True else {}),
                 },
             )
             try:
@@ -164,6 +165,10 @@ class MigrationService:
 
     def get(self, job_id: str) -> dict:
         return self.registry.snapshot(job_id)
+
+    def acknowledge_copy_started(self, job_id: str) -> dict:
+        """Confirm a deferred start so terminal pruning can resume."""
+        return self.registry.acknowledge_copy_started(job_id)
 
     def get_async(self, job_id: str) -> dict:
         job = self.get(job_id)
@@ -423,6 +428,13 @@ class MigrationService:
         metadata = dict(finalizing["metadata"])
         metadata["http_status"] = result.status
         if result.completed_successfully:
+            if task.spec.copy_only:
+                created = result.body.get("created_container_id")
+                if isinstance(created, str) and len(created) == 64 and all(c in "0123456789abcdef" for c in created):
+                    metadata["created_container_id"] = created
+                engine = result.body.get("target_engine_id")
+                if isinstance(engine, str) and 0 < len(engine) <= 128 and all(c.isascii() and (c.isalnum() or c in ":_-") for c in engine):
+                    metadata["target_engine_id"] = engine
             if not finalizing["finalizing"]:
                 return self.registry.finish(
                     task.job_id,

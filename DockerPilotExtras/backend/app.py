@@ -822,7 +822,7 @@ def execute_docker_command_via_ssh(server_config, docker_command, check_exit_sta
     command = _svc_build_docker_command(docker_command)
     
     # For docker load, we need to check stderr too (docker load outputs to stderr)
-    if return_stderr or 'load' in docker_command:
+    if return_stderr or shlex.split(docker_command)[:1] == ["load"]:
         return _execute_command_via_ssh_with_stderr(server_config, command, check_exit_status=check_exit_status)
     else:
         return execute_command_via_ssh(server_config, command, check_exit_status=check_exit_status)
@@ -1269,10 +1269,11 @@ _migration_service = MigrationService(
     queue_capacity=2,
 )
 ContainerMigrate.migration_runner = _migration_service
-ContainerMigrationCollection, ContainerMigrationJob = create_async_migration_resources(
+ContainerMigrationCollection, ContainerMigrationJob, ContainerCopyPlan, ContainerCopyStart = create_async_migration_resources(
     Resource=Resource,
     request=request,
     migration_service=_migration_service,
+    copy_resource=ContainerMigrate,
 )
 atexit.register(
     lambda: _migration_service.shutdown(
@@ -1468,6 +1469,8 @@ register_api_routes(
     ContainerMigrate=ContainerMigrate,
     ContainerMigrationCollection=ContainerMigrationCollection,
     ContainerMigrationJob=ContainerMigrationJob,
+    ContainerCopyPlan=ContainerCopyPlan,
+    ContainerCopyStart=ContainerCopyStart,
     MigrationProgress=MigrationProgress,
     CancelMigration=CancelMigration,
     SecureDeployDrafts=SecureDeployDrafts,
