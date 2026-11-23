@@ -179,3 +179,53 @@ def test_copy_refuses_tmpfs_without_replayable_configuration(copy_host, inspect_
     with pytest.raises(ValueError, match="require manual deployment"):
         resource.copy_plan(PAYLOAD)
     assert not any(cmd[0] == "create" for cmd in commands)
+
+@pytest.mark.parametrize("key, custom", [
+    ("MaskedPaths", "/proc/custom-private"),
+    ("ReadonlyPaths", "/etc/custom-readonly"),
+])
+def test_copy_refuses_custom_oci_system_path_restrictions(copy_host, key, custom):
+    resource, source, commands, _ = copy_host
+    source.attrs["HostConfig"][key] = [custom]
+    with pytest.raises(ValueError, match="require manual deployment"):
+        resource.copy_plan(PAYLOAD)
+    assert not any(command[0] == "create" for command in commands)
+
+
+def test_copy_accepts_standard_docker_system_path_defaults(copy_host):
+    resource, source, _commands, _responses = copy_host
+    source.attrs["HostConfig"]["MaskedPaths"] = [
+        "/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys",
+        "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
+        "/proc/sched_debug", "/proc/scsi", "/sys/firmware",
+        "/sys/devices/virtual/powercap",
+    ]
+    source.attrs["HostConfig"]["ReadonlyPaths"] = [
+        "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+    ]
+    assert resource.copy_plan(PAYLOAD)["container"] == "demo"
+
+
+def test_copy_preserves_supplementary_groups(copy_host):
+    resource, source, commands, _responses = copy_host
+    source.attrs["HostConfig"]["GroupAdd"] = ["1001", "audio"]
+    config = resource._copy_configuration(source, TARGET, False)
+    resource._create_stopped_copy(
+        source, TARGET, config, False, IMAGE, "target-engine",
+        Mock(), Mock(), Mock(),
+    )
+
+    args = commands[-1]
+    assert args[0] == "create"
+    assert [args[i + 1] for i, option in enumerate(args) if option == "--group-add"] == [
+        "1001", "audio",
+    ]
+    assert args[args.index("--user") + 1] == "1000"
+
+
+def test_copy_rejects_unreplayable_group_configuration(copy_host):
+    resource, source, commands, _responses = copy_host
+    source.attrs["HostConfig"]["GroupAdd"] = [{"gid": "1001"}]
+    with pytest.raises(ValueError, match="supplementary group configuration"):
+        resource.copy_plan(PAYLOAD)
+    assert not any(command[0] == "create" for command in commands)
