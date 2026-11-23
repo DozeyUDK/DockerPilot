@@ -566,3 +566,41 @@ def test_job_api_rejects_late_cancel_and_is_idempotent_for_terminal_job():
 
     assert terminal_status == 200
     assert terminal_body["job"]["status"] == "completed"
+
+def test_deferred_copy_start_acknowledges_action_and_rejects_repeat():
+    class CopyResource:
+        calls = []
+
+        def start_copy(self, metadata):
+            self.calls.append(metadata["created_container_id"])
+            return {"success": True, "container_id": metadata["created_container_id"]}
+
+    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=None)
+    service = MigrationService(
+        _Runner(), registry=registry, auto_start=False, start_on_submit=False,
+    )
+    job = registry.reserve("copy-demo", metadata={
+        "mode": "async", "copy_only": True,
+    })
+    metadata = {
+        "mode": "async", "copy_only": True,
+        "created_container_id": "b" * 64,
+        "target_engine_id": "target-engine",
+        "target_server_id": "node",
+    }
+    registry.finish(job["id"], "completed", metadata=metadata)
+    resources = create_async_migration_resources(
+        Resource=_Resource, request=_Request(), migration_service=service,
+        copy_resource=CopyResource,
+    )
+    Start = resources[3]
+
+    started = Start().post(job["id"])
+    assert started == {"success": True, "container_id": "b" * 64}
+    assert registry.snapshot(job["id"])["metadata"]["copy_started"] is True
+    assert CopyResource.calls == ["b" * 64]
+
+    repeat_body, repeat_status = Start().post(job["id"])
+    assert repeat_status == 409
+    assert "no pending container copy" in repeat_body["error"]
+    assert CopyResource.calls == ["b" * 64]
