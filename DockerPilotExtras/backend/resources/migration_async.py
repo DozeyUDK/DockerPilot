@@ -152,10 +152,14 @@ def create_async_migration_resources(*, Resource, request, migration_service, co
             except MigrationJobNotFound:
                 return {"error": "Copy job not found"}, 404
             metadata = job.get("metadata", {})
-            if job.get("status") != "completed" or not metadata.get("created_container_id"):
-                return {"error": "The job has no completed container copy"}, 409
+            if (job.get("status") != "completed" or not metadata.get("created_container_id")
+                    or metadata.get("copy_started")):
+                return {"error": "The job has no pending container copy to start"}, 409
             try:
-                return copy_resource().start_copy(metadata)
+                result = copy_resource().start_copy(metadata)
+                if result.get("success") is True:
+                    migration_service.acknowledge_copy_started(migration_id)
+                return result
             except ValueError as exc:
                 return {"error": str(exc)}, 409
             except Exception:
