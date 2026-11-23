@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import importlib.util
 import sys
@@ -14,7 +15,7 @@ EXTRAS_DIR = Path(__file__).resolve().parents[1] / "DockerPilotExtras"
 if str(EXTRAS_DIR) not in sys.path:
     sys.path.insert(0, str(EXTRAS_DIR))
 
-from backend.services.migration_jobs import MigrationJobRegistry
+from backend.services.migration_jobs import MigrationJobNotFound, MigrationJobRegistry
 from backend.services.migration_runner import (
     MigrationResult,
     MigrationSpec,
@@ -575,7 +576,10 @@ def test_deferred_copy_start_acknowledges_action_and_rejects_repeat():
             self.calls.append(metadata["created_container_id"])
             return {"success": True, "container_id": metadata["created_container_id"]}
 
-    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=None)
+    now = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    registry = MigrationJobRegistry(
+        id_factory=_Ids(), clock=lambda: now[0], terminal_ttl=timedelta(minutes=5),
+    )
     service = MigrationService(
         _Runner(), registry=registry, auto_start=False, start_on_submit=False,
     )
@@ -589,6 +593,8 @@ def test_deferred_copy_start_acknowledges_action_and_rejects_repeat():
         "target_server_id": "node",
     }
     registry.finish(job["id"], "completed", metadata=metadata)
+    now[0] += timedelta(minutes=6)
+    assert service.get_async(job["id"])["status"] == "completed"
     resources = create_async_migration_resources(
         Resource=_Resource, request=_Request(), migration_service=service,
         copy_resource=CopyResource,
@@ -604,3 +610,31 @@ def test_deferred_copy_start_acknowledges_action_and_rejects_repeat():
     assert repeat_status == 409
     assert "no pending container copy" in repeat_body["error"]
     assert CopyResource.calls == ["b" * 64]
+    now[0] += timedelta(minutes=6)
+    with pytest.raises(MigrationJobNotFound):
+        service.get_async(job["id"])
+
+def test_failed_deferred_start_does_not_consume_pending_copy():
+    class FailingCopyResource:
+        def start_copy(self, _metadata):
+            raise ValueError("Target is temporarily unreachable")
+
+    registry = MigrationJobRegistry(id_factory=_Ids(), terminal_ttl=timedelta(minutes=5))
+    service = MigrationService(
+        _Runner(), registry=registry, auto_start=False, start_on_submit=False,
+    )
+    job = registry.reserve("copy-failure", metadata={"mode": "async", "copy_only": True})
+    registry.finish(job["id"], "completed", metadata={
+        "mode": "async", "copy_only": True,
+        "created_container_id": "c" * 64,
+        "target_engine_id": "target-engine", "target_server_id": "node",
+    })
+    Start = create_async_migration_resources(
+        Resource=_Resource, request=_Request(), migration_service=service,
+        copy_resource=FailingCopyResource,
+    )[3]
+
+    body, status = Start().post(job["id"])
+    assert status == 409
+    assert "unreachable" in body["error"]
+    assert registry.snapshot(job["id"])["metadata"].get("copy_started") is None
