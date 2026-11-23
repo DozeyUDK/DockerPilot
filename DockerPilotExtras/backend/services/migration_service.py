@@ -166,6 +166,10 @@ class MigrationService:
     def get(self, job_id: str) -> dict:
         return self.registry.snapshot(job_id)
 
+    def acknowledge_copy_started(self, job_id: str) -> dict:
+        """Confirm a deferred start so terminal pruning can resume."""
+        return self.registry.acknowledge_copy_started(job_id)
+
     def get_async(self, job_id: str) -> dict:
         job = self.get(job_id)
         if job["metadata"].get("mode") != "async":
