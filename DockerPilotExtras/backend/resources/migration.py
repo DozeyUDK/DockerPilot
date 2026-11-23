@@ -18,6 +18,39 @@ from backend.services.migration_runner import MigrationRunner, MigrationSpec
 
 _MAX_SAFE_ERROR_LENGTH = 500
 
+# Linux Docker/runc system-path defaults from the Docker Engine HostConfig
+# schema. Only these known baseline restrictions are replayable through Docker
+# CLI defaults; custom path policies require a manual deployment.
+_STANDARD_MASKED_PATHS = frozenset({
+    "/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys",
+    "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
+    "/proc/sched_debug", "/proc/scsi", "/sys/firmware",
+})
+_STANDARD_READONLY_PATHS = frozenset({
+    "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+})
+
+
+def _validate_copy_system_paths(host_config):
+    """Fail closed for non-default masked/read-only OCI paths.
+
+    Docker CLI exposes systempaths=unconfined but not a safe option for
+    replaying arbitrary per-path masks. Never silently discard custom policy.
+    """
+    masked = host_config.get("MaskedPaths")
+    readonly = host_config.get("ReadonlyPaths")
+    if masked is not None:
+        if (not isinstance(masked, list) or not all(isinstance(p, str) for p in masked)
+                or frozenset(masked) not in (
+                    _STANDARD_MASKED_PATHS,
+                    _STANDARD_MASKED_PATHS | {"/sys/devices/virtual/powercap"},
+                )):
+            raise ValueError("Custom MaskedPaths require manual deployment.")
+    if readonly is not None:
+        if (not isinstance(readonly, list) or not all(isinstance(p, str) for p in readonly)
+                or frozenset(readonly) != _STANDARD_READONLY_PATHS):
+            raise ValueError("Custom ReadonlyPaths require manual deployment.")
+
 
 def _classify_container_start_error(value, source_arch=None, target_arch=None):
     """Keep actionable Docker errors without returning raw command output."""
@@ -162,6 +195,12 @@ def create_migration_resource(
                 raise ValueError("Host, shared and multiple Docker networks require manual deployment.")
             if any(host_config.get(key) for key in ("Privileged", "Devices", "DeviceRequests", "CapAdd", "SecurityOpt", "PidMode", "DeviceCgroupRules", "VolumesFrom")):
                 raise ValueError("Containers with host privileges, device mappings or custom security options require manual deployment.")
+            _validate_copy_system_paths(host_config)
+            groups = host_config.get("GroupAdd") or []
+            if not isinstance(groups, list) or any(
+                not isinstance(group, str) or not group.strip() for group in groups
+            ):
+                raise ValueError("Unsupported supplementary group configuration requires manual deployment.")
             if any(m.get("type") == "volume" and not m.get("name") for m in config["mounts"]):
                 raise ValueError("A source volume has no Docker volume name.")
             tmpfs = host_config.get("Tmpfs") or {}
@@ -195,6 +234,7 @@ def create_migration_resource(
                 raise ValueError("Target Docker ports already in use: " + ", ".join(conflicts))
             config["copy_ports"] = ports
             config["copy_cap_drop"] = host_config.get("CapDrop") or []
+            config["copy_group_add"] = groups
             config["copy_read_only_rootfs"] = bool(host_config.get("ReadonlyRootfs"))
             config["restart_policy"] = "no"
             config["copy_user"] = (attrs.get("Config") or {}).get("User")
@@ -3003,6 +3043,8 @@ def create_migration_resource(
                     cmd_parts.extend(["--tmpfs", mount_arg])
                 for capability in config.get("copy_cap_drop", []):
                     cmd_parts.extend(["--cap-drop", capability])
+                for group in config.get("copy_group_add", []):
+                    cmd_parts.extend(["--group-add", group])
                 if config.get("copy_user"):
                     cmd_parts.extend(["--user", config["copy_user"]])
                 if config.get("copy_workdir"):
